@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
 """
-BTC SIGNAL ALERT AGENT - 30m swing - GitHub Actions edition
-------------------------------------------------------------
-Runs in the cloud on GitHub's free tier. A scheduled workflow calls this
-script every 30 minutes; it checks the last closed candle and emails you
-when the 5-factor confluence engine flips to LONG or SHORT.
+MULTI-ASSET SIGNAL ALERT AGENT - 30m swing - GitHub Actions edition
+--------------------------------------------------------------------
+Watches BTC and TSLA on Hyperliquid with the same 5-factor confluence
+engine. A scheduled workflow calls this every 30 minutes; you get an
+email whenever any watched asset flips to LONG or SHORT.
 
-Config comes from environment variables (set as GitHub repo Secrets):
+Add/remove assets in the ASSETS list below.
+
+Config comes from environment variables (GitHub repo Secrets):
   EMAIL_FROM           Gmail address that sends alerts
   EMAIL_APP_PASSWORD   16-char Gmail app password
   EMAIL_TO             where alerts are delivered
 
 Modes:
-  python3 btc_alert_agent.py --once    single check (what the workflow runs)
+  python3 btc_alert_agent.py           single check of all assets (workflow default)
   python3 btc_alert_agent.py --test    send a test email
   python3 btc_alert_agent.py --loop    run continuously (local PC use)
 """
@@ -34,6 +36,15 @@ EMAIL_FROM = os.environ.get("EMAIL_FROM", "")
 EMAIL_APP_PASSWORD = os.environ.get("EMAIL_APP_PASSWORD", "")
 EMAIL_TO = os.environ.get("EMAIL_TO", "")
 
+# Assets to watch. hl_coin is the Hyperliquid API name
+# (HIP-3 markets carry their dex prefix, e.g. TradeXYZ = "xyz:").
+ASSETS = [
+    {"symbol": "BTC",  "label": "BTC-PERP",      "hl_coin": "BTC",
+     "fallbacks": ["binance:BTCUSDT", "kraken:XBTUSD"]},
+    {"symbol": "TSLA", "label": "TSLA-PERP (xyz)", "hl_coin": "xyz:TSLA",
+     "fallbacks": ["yahoo:TSLA"]},
+]
+
 CANDLE_MINUTES = 30
 LOOKBACK = 500                 # candles of history (~10.4 days)
 SIGNAL_THRESHOLD = 3           # confluence score needed (out of +-5)
@@ -51,9 +62,15 @@ def log(msg):
           flush=True)
 
 
+def fmt_px(p):
+    """Whole dollars for big prices (BTC), cents for stock-sized prices."""
+    return f"{p:,.0f}" if p >= 10000 else f"{p:,.2f}"
+
+
 # --------------------------- data sources ---------------------------------
 def http_json(url, payload=None, timeout=20):
-    headers = {"Content-Type": "application/json", "User-Agent": "btc-alert-agent/1.0"}
+    headers = {"Content-Type": "application/json",
+               "User-Agent": "Mozilla/5.0 (signal-alert-agent/2.0)"}
     data = json.dumps(payload).encode() if payload is not None else None
     req = urllib.request.Request(url, data=data, headers=headers,
                                  method="POST" if payload is not None else "GET")
@@ -61,12 +78,12 @@ def http_json(url, payload=None, timeout=20):
         return json.loads(r.read().decode())
 
 
-def fetch_hyperliquid():
+def fetch_hyperliquid(coin):
     end = int(time.time() * 1000)
     start = end - LOOKBACK * CANDLE_MS
     data = http_json("https://api.hyperliquid.xyz/info", {
         "type": "candleSnapshot",
-        "req": {"coin": "BTC", "interval": f"{CANDLE_MINUTES}m",
+        "req": {"coin": coin, "interval": f"{CANDLE_MINUTES}m",
                 "startTime": start, "endTime": end},
     })
     return [{"t": c["t"], "o": float(c["o"]), "h": float(c["h"]),
@@ -74,35 +91,56 @@ def fetch_hyperliquid():
             for c in data]
 
 
-def fetch_binance():
+def fetch_binance(sym):
     data = http_json(f"https://api.binance.com/api/v3/klines"
-                     f"?symbol=BTCUSDT&interval={CANDLE_MINUTES}m&limit={LOOKBACK}")
+                     f"?symbol={sym}&interval={CANDLE_MINUTES}m&limit={LOOKBACK}")
     return [{"t": k[0], "o": float(k[1]), "h": float(k[2]),
              "l": float(k[3]), "c": float(k[4]), "v": float(k[5])} for k in data]
 
 
-def fetch_kraken():
-    data = http_json(f"https://api.kraken.com/0/public/OHLC?pair=XBTUSD&interval={CANDLE_MINUTES}")
+def fetch_kraken(pair):
+    data = http_json(f"https://api.kraken.com/0/public/OHLC?pair={pair}&interval={CANDLE_MINUTES}")
     key = next(k for k in data["result"] if k != "last")
     return [{"t": k[0] * 1000, "o": float(k[1]), "h": float(k[2]),
              "l": float(k[3]), "c": float(k[4]), "v": float(k[6])}
             for k in data["result"][key]]
 
 
-SOURCES = [("Hyperliquid BTC-PERP", fetch_hyperliquid),
-           ("Binance BTCUSDT", fetch_binance),
-           ("Kraken XBTUSD", fetch_kraken)]
+def fetch_yahoo(ticker):
+    """Stock fallback. Market-hours data only (no 24/7), so gaps on weekends."""
+    data = http_json(f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
+                     f"?interval={CANDLE_MINUTES}m&range=1mo")
+    res = data["chart"]["result"][0]
+    ts = res["timestamp"]
+    q = res["indicators"]["quote"][0]
+    out = []
+    for i in range(len(ts)):
+        if q["close"][i] is None:
+            continue
+        out.append({"t": ts[i] * 1000, "o": q["open"][i], "h": q["high"][i],
+                    "l": q["low"][i], "c": q["close"][i], "v": q["volume"][i] or 0})
+    return out
 
 
-def fetch_candles():
-    for name, fn in SOURCES:
+def fetch_fallback(spec):
+    provider, _, ident = spec.partition(":")
+    return {"binance": fetch_binance, "kraken": fetch_kraken,
+            "yahoo": fetch_yahoo}[provider](ident)
+
+
+def fetch_candles(asset):
+    sources = [(f"Hyperliquid {asset['hl_coin']}",
+                lambda: fetch_hyperliquid(asset["hl_coin"]))]
+    for spec in asset.get("fallbacks", []):
+        sources.append((spec, lambda s=spec: fetch_fallback(s)))
+    for name, fn in sources:
         try:
             candles = fn()
             if len(candles) >= 210:
                 return name, candles
-            log(f"{name}: only {len(candles)} candles, trying next source")
+            log(f"{asset['symbol']}: {name} returned only {len(candles)} candles")
         except Exception as e:
-            log(f"{name} failed: {e}")
+            log(f"{asset['symbol']}: {name} failed: {e}")
     return None, None
 
 
@@ -220,7 +258,7 @@ def evaluate(i, closes, e20, e50, e200, rsi_arr, hist, atr_arr, vols, vol_avg):
         else:
             factors.append(("RSI", f"{r:.1f} - neutral", 0))
 
-    if vol_avg[i] is not None and vols[i] > vol_avg[i] * 1.2:
+    if vol_avg[i] is not None and vol_avg[i] > 0 and vols[i] > vol_avg[i] * 1.2:
         up = closes[i] > closes[i - 1]
         score += 1 if up else -1
         factors.append(("Volume", f"{vols[i] / vol_avg[i]:.1f}x avg on "
@@ -251,15 +289,11 @@ def analyze(candles):
     _, _, hist = macd(closes)
     a = atr(candles)
     vol_avg = sma(vols, 20)
-
-    def ev(i):
-        res = evaluate(i, closes, e20, e50, e200, r, hist, a, vols, vol_avg)
-        if res:
-            res["t"] = candles[i]["t"]
-        return res
-
     last_closed = len(candles) - 2  # final candle in feed may still be forming
-    return ev(last_closed)
+    res = evaluate(last_closed, closes, e20, e50, e200, r, hist, a, vols, vol_avg)
+    if res:
+        res["t"] = candles[last_closed]["t"]
+    return res
 
 
 # ------------------------------- email ------------------------------------
@@ -279,13 +313,13 @@ def send_email(subject, body, html=None):
         server.sendmail(EMAIL_FROM, [EMAIL_TO], msg.as_string())
 
 
-def alert_html(sig, source, ts):
+def alert_html(asset, sig, source, ts):
     """Styled HTML body. Inline styles + tables for email-client compatibility."""
     v = sig["verdict"]
     p = sig["plan"]
     accent = "#0FB98C" if v == "LONG" else "#E8524A"
     accent_soft = "#E6F7F1" if v == "LONG" else "#FCEAE8"
-    arrow = "&#9650;" if v == "LONG" else "&#9660;"  # up / down triangle
+    arrow = "&#9650;" if v == "LONG" else "&#9660;"
 
     def row(label, value, color="#1A2530", bold=False):
         w = "700" if bold else "500"
@@ -316,30 +350,27 @@ def alert_html(sig, source, ts):
        style="max-width:480px;background:#FFFFFF;border-radius:12px;overflow:hidden;
               font-family:-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;">
 
-  <!-- verdict banner -->
   <tr><td style="background:{accent};padding:22px 24px;">
     <div style="font-size:11px;letter-spacing:2px;color:rgba(255,255,255,.75);
-                text-transform:uppercase;">BTC-PERP &middot; 30m signal</div>
+                text-transform:uppercase;">{asset['label']} &middot; 30m signal</div>
     <div style="font-size:34px;font-weight:800;color:#FFFFFF;line-height:1.15;">
-      {arrow}&nbsp;{v} &middot; ${sig['price']:,.0f}</div>
+      {arrow}&nbsp;{v} &middot; ${fmt_px(sig['price'])}</div>
     <div style="font-size:12px;color:rgba(255,255,255,.85);margin-top:4px;">
       Confluence {sig['score']:+d} / &plusmn;5 &nbsp;&middot;&nbsp; {ts}</div>
   </td></tr>
 
-  <!-- trade plan -->
   <tr><td style="padding:20px 24px 8px;">
     <div style="font-size:11px;letter-spacing:2px;color:#7A8B99;
                 text-transform:uppercase;margin-bottom:4px;">Trade plan &middot; ATR-sized</div>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-      {row("Entry", f"${p['entry']:,.0f}", bold=True)}
-      {row("Stop &middot; " + str(ATR_STOP_MULT) + " &times; ATR", f"${p['stop']:,.0f}", "#E8524A", True)}
-      {row("TP1 &middot; R " + f"{ATR_TP1_MULT / ATR_STOP_MULT:.2f}", f"${p['tp1']:,.0f}", "#0FB98C", True)}
-      {row("TP2 &middot; R " + f"{ATR_TP2_MULT / ATR_STOP_MULT:.2f}", f"${p['tp2']:,.0f}", "#0FB98C", True)}
-      {row("ATR14", f"${p['atr']:,.0f}")}
+      {row("Entry", "$" + fmt_px(p['entry']), bold=True)}
+      {row("Stop &middot; " + str(ATR_STOP_MULT) + " &times; ATR", "$" + fmt_px(p['stop']), "#E8524A", True)}
+      {row("TP1 &middot; R " + f"{ATR_TP1_MULT / ATR_STOP_MULT:.2f}", "$" + fmt_px(p['tp1']), "#0FB98C", True)}
+      {row("TP2 &middot; R " + f"{ATR_TP2_MULT / ATR_STOP_MULT:.2f}", "$" + fmt_px(p['tp2']), "#0FB98C", True)}
+      {row("ATR14", "$" + fmt_px(p['atr']))}
     </table>
   </td></tr>
 
-  <!-- factors -->
   <tr><td style="padding:14px 24px 8px;">
     <div style="font-size:11px;letter-spacing:2px;color:#7A8B99;
                 text-transform:uppercase;margin-bottom:4px;">Why it fired</div>
@@ -348,7 +379,6 @@ def alert_html(sig, source, ts):
     </table>
   </td></tr>
 
-  <!-- source + disclaimer -->
   <tr><td style="padding:16px 24px 22px;">
     <div style="background:{accent_soft};border-radius:8px;padding:12px 14px;
                 font-size:11px;line-height:1.6;color:#5B6C7A;">
@@ -363,24 +393,25 @@ def alert_html(sig, source, ts):
 </html>"""
 
 
-def alert_email(sig, source):
+def alert_email(asset, sig, source):
     v = sig["verdict"]
+    sym = asset["symbol"]
     icon = "[LONG]" if v == "LONG" else "[SHORT]"
     p = sig["plan"]
     ts = datetime.fromtimestamp(sig["t"] / 1000, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    subject = f"{icon} BTC {v} signal @ ${sig['price']:,.0f} - 30m"
+    subject = f"{icon} {sym} {v} signal @ ${fmt_px(sig['price'])} - 30m"
     lines = [
-        f"BTC 30m confluence flipped to {v}",
+        f"{sym} 30m confluence flipped to {v}",
         f"Candle close: {ts}",
         f"Source: {source}",
         f"Confluence score: {sig['score']:+d} / +-5",
         "",
         "TRADE PLAN (ATR-sized)",
-        f"  Entry : ${p['entry']:,.0f}",
-        f"  Stop  : ${p['stop']:,.0f}  ({ATR_STOP_MULT} x ATR)",
-        f"  TP1   : ${p['tp1']:,.0f}  (R {ATR_TP1_MULT / ATR_STOP_MULT:.2f})",
-        f"  TP2   : ${p['tp2']:,.0f}  (R {ATR_TP2_MULT / ATR_STOP_MULT:.2f})",
-        f"  ATR14 : ${p['atr']:,.0f}",
+        f"  Entry : ${fmt_px(p['entry'])}",
+        f"  Stop  : ${fmt_px(p['stop'])}  ({ATR_STOP_MULT} x ATR)",
+        f"  TP1   : ${fmt_px(p['tp1'])}  (R {ATR_TP1_MULT / ATR_STOP_MULT:.2f})",
+        f"  TP2   : ${fmt_px(p['tp2'])}  (R {ATR_TP2_MULT / ATR_STOP_MULT:.2f})",
+        f"  ATR14 : ${fmt_px(p['atr'])}",
         "",
         "FACTORS",
     ]
@@ -389,15 +420,19 @@ def alert_email(sig, source):
     lines += ["", "-" * 50,
               "Automated technical signal for research - not financial advice.",
               "Any single signal can fail; size accordingly."]
-    return subject, "\n".join(lines), alert_html(sig, source, ts)
+    return subject, "\n".join(lines), alert_html(asset, sig, source, ts)
 
 
 # ------------------------------- state ------------------------------------
 def load_state():
     try:
-        return json.loads(STATE_FILE.read_text())
+        raw = json.loads(STATE_FILE.read_text())
     except (OSError, json.JSONDecodeError):
-        return {"last_verdict": None, "last_alert_candle": 0}
+        return {}
+    # migrate legacy single-asset format {"last_verdict":..,"last_alert_candle":..}
+    if "last_verdict" in raw:
+        return {"BTC": raw}
+    return raw
 
 
 def save_state(state):
@@ -405,37 +440,52 @@ def save_state(state):
 
 
 # ------------------------------- agent ------------------------------------
-def check_once():
-    source, candles = fetch_candles()
+def check_asset(asset, state):
+    sym = asset["symbol"]
+    source, candles = fetch_candles(asset)
     if not candles:
-        log("All data sources failed - will retry next scheduled run.")
-        return
+        log(f"{sym}: all data sources failed - will retry next run.")
+        return False
 
     sig = analyze(candles)
     if not sig:
-        log("Not enough history to evaluate.")
-        return
+        log(f"{sym}: not enough history to evaluate.")
+        return False
 
-    state = load_state()
-    log(f"{source} | ${sig['price']:,.0f} | verdict {sig['verdict']} "
-        f"(score {sig['score']:+d}) | previous state: {state.get('last_verdict')}")
+    ast = state.get(sym, {"last_verdict": None, "last_alert_candle": 0})
+    log(f"{sym} | {source} | ${fmt_px(sig['price'])} | verdict {sig['verdict']} "
+        f"(score {sig['score']:+d}) | previous state: {ast.get('last_verdict')}")
 
     flipped = (sig["verdict"] in ("LONG", "SHORT")
-               and sig["verdict"] != state.get("last_verdict")
-               and sig["t"] != state.get("last_alert_candle"))
+               and sig["verdict"] != ast.get("last_verdict")
+               and sig["t"] != ast.get("last_alert_candle"))
 
+    changed = False
     if flipped:
-        subject, body, html = alert_email(sig, source)
+        subject, body, html = alert_email(asset, sig, source)
         send_email(subject, body, html)  # let exceptions fail the run visibly
         log(f"ALERT SENT -> {EMAIL_TO}: {subject}")
-        state["last_verdict"] = sig["verdict"]
-        state["last_alert_candle"] = sig["t"]
+        ast["last_verdict"] = sig["verdict"]
+        ast["last_alert_candle"] = sig["t"]
+        changed = True
+    elif sig["verdict"] in ("LONG", "SHORT") and ast.get("last_verdict") != sig["verdict"]:
+        ast["last_verdict"] = sig["verdict"]
+        changed = True
+    state[sym] = ast
+    return changed
+
+
+def check_once():
+    state = load_state()
+    changed = False
+    for asset in ASSETS:
+        try:
+            changed = check_asset(asset, state) or changed
+        except Exception as e:
+            log(f"{asset['symbol']}: check failed: {e}")
+            raise
+    if changed or not STATE_FILE.exists():
         save_state(state)
-    elif sig["verdict"] in ("LONG", "SHORT"):
-        state["last_verdict"] = sig["verdict"]
-        save_state(state)
-    else:
-        log("No flip - nothing to send.")
 
 
 def seconds_to_next_close(buffer_s=20):
@@ -444,7 +494,7 @@ def seconds_to_next_close(buffer_s=20):
 
 
 def run_loop():
-    log("BTC alert agent started (loop mode). Ctrl+C to stop.")
+    log("Signal alert agent started (loop mode). Ctrl+C to stop.")
     check_once()
     while True:
         wait = seconds_to_next_close()
@@ -463,9 +513,11 @@ if __name__ == "__main__":
               "as environment variables (GitHub repo Secrets).")
         sys.exit(1)
     if "--test" in sys.argv:
-        send_email("BTC alert agent - test email",
-                   "Your alert pipeline works. The agent will email you here "
-                   "whenever the 30m confluence flips to LONG or SHORT.")
+        watched = ", ".join(a["symbol"] for a in ASSETS)
+        send_email("Signal alert agent - test email",
+                   f"Your alert pipeline works. Watching: {watched}. "
+                   "You'll get an email whenever the 30m confluence flips "
+                   "to LONG or SHORT on any of them.")
         print(f"Test email sent to {EMAIL_TO}.")
     elif "--loop" in sys.argv:
         run_loop()
