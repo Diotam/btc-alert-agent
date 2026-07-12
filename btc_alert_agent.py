@@ -25,6 +25,7 @@ import sys
 import time
 import urllib.request
 from datetime import datetime, timezone
+from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
 
@@ -262,8 +263,13 @@ def analyze(candles):
 
 
 # ------------------------------- email ------------------------------------
-def send_email(subject, body):
-    msg = MIMEText(body, "plain")
+def send_email(subject, body, html=None):
+    if html:
+        msg = MIMEMultipart("alternative")
+        msg.attach(MIMEText(body, "plain"))
+        msg.attach(MIMEText(html, "html"))
+    else:
+        msg = MIMEText(body, "plain")
     msg["Subject"] = subject
     msg["From"] = EMAIL_FROM
     msg["To"] = EMAIL_TO
@@ -271,6 +277,90 @@ def send_email(subject, body):
     with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=ctx) as server:
         server.login(EMAIL_FROM, EMAIL_APP_PASSWORD.replace(" ", ""))
         server.sendmail(EMAIL_FROM, [EMAIL_TO], msg.as_string())
+
+
+def alert_html(sig, source, ts):
+    """Styled HTML body. Inline styles + tables for email-client compatibility."""
+    v = sig["verdict"]
+    p = sig["plan"]
+    accent = "#0FB98C" if v == "LONG" else "#E8524A"
+    accent_soft = "#E6F7F1" if v == "LONG" else "#FCEAE8"
+    arrow = "&#9650;" if v == "LONG" else "&#9660;"  # up / down triangle
+
+    def row(label, value, color="#1A2530", bold=False):
+        w = "700" if bold else "500"
+        return (f'<tr>'
+                f'<td style="padding:9px 0;border-bottom:1px solid #EDF1F4;'
+                f'font-size:12px;color:#7A8B99;">{label}</td>'
+                f'<td style="padding:9px 0;border-bottom:1px solid #EDF1F4;'
+                f'font-size:14px;color:{color};font-weight:{w};text-align:right;'
+                f'font-family:Menlo,Consolas,monospace;">{value}</td></tr>')
+
+    dot = {1: "#0FB98C", -1: "#E8524A", 0: "#C4CED6"}
+    factor_rows = "".join(
+        f'<tr><td style="padding:7px 0;border-bottom:1px solid #EDF1F4;'
+        f'font-size:12px;color:#7A8B99;white-space:nowrap;">'
+        f'<span style="display:inline-block;width:8px;height:8px;border-radius:4px;'
+        f'background:{dot[d]};margin-right:8px;"></span>{k}</td>'
+        f'<td style="padding:7px 0;border-bottom:1px solid #EDF1F4;font-size:13px;'
+        f'color:#1A2530;text-align:right;">{desc}</td></tr>'
+        for k, desc, d in sig["factors"])
+
+    return f"""\
+<!DOCTYPE html>
+<html>
+<body style="margin:0;padding:0;background:#F2F5F7;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F2F5F7;padding:24px 12px;">
+<tr><td align="center">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+       style="max-width:480px;background:#FFFFFF;border-radius:12px;overflow:hidden;
+              font-family:-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;">
+
+  <!-- verdict banner -->
+  <tr><td style="background:{accent};padding:22px 24px;">
+    <div style="font-size:11px;letter-spacing:2px;color:rgba(255,255,255,.75);
+                text-transform:uppercase;">BTC-PERP &middot; 30m signal</div>
+    <div style="font-size:34px;font-weight:800;color:#FFFFFF;line-height:1.15;">
+      {arrow}&nbsp;{v} &middot; ${sig['price']:,.0f}</div>
+    <div style="font-size:12px;color:rgba(255,255,255,.85);margin-top:4px;">
+      Confluence {sig['score']:+d} / &plusmn;5 &nbsp;&middot;&nbsp; {ts}</div>
+  </td></tr>
+
+  <!-- trade plan -->
+  <tr><td style="padding:20px 24px 8px;">
+    <div style="font-size:11px;letter-spacing:2px;color:#7A8B99;
+                text-transform:uppercase;margin-bottom:4px;">Trade plan &middot; ATR-sized</div>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+      {row("Entry", f"${p['entry']:,.0f}", bold=True)}
+      {row("Stop &middot; " + str(ATR_STOP_MULT) + " &times; ATR", f"${p['stop']:,.0f}", "#E8524A", True)}
+      {row("TP1 &middot; R " + f"{ATR_TP1_MULT / ATR_STOP_MULT:.2f}", f"${p['tp1']:,.0f}", "#0FB98C", True)}
+      {row("TP2 &middot; R " + f"{ATR_TP2_MULT / ATR_STOP_MULT:.2f}", f"${p['tp2']:,.0f}", "#0FB98C", True)}
+      {row("ATR14", f"${p['atr']:,.0f}")}
+    </table>
+  </td></tr>
+
+  <!-- factors -->
+  <tr><td style="padding:14px 24px 8px;">
+    <div style="font-size:11px;letter-spacing:2px;color:#7A8B99;
+                text-transform:uppercase;margin-bottom:4px;">Why it fired</div>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+      {factor_rows}
+    </table>
+  </td></tr>
+
+  <!-- source + disclaimer -->
+  <tr><td style="padding:16px 24px 22px;">
+    <div style="background:{accent_soft};border-radius:8px;padding:12px 14px;
+                font-size:11px;line-height:1.6;color:#5B6C7A;">
+      Source: {source}. Automated technical signal for research &mdash; not financial
+      advice. Any single signal can fail; size accordingly.
+    </div>
+  </td></tr>
+</table>
+</td></tr>
+</table>
+</body>
+</html>"""
 
 
 def alert_email(sig, source):
@@ -299,7 +389,7 @@ def alert_email(sig, source):
     lines += ["", "-" * 50,
               "Automated technical signal for research - not financial advice.",
               "Any single signal can fail; size accordingly."]
-    return subject, "\n".join(lines)
+    return subject, "\n".join(lines), alert_html(sig, source, ts)
 
 
 # ------------------------------- state ------------------------------------
@@ -335,8 +425,8 @@ def check_once():
                and sig["t"] != state.get("last_alert_candle"))
 
     if flipped:
-        subject, body = alert_email(sig, source)
-        send_email(subject, body)  # let exceptions fail the run visibly
+        subject, body, html = alert_email(sig, source)
+        send_email(subject, body, html)  # let exceptions fail the run visibly
         log(f"ALERT SENT -> {EMAIL_TO}: {subject}")
         state["last_verdict"] = sig["verdict"]
         state["last_alert_candle"] = sig["t"]
