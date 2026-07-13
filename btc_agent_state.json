@@ -1,10 +1,21 @@
 {
   "BTC": {
-    "last_verdict": "LONG",
-    "last_alert_candle": 1783886400000
+    "last_verdict": "SHORT",
+    "last_alert_candle": 1783911600000,
+    "trade": {
+      "verdict": "SHORT",
+      "entry": 63078.0,
+      "stop": 63475.50320862105,
+      "tp1": 62547.9957218386,
+      "tp2": 62282.993582757896,
+      "tp1_hit": false,
+      "opened_t": 1783911600000,
+      "checked_t": 1783911600000
+    }
   },
   "TSLA": {
     "last_verdict": "SHORT",
-    "last_alert_candle": 1783890000000
+    "last_alert_candle": 1783890000000,
+    "trade": null
   }
 }
