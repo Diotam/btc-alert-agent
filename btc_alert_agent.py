@@ -53,6 +53,8 @@ ASSETS = [
      "fallbacks": ["binance:BTCUSDT", "kraken:XBTUSD"]},
     {"symbol": "TSLA", "label": "TSLA-PERP (xyz)", "hl_coin": "xyz:TSLA",
      "fallbacks": ["yahoo:TSLA"]},
+    {"symbol": "SP500", "label": "SP500-PERP (xyz)", "hl_coin": "xyz:SP500",
+     "fallbacks": ["yahoo:^GSPC"]},
 ]
 
 CANDLE_MINUTES = 30
@@ -142,7 +144,8 @@ def fetch_kraken(pair):
 
 
 def fetch_yahoo(ticker):
-    data = http_json(f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
+    from urllib.parse import quote
+    data = http_json(f"https://query1.finance.yahoo.com/v8/finance/chart/{quote(ticker)}"
                      f"?interval={CANDLE_MINUTES}m&range=1mo")
     res = data["chart"]["result"][0]
     ts = res["timestamp"]
