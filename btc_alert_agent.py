@@ -44,7 +44,7 @@ ASSETS = [
      "fallbacks": ["yahoo:TSLA"]},
 ]
 
-CANDLE_MINUTES = 15
+CANDLE_MINUTES = 30
 LOOKBACK = 500
 SIGNAL_THRESHOLD = 3           # confluence needed to enter (out of +-5)
 INVALIDATION_SCORE = 1         # open LONG dies if score <= -1 (SHORT mirrored)
