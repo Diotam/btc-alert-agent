@@ -55,6 +55,8 @@ ASSETS = [
      "fallbacks": ["yahoo:TSLA"]},
     {"symbol": "SP500", "label": "SP500-PERP (xyz)", "hl_coin": "xyz:SP500",
      "fallbacks": ["yahoo:^GSPC"]},
+    {"symbol": "SKHX", "label": "SKHX-PERP (xyz)", "hl_coin": "xyz:SKHX",
+     "fallbacks": ["yahoo:SKHY"]},
 ]
 
 CANDLE_MINUTES = 30
