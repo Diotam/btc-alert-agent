@@ -1,12 +1,1 @@
-{
-  "BTC": {
-    "last_verdict": "WAIT",
-    "last_alert_candle": 1783911600000,
-    "trade": null
-  },
-  "TSLA": {
-    "last_verdict": "SHORT",
-    "last_alert_candle": 1783890000000,
-    "trade": null
-  }
-}
+{}
