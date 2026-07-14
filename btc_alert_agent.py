@@ -2,24 +2,20 @@
 """
 MULTI-ASSET SIGNAL ALERT AGENT - 30m swing - full trade lifecycle
 ------------------------------------------------------------------
-Confluence engine built on three pillars:
+Watches BTC, TSLA, SP500 and SKHX on Hyperliquid with a 5-factor
+indicator confluence engine:
 
-  1. TREND DIRECTION   EMA20/50 alignment + price vs EMA200      (-2..+2)
-  2. SUPPORT/RESISTANCE pivot-based levels: breakouts, bounces,
-                        rejections, breakdowns                    (-2..+2)
-  3. PRICE ACTION      swing structure (HH/HL vs LH/LL) +
-                        candle signals (engulfing, pin bars,
-                        strong closes)                            (-2..+2)
+  1. Trend    EMA20 vs EMA50                    (+-1)
+  2. Bias     price vs EMA200                   (+-1)
+  3. MACD     histogram sign + slope            (+-1)
+  4. RSI      bullish / bearish zone            (+-1)
+  5. Volume   expansion vs 20-candle average    (+-1)
 
-Total score range -6..+6. Entry requires |score| >= SIGNAL_THRESHOLD,
-plus a room-to-move check: a LONG is vetoed if resistance sits before
-TP1 (mirrored for SHORTs against support).
-
-Stops are structure-aware: placed just beyond the nearest S/R level
-when one is close, otherwise 1.5 x ATR.
+Score range -5..+5. Entry at |score| >= SIGNAL_THRESHOLD.
 
 Lifecycle alerts: ENTRY, TP1 (stop -> breakeven), TP2, STOPPED OUT,
-INVALIDATED.
+INVALIDATED. Each run surfaces a summary via GitHub annotations, the
+job summary panel, and run_summary.txt (used as the commit message).
 
 Config from environment variables (GitHub repo Secrets):
   EMAIL_FROM / EMAIL_APP_PASSWORD / EMAIL_TO
@@ -49,13 +45,13 @@ EMAIL_APP_PASSWORD = os.environ.get("EMAIL_APP_PASSWORD", "")
 EMAIL_TO = os.environ.get("EMAIL_TO", "")
 
 ASSETS = [
-    {"symbol": "BTC",  "label": "BTC-PERP",        "hl_coin": "BTC",
+    {"symbol": "BTC",   "label": "BTC-PERP",        "hl_coin": "BTC",
      "fallbacks": ["binance:BTCUSDT", "kraken:XBTUSD"]},
-    {"symbol": "TSLA", "label": "TSLA-PERP (xyz)", "hl_coin": "xyz:TSLA",
+    {"symbol": "TSLA",  "label": "TSLA-PERP (xyz)", "hl_coin": "xyz:TSLA",
      "fallbacks": ["yahoo:TSLA"]},
     {"symbol": "SP500", "label": "SP500-PERP (xyz)", "hl_coin": "xyz:SP500",
      "fallbacks": ["yahoo:^GSPC"]},
-    {"symbol": "SKHX", "label": "SKHX-PERP (xyz)", "hl_coin": "xyz:SKHX",
+    {"symbol": "SKHX",  "label": "SKHX-PERP (xyz)", "hl_coin": "xyz:SKHX",
      "fallbacks": ["yahoo:SKHY"]},
 ]
 
@@ -66,18 +62,10 @@ LOOKBACK = 500
 #   "America/Los_Angeles"  "America/Port_of_Spain"  "Europe/London"
 TIMEZONE = "America/New_York"
 
-MAX_SCORE = 6
-SIGNAL_THRESHOLD = 4           # |score| needed to enter (out of +-6)
-INVALIDATION_SCORE = 2         # open LONG dies if score <= -2 (SHORT mirrored)
-
-# Support/resistance detection
-PIVOT_WING = 3                 # candles on each side to confirm a swing point
-LEVEL_TOL_ATR = 0.30           # cluster pivots within this many ATRs into one level
-MIN_TOUCHES_BREAKOUT = 2       # touches a level needs to count for breakout/breakdown
-SR_STOP_MAX_ATR = 2.5          # use structure stop only if level within this many ATRs
-SR_STOP_PAD_ATR = 0.30         # stop placed this far beyond the level
-
-ATR_STOP_MULT = 1.5            # fallback stop when no nearby structure
+MAX_SCORE = 5
+SIGNAL_THRESHOLD = 3           # |score| needed to enter (out of +-5)
+INVALIDATION_SCORE = 1         # open LONG dies if score <= -1 (SHORT mirrored)
+ATR_STOP_MULT = 1.5
 ATR_TP1_MULT = 2.0
 ATR_TP2_MULT = 3.0
 BREAKEVEN_AFTER_TP1 = True
@@ -138,7 +126,7 @@ def write_run_summary():
 # --------------------------- data sources ---------------------------------
 def http_json(url, payload=None, timeout=20):
     headers = {"Content-Type": "application/json",
-               "User-Agent": "Mozilla/5.0 (signal-alert-agent/4.0)"}
+               "User-Agent": "Mozilla/5.0 (signal-alert-agent/5.0)"}
     data = json.dumps(payload).encode() if payload is not None else None
     req = urllib.request.Request(url, data=data, headers=headers,
                                  method="POST" if payload is not None else "GET")
@@ -227,6 +215,37 @@ def ema(values, period):
     return out
 
 
+def rsi(closes, period=14):
+    out = [None] * len(closes)
+    avg_gain = avg_loss = 0.0
+    for i in range(1, len(closes)):
+        d = closes[i] - closes[i - 1]
+        gain, loss = max(d, 0), max(-d, 0)
+        if i <= period:
+            avg_gain += gain / period
+            avg_loss += loss / period
+            if i == period:
+                rs = 100 if avg_loss == 0 else avg_gain / avg_loss
+                out[i] = 100 - 100 / (1 + rs)
+        else:
+            avg_gain = (avg_gain * (period - 1) + gain) / period
+            avg_loss = (avg_loss * (period - 1) + loss) / period
+            rs = 100 if avg_loss == 0 else avg_gain / avg_loss
+            out[i] = 100 - 100 / (1 + rs)
+    return out
+
+
+def macd(closes, fast=12, slow=26, signal=9):
+    ef, es = ema(closes, fast), ema(closes, slow)
+    line = [ef[i] - es[i] if ef[i] is not None and es[i] is not None else None
+            for i in range(len(closes))]
+    sig_raw = ema([v if v is not None else 0 for v in line], signal)
+    sig = [sig_raw[i] if line[i] is not None else None for i in range(len(line))]
+    hist = [line[i] - sig[i] if line[i] is not None and sig[i] is not None else None
+            for i in range(len(line))]
+    return line, sig, hist
+
+
 def atr(candles, period=14):
     out = [None] * len(candles)
     prev = None
@@ -244,201 +263,95 @@ def atr(candles, period=14):
     return out
 
 
-# ----------------------- support / resistance ------------------------------
-def find_pivots(candles, upto, wing=PIVOT_WING):
-    """Confirmed swing highs/lows in candles[:upto+1]. Returns (highs, lows)
-    as lists of (index, price). A pivot needs `wing` candles on both sides."""
-    highs, lows = [], []
-    for i in range(wing, upto - wing + 1):
-        h, l = candles[i]["h"], candles[i]["l"]
-        if (all(h > candles[j]["h"] for j in range(i - wing, i)) and
-                all(h >= candles[j]["h"] for j in range(i + 1, i + wing + 1))):
-            highs.append((i, h))
-        if (all(l < candles[j]["l"] for j in range(i - wing, i)) and
-                all(l <= candles[j]["l"] for j in range(i + 1, i + wing + 1))):
-            lows.append((i, l))
-    return highs, lows
-
-
-def build_levels(pivot_prices, tol):
-    """Cluster pivot prices within `tol` into levels: [(price, touches)]."""
-    levels = []
-    for p in sorted(pivot_prices):
-        if levels and p - levels[-1][0] <= tol:
-            price, n = levels[-1]
-            levels[-1] = ((price * n + p) / (n + 1), n + 1)
-        else:
-            levels.append((p, 1))
-    return levels
-
-
-def sr_context(candles, i, a):
-    """Everything the engine needs to know about levels around candle i."""
-    highs, lows = find_pivots(candles, i)
-    tol = LEVEL_TOL_ATR * a
-    levels = build_levels([p for _, p in highs] + [p for _, p in lows], tol)
-    px = candles[i]["c"]
-    support = max((lv for lv in levels if lv[0] < px), key=lambda x: x[0], default=None)
-    resistance = min((lv for lv in levels if lv[0] > px), key=lambda x: x[0], default=None)
-    return {"levels": levels, "support": support, "resistance": resistance,
-            "highs": highs, "lows": lows, "tol": tol}
-
-
-def sr_signal(candles, i, ctx):
-    """Score S/R interaction on candle i: (score -2..+2, description)."""
-    c, prev_close = candles[i], candles[i - 1]["c"]
-    px = c["c"]
-    tol = ctx["tol"]
-
-    # breakout / breakdown through an established level
-    for price, touches in ctx["levels"]:
-        if touches < MIN_TOUCHES_BREAKOUT:
-            continue
-        if prev_close < price <= px:
-            return 2, f"Breakout above ${fmt_px(price)} ({touches} touches)"
-        if prev_close > price >= px:
-            return -2, f"Breakdown below ${fmt_px(price)} ({touches} touches)"
-
-    # bounce off support / rejection at resistance
-    if ctx["support"]:
-        s_price, s_touch = ctx["support"]
-        if c["l"] <= s_price + tol and px > s_price and px > c["o"]:
-            return 1, f"Bounce off support ${fmt_px(s_price)} ({s_touch} touches)"
-    if ctx["resistance"]:
-        r_price, r_touch = ctx["resistance"]
-        if c["h"] >= r_price - tol and px < r_price and px < c["o"]:
-            return -1, f"Rejected at resistance ${fmt_px(r_price)} ({r_touch} touches)"
-
-    return 0, "Mid-range - no level interaction"
-
-
-# ----------------------------- price action --------------------------------
-def structure_signal(ctx):
-    """Swing structure from the last two confirmed highs and lows."""
-    highs, lows = ctx["highs"], ctx["lows"]
-    if len(highs) < 2 or len(lows) < 2:
-        return 0, "Structure unclear"
-    hh = highs[-1][1] > highs[-2][1]
-    hl = lows[-1][1] > lows[-2][1]
-    if hh and hl:
-        return 1, "Higher highs & higher lows"
-    if not hh and not hl:
-        return -1, "Lower highs & lower lows"
-    return 0, "Mixed structure"
-
-
-def candle_signal(candles, i, a):
-    """Single-candle / two-candle price action on the closed candle i."""
-    c, p = candles[i], candles[i - 1]
-    body = abs(c["c"] - c["o"])
-    rng = c["h"] - c["l"]
-    if rng <= 0:
-        return 0, "No candle signal"
-    up_wick = c["h"] - max(c["c"], c["o"])
-    dn_wick = min(c["c"], c["o"]) - c["l"]
-    bull = c["c"] > c["o"]
-
-    # engulfing
-    if bull and p["c"] < p["o"] and c["c"] >= p["o"] and c["o"] <= p["c"]:
-        return 1, "Bullish engulfing"
-    if not bull and p["c"] > p["o"] and c["c"] <= p["o"] and c["o"] >= p["c"]:
-        return -1, "Bearish engulfing"
-    # pin bars (rejection wicks)
-    if dn_wick >= 2 * body and c["c"] >= c["l"] + 0.6 * rng:
-        return 1, "Hammer / bullish pin bar"
-    if up_wick >= 2 * body and c["c"] <= c["h"] - 0.6 * rng:
-        return -1, "Shooting star / bearish pin bar"
-    # strong directional close on an expanded candle
-    if rng >= a and bull and c["c"] >= c["h"] - 0.2 * rng:
-        return 1, "Strong bullish close, expanded range"
-    if rng >= a and not bull and c["c"] <= c["l"] + 0.2 * rng:
-        return -1, "Strong bearish close, expanded range"
-    return 0, "No candle signal"
+def sma(values, period):
+    out = [None] * len(values)
+    s = 0.0
+    for i, v in enumerate(values):
+        s += v
+        if i >= period:
+            s -= values[i - period]
+        if i >= period - 1:
+            out[i] = s / period
+    return out
 
 
 # ---------------------------- signal engine --------------------------------
-def evaluate(candles, i, e20, e50, e200, atr_arr):
-    if i < 200 or atr_arr[i] is None or e200[i] is None:
+def evaluate(i, closes, e20, e50, e200, rsi_arr, hist, atr_arr, vols, vol_avg):
+    if i < 200:
         return None
-    a = atr_arr[i]
-    px = candles[i]["c"]
     factors, score = [], 0
+    px = closes[i]
 
-    # 1 - TREND DIRECTION (-2..+2)
-    t = (1 if e20[i] > e50[i] else -1) + (1 if px > e200[i] else -1)
-    parts = [("EMA20>EMA50" if e20[i] > e50[i] else "EMA20<EMA50"),
-             ("above EMA200" if px > e200[i] else "below EMA200")]
-    score += t
-    factors.append(("Trend", f"{parts[0]}, price {parts[1]} ({t:+d})",
-                    (t > 0) - (t < 0)))
+    if e20[i] > e50[i]:
+        score += 1; factors.append(("Trend", "EMA20 above EMA50", 1))
+    else:
+        score -= 1; factors.append(("Trend", "EMA20 below EMA50", -1))
 
-    # 2 - SUPPORT / RESISTANCE (-2..+2)
-    ctx = sr_context(candles, i, a)
-    s, desc = sr_signal(candles, i, ctx)
-    score += s
-    factors.append(("S/R", f"{desc} ({s:+d})", (s > 0) - (s < 0)))
+    if px > e200[i]:
+        score += 1; factors.append(("Bias", "Price above EMA200", 1))
+    else:
+        score -= 1; factors.append(("Bias", "Price below EMA200", -1))
 
-    # 3 - PRICE ACTION (-2..+2): structure + candle signal
-    st, st_desc = structure_signal(ctx)
-    ca, ca_desc = candle_signal(candles, i, a)
-    pa = st + ca
-    score += pa
-    factors.append(("Price action", f"{st_desc}; {ca_desc} ({pa:+d})",
-                    (pa > 0) - (pa < 0)))
+    h0, h1 = hist[i], hist[i - 1]
+    if h0 is not None and h1 is not None:
+        if h0 > 0 and h0 > h1:
+            score += 1; factors.append(("MACD", "Histogram positive & rising", 1))
+        elif h0 < 0 and h0 < h1:
+            score -= 1; factors.append(("MACD", "Histogram negative & falling", -1))
+        else:
+            factors.append(("MACD", "Positive, fading" if h0 > 0 else "Negative, fading", 0))
+
+    r = rsi_arr[i]
+    if r is not None:
+        if r > 70:
+            factors.append(("RSI", f"{r:.1f} - overbought", 0))
+        elif r < 30:
+            factors.append(("RSI", f"{r:.1f} - oversold", 0))
+        elif r > 55:
+            score += 1; factors.append(("RSI", f"{r:.1f} - bullish zone", 1))
+        elif r < 45:
+            score -= 1; factors.append(("RSI", f"{r:.1f} - bearish zone", -1))
+        else:
+            factors.append(("RSI", f"{r:.1f} - neutral", 0))
+
+    if vol_avg[i] is not None and vol_avg[i] > 0 and vols[i] > vol_avg[i] * 1.2:
+        up = closes[i] > closes[i - 1]
+        score += 1 if up else -1
+        factors.append(("Volume", f"{vols[i] / vol_avg[i]:.1f}x avg on "
+                                  f"{'up' if up else 'down'} candle", 1 if up else -1))
+    else:
+        factors.append(("Volume", "No expansion", 0))
 
     verdict = ("LONG" if score >= SIGNAL_THRESHOLD
                else "SHORT" if score <= -SIGNAL_THRESHOLD else "WAIT")
-
+    a = atr_arr[i] or 0
     plan = None
     if verdict != "WAIT":
         sign = 1 if verdict == "LONG" else -1
-        # structure-aware stop: beyond the nearest level if one is close
         stop = px - sign * ATR_STOP_MULT * a
-        if verdict == "LONG" and ctx["support"]:
-            s_price = ctx["support"][0]
-            if px - s_price <= SR_STOP_MAX_ATR * a:
-                stop = s_price - SR_STOP_PAD_ATR * a
-        elif verdict == "SHORT" and ctx["resistance"]:
-            r_price = ctx["resistance"][0]
-            if r_price - px <= SR_STOP_MAX_ATR * a:
-                stop = r_price + SR_STOP_PAD_ATR * a
         tp1 = px + sign * ATR_TP1_MULT * a
         tp2 = px + sign * ATR_TP2_MULT * a
-
-        # room-to-move veto: a level sitting before TP1 kills the trade
-        blocker = None
-        if verdict == "LONG" and ctx["resistance"] and ctx["resistance"][0] < tp1:
-            blocker = ("Resistance", ctx["resistance"][0])
-        if verdict == "SHORT" and ctx["support"] and ctx["support"][0] > tp1:
-            blocker = ("Support", ctx["support"][0])
-        if blocker:
-            factors.append(("Room", f"{blocker[0]} ${fmt_px(blocker[1])} sits "
-                                    f"before TP1 - entry vetoed", 0))
-            verdict = "WAIT"
-        elif abs(px - stop) > 0 and abs(tp1 - px) / abs(px - stop) < 1.0:
-            factors.append(("Room", "Structure stop is wider than TP1 reward "
-                                    "(R < 1) - entry vetoed", 0))
-            verdict = "WAIT"
-        else:
-            risk = abs(px - stop)
-            plan = {"entry": px, "stop": stop, "tp1": tp1, "tp2": tp2, "atr": a,
-                    "rr1": abs(tp1 - px) / risk if risk else 0,
-                    "rr2": abs(tp2 - px) / risk if risk else 0}
-            if ctx["support"]:
-                factors.append(("Levels", f"Support ${fmt_px(ctx['support'][0])} / "
-                                          f"resistance " +
-                                (f"${fmt_px(ctx['resistance'][0])}"
-                                 if ctx["resistance"] else "none above"), 0))
-
+        risk = abs(px - stop)
+        plan = {"entry": px, "stop": stop, "tp1": tp1, "tp2": tp2, "atr": a,
+                "rr1": abs(tp1 - px) / risk if risk else 0,
+                "rr2": abs(tp2 - px) / risk if risk else 0}
     return {"score": score, "factors": factors, "verdict": verdict,
-            "plan": plan, "price": px, "t": candles[i]["t"]}
+            "plan": plan, "price": px, "t": None}
 
 
 def analyze(candles):
     closes = [c["c"] for c in candles]
+    vols = [c["v"] for c in candles]
     e20, e50, e200 = ema(closes, 20), ema(closes, 50), ema(closes, 200)
+    r = rsi(closes)
+    _, _, hist = macd(closes)
     a = atr(candles)
-    return evaluate(candles, len(candles) - 2, e20, e50, e200, a)
+    vol_avg = sma(vols, 20)
+    last_closed = len(candles) - 2
+    res = evaluate(last_closed, closes, e20, e50, e200, r, hist, a, vols, vol_avg)
+    if res:
+        res["t"] = candles[last_closed]["t"]
+    return res
 
 
 # ------------------------------- email ------------------------------------
@@ -540,7 +453,7 @@ def entry_email(asset, sig, source):
              f'cellspacing="0">{factor_rows}</table></td></tr>')
 
     rows = (_row("Entry", "$" + fmt_px(p["entry"]), bold=True)
-            + _row("Stop &middot; structure-aware", "$" + fmt_px(p["stop"]), "#E8524A", True)
+            + _row(f"Stop &middot; {ATR_STOP_MULT} &times; ATR", "$" + fmt_px(p["stop"]), "#E8524A", True)
             + _row(f"TP1 &middot; R {p['rr1']:.2f}", "$" + fmt_px(p["tp1"]), "#0FB98C", True)
             + _row(f"TP2 &middot; R {p['rr2']:.2f}", "$" + fmt_px(p["tp2"]), "#0FB98C", True)
             + _row("ATR14", "$" + fmt_px(p["atr"])))
@@ -553,9 +466,9 @@ def entry_email(asset, sig, source):
         f"{sym} {CANDLE_MINUTES}m confluence flipped to {v}",
         f"Candle close: {ts}", f"Source: {source}",
         f"Confluence score: {sig['score']:+d} / +-{MAX_SCORE}", "",
-        "TRADE PLAN (structure-aware)",
+        "TRADE PLAN (ATR-sized)",
         f"  Entry : ${fmt_px(p['entry'])}",
-        f"  Stop  : ${fmt_px(p['stop'])}",
+        f"  Stop  : ${fmt_px(p['stop'])}  ({ATR_STOP_MULT} x ATR)",
         f"  TP1   : ${fmt_px(p['tp1'])}  (R {p['rr1']:.2f})",
         f"  TP2   : ${fmt_px(p['tp2'])}  (R {p['rr2']:.2f})", "",
         "FACTORS"] +
@@ -629,7 +542,7 @@ def process_open_trade(asset, trade, candles, last_closed_t, sig):
         if hit_stop:
             note = ("Stop moved to breakeven after TP1, so this exit is at entry."
                     if trade["tp1_hit"] else
-                    "Structure stop was hit. Wait for the next confluence flip.")
+                    "Initial ATR stop was hit. Wait for the next confluence flip.")
             subject, body, html = lifecycle_email(asset, "STOP", trade,
                                                   trade["stop"], c["t"], note)
             send_email(subject, body, html)
@@ -786,9 +699,9 @@ if __name__ == "__main__":
         watched = ", ".join(a["symbol"] for a in ASSETS)
         send_email("Signal alert agent - test email",
                    f"Your alert pipeline works. Watching: {watched} on the "
-                   f"{CANDLE_MINUTES}m timeframe with S/R + trend + price action "
-                   "confluence. You'll get emails for entries, TP1/TP2 hits, "
-                   "stop-outs, and signal invalidations.")
+                   f"{CANDLE_MINUTES}m timeframe with the 5-factor indicator "
+                   "confluence engine. You'll get emails for entries, TP1/TP2 "
+                   "hits, stop-outs, and signal invalidations.")
         print(f"Test email sent to {EMAIL_TO}.")
     elif "--loop" in sys.argv:
         run_loop()
