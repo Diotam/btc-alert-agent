@@ -104,6 +104,35 @@ def pnl_pct(trade, exit_px):
     return sign * (exit_px - trade["entry"]) / trade["entry"] * 100
 
 
+# --------------------------- run summary -----------------------------------
+RUN_ALERTS = []   # alert events fired during this run
+RUN_STATUS = []   # one-liner per asset, e.g. "BTC WAIT (+1)"
+
+
+def write_run_summary():
+    """Surface the run result in GitHub's UI so logs never need opening:
+    a ::notice annotation, the job summary panel, and run_summary.txt
+    (which the workflow uses as the state-commit message)."""
+    if RUN_ALERTS:
+        headline = "ALERT SENT: " + " | ".join(RUN_ALERTS)
+    else:
+        headline = "No signal - " + (", ".join(RUN_STATUS) or "no assets checked")
+    log("SUMMARY: " + headline)
+    print(f"::notice title={'ALERT SENT' if RUN_ALERTS else 'No signal'}::{headline}")
+    summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary_path:
+        try:
+            with open(summary_path, "a") as f:
+                icon = "\U0001F514" if RUN_ALERTS else "\U0001F4A4"
+                f.write(f"### {icon} {headline}\n")
+        except OSError:
+            pass
+    try:
+        (Path(__file__).parent / "run_summary.txt").write_text(headline + "\n")
+    except OSError:
+        pass
+
+
 # --------------------------- data sources ---------------------------------
 def http_json(url, payload=None, timeout=20):
     headers = {"Content-Type": "application/json",
@@ -603,6 +632,7 @@ def process_open_trade(asset, trade, candles, last_closed_t, sig):
                                                   trade["stop"], c["t"], note)
             send_email(subject, body, html)
             log(f"{sym}: STOPPED OUT at ${fmt_px(trade['stop'])} -> email sent")
+            RUN_ALERTS.append(f"{sym} STOPPED OUT ({pnl_pct(trade, trade['stop']):+.2f}%)")
             return None, True
 
         if hit_tp2:
@@ -611,6 +641,7 @@ def process_open_trade(asset, trade, candles, last_closed_t, sig):
                 "Full target reached. Trade closed.")
             send_email(subject, body, html)
             log(f"{sym}: TP2 HIT at ${fmt_px(trade['tp2'])} -> email sent")
+            RUN_ALERTS.append(f"{sym} TP2 HIT ({pnl_pct(trade, trade['tp2']):+.2f}%)")
             return None, True
 
         if hit_tp1:
@@ -623,6 +654,7 @@ def process_open_trade(asset, trade, candles, last_closed_t, sig):
                                                   trade["tp1"], c["t"], note)
             send_email(subject, body, html)
             log(f"{sym}: TP1 HIT at ${fmt_px(trade['tp1'])} -> email sent")
+            RUN_ALERTS.append(f"{sym} TP1 HIT ({pnl_pct(trade, trade['tp1']):+.2f}%)")
             changed = True
 
         trade["checked_t"] = c["t"]
@@ -643,6 +675,7 @@ def process_open_trade(asset, trade, candles, last_closed_t, sig):
                 "consider exiting.")
             send_email(subject, body, html)
             log(f"{sym}: INVALIDATED (score {sig['score']:+d}) -> email sent")
+            RUN_ALERTS.append(f"{sym} {trade['verdict']} INVALIDATED")
             return None, True
 
     return trade, changed
@@ -653,11 +686,13 @@ def check_asset(asset, state):
     source, candles = fetch_candles(asset)
     if not candles:
         log(f"{sym}: all data sources failed - will retry next run.")
+        RUN_STATUS.append(f"{sym} feed failed")
         return False
 
     sig = analyze(candles)
     if not sig:
         log(f"{sym}: not enough history to evaluate.")
+        RUN_STATUS.append(f"{sym} insufficient history")
         return False
 
     ast = state.get(sym, {"last_verdict": None, "last_alert_candle": 0, "trade": None})
@@ -669,6 +704,8 @@ def check_asset(asset, state):
     log(f"{sym} | {source} | ${fmt_px(sig['price'])} | verdict {sig['verdict']} "
         f"(score {sig['score']:+d}/{MAX_SCORE}) | state: {ast.get('last_verdict')}"
         f"{' | open ' + trade['verdict'] + ' trade' if trade else ''}")
+    RUN_STATUS.append(f"{sym} {sig['verdict']} ({sig['score']:+d})"
+                      + (f", open {trade['verdict']}" if trade else ""))
 
     if trade:
         trade, ch = process_open_trade(asset, trade, candles, last_closed_t, sig)
@@ -684,6 +721,7 @@ def check_asset(asset, state):
         subject, body, html = entry_email(asset, sig, source)
         send_email(subject, body, html)
         log(f"ALERT SENT -> {EMAIL_TO}: {subject}")
+        RUN_ALERTS.append(f"{sym} {sig['verdict']} entry @ ${fmt_px(sig['price'])}")
         p = sig["plan"]
         ast["trade"] = {"verdict": sig["verdict"], "entry": p["entry"],
                         "stop": p["stop"], "tp1": p["tp1"], "tp2": p["tp2"],
@@ -701,16 +739,21 @@ def check_asset(asset, state):
 
 
 def check_once():
+    RUN_ALERTS.clear()
+    RUN_STATUS.clear()
     state = load_state()
     changed = False
-    for asset in ASSETS:
-        try:
-            changed = check_asset(asset, state) or changed
-        except Exception:
+    try:
+        for asset in ASSETS:
+            try:
+                changed = check_asset(asset, state) or changed
+            except Exception:
+                save_state(state)
+                raise
+        if changed or not STATE_FILE.exists():
             save_state(state)
-            raise
-    if changed or not STATE_FILE.exists():
-        save_state(state)
+    finally:
+        write_run_summary()
 
 
 def seconds_to_next_close(buffer_s=20):
