@@ -1,1 +1,49 @@
-{}
+{
+  "BTC": {
+    "last_verdict": "LONG",
+    "last_alert_candle": 1784041200000,
+    "trade": {
+      "verdict": "LONG",
+      "entry": 64492.0,
+      "stop": 64057.00042653815,
+      "tp1": 65071.999431282464,
+      "tp2": 65361.9991469237,
+      "tp1_hit": false,
+      "opened_t": 1784041200000,
+      "checked_t": 1784041200000
+    }
+  },
+  "TSLA": {
+    "last_verdict": "LONG",
+    "last_alert_candle": 1784041200000,
+    "trade": {
+      "verdict": "LONG",
+      "entry": 399.87,
+      "stop": 397.1625486134543,
+      "tp1": 403.4799351820609,
+      "tp2": 405.28490277309135,
+      "tp1_hit": false,
+      "opened_t": 1784041200000,
+      "checked_t": 1784041200000
+    }
+  },
+  "SP500": {
+    "last_verdict": "LONG",
+    "last_alert_candle": 1784041200000,
+    "trade": {
+      "verdict": "LONG",
+      "entry": 7550.4,
+      "stop": 7526.836973127735,
+      "tp1": 7581.817369163019,
+      "tp2": 7597.526053744528,
+      "tp1_hit": false,
+      "opened_t": 1784041200000,
+      "checked_t": 1784041200000
+    }
+  },
+  "SKHX": {
+    "last_verdict": null,
+    "last_alert_candle": 0,
+    "trade": null
+  }
+}
