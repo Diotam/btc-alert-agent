@@ -10,7 +10,7 @@
       "tp2": 65361.9991469237,
       "tp1_hit": true,
       "opened_t": 1784041200000,
-      "checked_t": 1784068200000
+      "checked_t": 1784073600000
     }
   },
   "TSLA": {
@@ -24,7 +24,7 @@
       "tp2": 390.1189471027108,
       "tp1_hit": false,
       "opened_t": 1784048400000,
-      "checked_t": 1784068200000
+      "checked_t": 1784073600000
     }
   },
   "SP500": {
@@ -33,8 +33,17 @@
     "trade": null
   },
   "SKHX": {
-    "last_verdict": "WAIT",
-    "last_alert_candle": 1784059200000,
-    "trade": null
+    "last_verdict": "LONG",
+    "last_alert_candle": 1784073600000,
+    "trade": {
+      "verdict": "LONG",
+      "entry": 1438.0,
+      "stop": 1403.892391645403,
+      "tp1": 1483.4768111394626,
+      "tp2": 1506.215216709194,
+      "tp1_hit": false,
+      "opened_t": 1784073600000,
+      "checked_t": 1784073600000
+    }
   }
 }
