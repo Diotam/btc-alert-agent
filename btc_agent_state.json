@@ -15,8 +15,17 @@
     "trade": null
   },
   "SKHX": {
-    "last_verdict": "LONG",
-    "last_alert_candle": 1784073600000,
-    "trade": null
+    "last_verdict": "SHORT",
+    "last_alert_candle": 1784124000000,
+    "trade": {
+      "verdict": "SHORT",
+      "entry": 1317.8,
+      "stop": 1351.2662793868476,
+      "tp1": 1273.1782941508698,
+      "tp2": 1250.8674412263047,
+      "tp1_hit": false,
+      "opened_t": 1784124000000,
+      "checked_t": 1784124000000
+    }
   }
 }
