@@ -2,30 +2,12 @@
   "BTC": {
     "last_verdict": "LONG",
     "last_alert_candle": 1784041200000,
-    "trade": {
-      "verdict": "LONG",
-      "entry": 64492.0,
-      "stop": 64492.0,
-      "tp1": 65071.999431282464,
-      "tp2": 65361.9991469237,
-      "tp1_hit": true,
-      "opened_t": 1784041200000,
-      "checked_t": 1784073600000
-    }
+    "trade": null
   },
   "TSLA": {
-    "last_verdict": "SHORT",
+    "last_verdict": "WAIT",
     "last_alert_candle": 1784048400000,
-    "trade": {
-      "verdict": "SHORT",
-      "entry": 395.75,
-      "stop": 398.5655264486446,
-      "tp1": 391.99596473514055,
-      "tp2": 390.1189471027108,
-      "tp1_hit": false,
-      "opened_t": 1784048400000,
-      "checked_t": 1784073600000
-    }
+    "trade": null
   },
   "SP500": {
     "last_verdict": "LONG",
@@ -35,15 +17,6 @@
   "SKHX": {
     "last_verdict": "LONG",
     "last_alert_candle": 1784073600000,
-    "trade": {
-      "verdict": "LONG",
-      "entry": 1438.0,
-      "stop": 1403.892391645403,
-      "tp1": 1483.4768111394626,
-      "tp2": 1506.215216709194,
-      "tp1_hit": false,
-      "opened_t": 1784073600000,
-      "checked_t": 1784073600000
-    }
+    "trade": null
   }
 }
