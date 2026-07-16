@@ -78,6 +78,10 @@ ASSETS = [                         # used when DISCOVER_ALL = False / discovery 
 # --- Strategy dials -------------------------------------------------------
 ENABLE_SHORTS = True         # mirror the whole playbook for shorts
 SETUP_MIN = 5                # of the 8 setup conditions
+RSI_EXTENDED = 72            # RSI beyond this never triggers an immediate long
+                             # (mirrored at 100-72=28 for shorts): the setup is
+                             # labeled EXTENDED and must retest before arming
+EXTENDED_TTL_MIN = 720       # give an extended market up to 12h to retest
 SETUP_REFRESH_MIN = 25       # re-check bias+setup roughly every 30m candle
 ARM_TTL_MIN = 360            # an armed setup expires after 6h without a trigger
 R_TP1, R_TP2 = 2.0, 3.0      # targets in R multiples of entry-to-stop risk
@@ -566,8 +570,64 @@ def setup_30m(direction, c30):
         counter = min(c["l"] for c in c30[i - 4:i + 1])
 
     ctx = {"structural": pb_ext, "counter": counter, "atr30": a[i],
-           "est_stop": est_stop, "px": px}
+           "est_stop": est_stop, "px": px, "rsi": r[i]}
     return passed, checks, ctx
+
+
+# --------------------- extended-market retest gate --------------------------
+def is_extended(direction, rsi_val):
+    if rsi_val is None:
+        return False
+    return rsi_val > RSI_EXTENDED if direction == "LONG" \
+        else rsi_val < (100 - RSI_EXTENDED)
+
+
+def retest_check(direction, c30):
+    """After an EXTENDED reading: has price retested structure with
+    contracting volume and returning confirmation? All three must hold."""
+    long = direction == "LONG"
+    closes = [c["c"] for c in c30]
+    vols = [c["v"] for c in c30]
+    e20, e50 = ema(closes, 20), ema(closes, 50)
+    r = rsi(closes)
+    a = atr(c30)
+    w = vwap(c30)
+    vol_avg = sma(vols, 20)
+    i = len(c30) - 2
+    if i < 200 or a[i] is None:
+        return False, []
+    px = closes[i]
+    checks = []
+
+    # 1 - price retested structure (EMA20 / VWAP / pivot level zone)
+    highs, lows = find_pivots(c30, i)
+    levels = build_levels([p for _, p in highs] + [p for _, p in lows],
+                          LEVEL_TOL_ATR * a[i])
+    dists = [abs(px - e20[i])]
+    if w[i]:
+        dists.append(abs(px - w[i]))
+    if levels:
+        dists.append(min(abs(px - lv) for lv, _ in levels))
+    c1 = min(dists) <= PULLBACK_ZONE_ATR * a[i]
+    checks.append(("Price retested structure (EMA20/VWAP/level)", c1))
+
+    # 2 - volume contracted on the retest
+    c2 = (vol_avg[i] is not None and vol_avg[i] > 0
+          and sum(vols[i - 2:i + 1]) / 3 < vol_avg[i])
+    checks.append(("Volume contracting", c2))
+
+    # 3 - confirmation returned: RSI cooled + with-trend close + trend intact
+    zone = (45, 68) if long else (32, 55)
+    zone_ok = r[i] is not None and zone[0] <= r[i] <= zone[1]
+    candle_ok = c30[i]["c"] > c30[i]["o"] if long else c30[i]["c"] < c30[i]["o"]
+    trend_ok = e20[i] > e50[i] if long else e20[i] < e50[i]
+    c3 = zone_ok and candle_ok and trend_ok
+    checks.append((f"Confirmation returned (RSI "
+                   f"{r[i]:.1f}, {'bullish' if long else 'bearish'} close, "
+                   f"trend intact)" if r[i] is not None
+                   else "Confirmation returned", c3))
+
+    return all(ok for _, ok in checks), checks
 
 
 # ------------------------------ 5m trigger ----------------------------------
@@ -679,6 +739,41 @@ def entry_message(asset, direction, trigger_name, plan, bias_checks,
     return "\n".join(lines)
 
 
+def extended_message(asset, direction, rsi_val, px, t):
+    sym = asset["symbol"]
+    lines = [
+        f"\U0001F536 <b>EXTENDED \u00b7 {esc(sym)}</b> \u2014 RSI <code>{rsi_val:.1f}</code>",
+        f"<i>{esc(asset['label'])} \u00b7 price <code>${fmt_px(px)}</code> \u00b7 {esc(fmt_ts(t))}</i>",
+        "",
+        f"HTF bias and trend favor a {direction}, but momentum is too hot "
+        f"(RSI &gt; {RSI_EXTENDED if direction == 'LONG' else 100 - RSI_EXTENDED}). "
+        "Not chasing.",
+        "",
+        "\u23F3 <b>Waiting for retest:</b> price back into structure, "
+        "volume contraction, and confirmation returning. "
+        "You'll get a second alert if it sets up.",
+    ]
+    return "\n".join(lines)
+
+
+def retest_armed_message(asset, direction, checks, px, structural, counter, t):
+    sym = asset["symbol"]
+    icon = "\U0001F7E2" if direction == "LONG" else "\U0001F534"
+    lines = [
+        f"\u2705 <b>RETEST CONFIRMED \u00b7 {esc(sym)}</b> \u2014 armed {direction}",
+        f"<i>{esc(asset['label'])} \u00b7 price <code>${fmt_px(px)}</code> \u00b7 {esc(fmt_ts(t))}</i>",
+        "",
+    ]
+    lines += [f"\u2705 {esc(d)}" for d, _ in checks]
+    lines += [
+        "",
+        f"{icon} Structure <code>${fmt_px(structural)}</code> \u00b7 "
+        f"breakout line <code>${fmt_px(counter)}</code>",
+        "Hunting the 5m trigger \u2014 entry alert follows if it fires.",
+    ]
+    return "\n".join(lines)
+
+
 def lifecycle_message(asset, kind, trade, exit_px, event_t, note):
     sym = asset["symbol"]
     v = trade["verdict"]
@@ -719,7 +814,8 @@ def save_state(state):
 
 
 def blank_asset_state():
-    return {"phase": "IDLE", "last_setup_check": 0, "armed": None, "trade": None}
+    return {"phase": "IDLE", "last_setup_check": 0, "armed": None,
+            "trade": None, "extended": None}
 
 
 # ------------------------------- agent ------------------------------------
@@ -842,9 +938,9 @@ def check_asset(asset, state):
         state[sym] = ast
         return changed
 
-    # ---- IDLE: refresh bias + setup roughly every 30m ----------------------
+    # ---- EXTENDED / IDLE both refresh on the ~30m cadence -------------------
     if now_ms - ast["last_setup_check"] < SETUP_REFRESH_MIN * 60_000:
-        RUN_STATUS.append(f"{sym} IDLE")
+        RUN_STATUS.append(f"{sym} {ast['phase']}")
         state[sym] = ast
         return changed
 
@@ -857,14 +953,7 @@ def check_asset(asset, state):
         state[sym] = ast
         return changed
 
-    directions = ["LONG"] + (["SHORT"] if ENABLE_SHORTS else [])
-    for direction in directions:
-        bias_ok, bias_checks = htf_bias(direction, c4h, c30)
-        if not bias_ok:
-            continue
-        count, setup_checks, ctx = setup_30m(direction, c30)
-        if ctx is None or count < SETUP_MIN:
-            continue
+    def arm(direction, ctx, count, bias_checks, setup_checks):
         ast["armed"] = {"direction": direction,
                         "structural": ctx["structural"],
                         "counter": ctx["counter"],
@@ -874,9 +963,61 @@ def check_asset(asset, state):
                         "bias_checks": bias_checks,
                         "setup_checks": setup_checks}
         ast["phase"] = "ARMED"
-        log(f"{sym}: ARMED {direction} - bias 4/4, setup {count}/8, "
+        log(f"{sym}: ARMED {direction} - setup {count}/8, "
             f"structure ${fmt_px(ctx['structural'])}, "
             f"breakout line ${fmt_px(ctx['counter'])}")
+
+    # ---- EXTENDED: wait for the retest before arming ------------------------
+    if ast["extended"]:
+        ext = ast["extended"]
+        direction = ext["direction"]
+        bias_ok, bias_checks = htf_bias(direction, c4h, c30)
+        if now_ms > ext["expires_t"] or not bias_ok:
+            reason = "expired" if now_ms > ext["expires_t"] else "bias broke"
+            log(f"{sym}: EXTENDED {direction} {reason} - back to IDLE")
+            ast["extended"], ast["phase"] = None, "IDLE"
+        else:
+            ok, retest_checks = retest_check(direction, c30)
+            count, setup_checks, ctx = setup_30m(direction, c30)
+            if ok and ctx is not None and not is_extended(direction, ctx["rsi"]):
+                send_telegram(retest_armed_message(
+                    asset, direction, retest_checks, ctx["px"],
+                    ctx["structural"], ctx["counter"], c30[-2]["t"]))
+                log(f"{sym}: RETEST CONFIRMED -> telegram sent, arming {direction}")
+                RUN_ALERTS.append(f"{sym} retest confirmed - armed {direction}")
+                ast["extended"] = None
+                arm(direction, ctx, count, bias_checks, setup_checks)
+        RUN_STATUS.append(f"{sym} {ast['phase']}"
+                          + (f" ({direction})" if ast["phase"] != "IDLE" else ""))
+        state[sym] = ast
+        return True
+
+    # ---- IDLE: fresh bias + setup evaluation --------------------------------
+    directions = ["LONG"] + (["SHORT"] if ENABLE_SHORTS else [])
+    for direction in directions:
+        bias_ok, bias_checks = htf_bias(direction, c4h, c30)
+        if not bias_ok:
+            continue
+        count, setup_checks, ctx = setup_30m(direction, c30)
+        if ctx is None:
+            continue
+        # trend-aligned but momentum too hot: label EXTENDED, alert once,
+        # and require a retest before any arming
+        trend_ok = setup_checks[0][1] and setup_checks[1][1]
+        if trend_ok and is_extended(direction, ctx["rsi"]):
+            ast["extended"] = {"direction": direction, "since": now_ms,
+                               "expires_t": now_ms + EXTENDED_TTL_MIN * 60_000,
+                               "rsi": ctx["rsi"]}
+            ast["phase"] = "EXTENDED"
+            send_telegram(extended_message(asset, direction, ctx["rsi"],
+                                           ctx["px"], c30[-2]["t"]))
+            log(f"{sym}: EXTENDED {direction} (RSI {ctx['rsi']:.1f}) "
+                "-> telegram sent, waiting for retest")
+            RUN_ALERTS.append(f"{sym} EXTENDED (RSI {ctx['rsi']:.0f}) - wait for retest")
+            break
+        if count < SETUP_MIN:
+            continue
+        arm(direction, ctx, count, bias_checks, setup_checks)
         break
 
     RUN_STATUS.append(f"{sym} {ast['phase']}"
