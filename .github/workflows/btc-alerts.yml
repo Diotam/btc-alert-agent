@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       test_email:
-        description: "Send a test email instead of a market check"
+        description: "Send a test Telegram message instead of a market check"
         type: boolean
         default: false
 
@@ -26,9 +26,8 @@ jobs:
 
       - name: Run signal check
         env:
-          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
-          EMAIL_APP_PASSWORD: ${{ secrets.EMAIL_APP_PASSWORD }}
-          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           if [ "${{ inputs.test_email }}" = "true" ]; then
             python3 btc_alert_agent.py --test
