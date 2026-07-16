@@ -1,1 +1,324 @@
-{}
+{
+  "BTC": {
+    "phase": "IDLE",
+    "last_setup_check": 1784241708955,
+    "watch": null,
+    "trade": null,
+    "extended": null
+  },
+  "ETH": {
+    "phase": "IDLE",
+    "last_setup_check": 1784241709588,
+    "watch": null,
+    "trade": null,
+    "extended": null
+  },
+  "xyz:xyz:SKHX": {
+    "phase": "IDLE",
+    "last_setup_check": 1784241710195,
+    "watch": null,
+    "trade": null,
+    "extended": null
+  },
+  "xyz:xyz:XYZ100": {
+    "phase": "IDLE",
+    "last_setup_check": 1784241710700,
+    "watch": null,
+    "trade": null,
+    "extended": null
+  },
+  "HYPE": {
+    "phase": "IDLE",
+    "last_setup_check": 1784241711087,
+    "watch": null,
+    "trade": null,
+    "extended": null
+  },
+  "xyz:xyz:SNDK": {
+    "phase": "IDLE",
+    "last_setup_check": 1784241711546,
+    "watch": null,
+    "trade": null,
+    "extended": null
+  },
+  "xyz:xyz:SKHY": {
+    "phase": "IDLE",
+    "last_setup_check": 1784241711928,
+    "watch": null,
+    "trade": null,
+    "extended": null
+  },
+  "xyz:xyz:MU": {
+    "phase": "IDLE",
+    "last_setup_check": 1784241712306,
+    "watch": null,
+    "trade": null,
+    "extended": null
+  },
+  "xyz:xyz:DRAM": {
+    "phase": "IDLE",
+    "last_setup_check": 1784241712696,
+    "watch": null,
+    "trade": null,
+    "extended": null
+  },
+  "xyz:xyz:CL": {
+    "phase": "IDLE",
+    "last_setup_check": 1784241713084,
+    "watch": null,
+    "trade": null,
+    "extended": null
+  },
+  "xyz:xyz:SPCX": {
+    "phase": "IDLE",
+    "last_setup_check": 1784241713464,
+    "watch": null,
+    "trade": null,
+    "extended": null
+  },
+  "xyz:xyz:SP500": {
+    "phase": "IDLE",
+    "last_setup_check": 1784241713845,
+    "watch": null,
+    "trade": null,
+    "extended": null
+  },
+  "xyz:xyz:SILVER": {
+    "phase": "IDLE",
+    "last_setup_check": 1784241714245,
+    "watch": null,
+    "trade": null,
+    "extended": null
+  },
+  "SOL": {
+    "phase": "IDLE",
+    "last_setup_check": 1784241714627,
+    "watch": null,
+    "trade": null,
+    "extended": null
+  },
+  "xyz:xyz:BRENTOIL": {
+    "phase": "IDLE",
+    "last_setup_check": 1784241715228,
+    "watch": null,
+    "trade": null,
+    "extended": null
+  },
+  "ZEC": {
+    "phase": "IDLE",
+    "last_setup_check": 1784241715607,
+    "watch": null,
+    "trade": null,
+    "extended": null
+  },
+  "xyz:xyz:NVDA": {
+    "phase": "IDLE",
+    "last_setup_check": 1784241716319,
+    "watch": null,
+    "trade": null,
+    "extended": null
+  },
+  "xyz:xyz:SMSN": {
+    "phase": "IDLE",
+    "last_setup_check": 1784241716765,
+    "watch": null,
+    "trade": null,
+    "extended": null
+  },
+  "xyz:xyz:EWY": {
+    "phase": "IDLE",
+    "last_setup_check": 1784241717154,
+    "watch": null,
+    "trade": null,
+    "extended": null
+  },
+  "CASHCAT": {
+    "phase": "IDLE",
+    "last_setup_check": 1784241717546,
+    "watch": null,
+    "trade": null,
+    "extended": null
+  },
+  "xyz:xyz:CRCL": {
+    "phase": "IDLE",
+    "last_setup_check": 1784241717930,
+    "watch": null,
+    "trade": null,
+    "extended": null
+  },
+  "xyz:xyz:INTC": {
+    "phase": "IDLE",
+    "last_setup_check": 1784241718323,
+    "watch": null,
+    "trade": null,
+    "extended": null
+  },
+  "xyz:xyz:GOLD": {
+    "phase": "IDLE",
+    "last_setup_check": 1784241718806,
+    "watch": null,
+    "trade": null,
+    "extended": null
+  },
+  "xyz:xyz:GOOGL": {
+    "phase": "IDLE",
+    "last_setup_check": 1784241719191,
+    "watch": null,
+    "trade": null,
+    "extended": null
+  },
+  "xyz:xyz:META": {
+    "phase": "IDLE",
+    "last_setup_check": 1784241719573,
+    "watch": null,
+    "trade": null,
+    "extended": null
+  },
+  "PUMP": {
+    "phase": "IDLE",
+    "last_setup_check": 1784241719953,
+    "watch": null,
+    "trade": null,
+    "extended": null
+  },
+  "ONDO": {
+    "phase": "IDLE",
+    "last_setup_check": 1784241720450,
+    "watch": null,
+    "trade": null,
+    "extended": null
+  },
+  "xyz:xyz:AAPL": {
+    "phase": "IDLE",
+    "last_setup_check": 1784241720839,
+    "watch": null,
+    "trade": null,
+    "extended": null
+  },
+  "NEAR": {
+    "phase": "IDLE",
+    "last_setup_check": 1784241721425,
+    "watch": null,
+    "trade": null,
+    "extended": null
+  },
+  "xyz:xyz:MRVL": {
+    "phase": "IDLE",
+    "last_setup_check": 1784241722032,
+    "watch": null,
+    "trade": null,
+    "extended": null
+  },
+  "LIT": {
+    "phase": "IDLE",
+    "last_setup_check": 1784241722429,
+    "watch": null,
+    "trade": null,
+    "extended": null
+  },
+  "xyz:xyz:MSFT": {
+    "phase": "IDLE",
+    "last_setup_check": 1784241722826,
+    "watch": null,
+    "trade": null,
+    "extended": null
+  },
+  "xyz:xyz:NBIS": {
+    "phase": "IDLE",
+    "last_setup_check": 1784241723203,
+    "watch": null,
+    "trade": null,
+    "extended": null
+  },
+  "xyz:xyz:AMD": {
+    "phase": "IDLE",
+    "last_setup_check": 1784241723660,
+    "watch": null,
+    "trade": null,
+    "extended": null
+  },
+  "XRP": {
+    "phase": "IDLE",
+    "last_setup_check": 1784241724068,
+    "watch": null,
+    "trade": null,
+    "extended": null
+  },
+  "xyz:xyz:CBRS": {
+    "phase": "IDLE",
+    "last_setup_check": 1784241724672,
+    "watch": null,
+    "trade": null,
+    "extended": null
+  },
+  "xyz:xyz:TSLA": {
+    "phase": "IDLE",
+    "last_setup_check": 1784241725057,
+    "watch": null,
+    "trade": null,
+    "extended": null
+  },
+  "xyz:xyz:NFLX": {
+    "phase": "IDLE",
+    "last_setup_check": 1784241725442,
+    "watch": null,
+    "trade": null,
+    "extended": null
+  },
+  "xyz:xyz:AMZN": {
+    "phase": "IDLE",
+    "last_setup_check": 1784241725866,
+    "watch": null,
+    "trade": null,
+    "extended": null
+  },
+  "xyz:xyz:CXMT": {
+    "phase": "IDLE",
+    "last_setup_check": 1784241726418,
+    "watch": null,
+    "trade": null,
+    "extended": null
+  },
+  "xyz:xyz:IBM": {
+    "phase": "IDLE",
+    "last_setup_check": 1784241726800,
+    "watch": null,
+    "trade": null,
+    "extended": null
+  },
+  "FARTCOIN": {
+    "phase": "IDLE",
+    "last_setup_check": 1784241727182,
+    "watch": null,
+    "trade": null,
+    "extended": null
+  },
+  "xyz:xyz:NATGAS": {
+    "phase": "IDLE",
+    "last_setup_check": 1784241727889,
+    "watch": null,
+    "trade": null,
+    "extended": null
+  },
+  "xyz:xyz:ORCL": {
+    "phase": "IDLE",
+    "last_setup_check": 1784241728282,
+    "watch": null,
+    "trade": null,
+    "extended": null
+  },
+  "xyz:xyz:TSM": {
+    "phase": "IDLE",
+    "last_setup_check": 1784241728734,
+    "watch": null,
+    "trade": null,
+    "extended": null
+  },
+  "XPL": {
+    "phase": "IDLE",
+    "last_setup_check": 1784241729114,
+    "watch": null,
+    "trade": null,
+    "extended": null
+  }
+}
