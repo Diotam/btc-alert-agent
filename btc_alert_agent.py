@@ -34,8 +34,9 @@ Phases per asset: IDLE -> ARMED -> IN_TRADE -> IDLE.
 Run the workflow every 5 minutes; bias+setup re-checks every ~30
 minutes, armed assets and open trades are watched on 5m candles.
 
-Config from environment variables (GitHub repo Secrets):
-  EMAIL_FROM / EMAIL_APP_PASSWORD / EMAIL_TO
+Alerts are delivered to Telegram. Config from environment variables
+(GitHub repo Secrets):
+  TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID
 
 Modes:
   python3 btc_alert_agent.py           single scan (workflow default)
@@ -45,21 +46,16 @@ Modes:
 
 import json
 import os
-import smtplib
-import ssl
 import sys
 import time
 import urllib.request
 from datetime import datetime, timezone
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 # ============================= CONFIG ======================================
-EMAIL_FROM = os.environ.get("EMAIL_FROM", "")
-EMAIL_APP_PASSWORD = os.environ.get("EMAIL_APP_PASSWORD", "")
-EMAIL_TO = os.environ.get("EMAIL_TO", "")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 # --- Asset universe -------------------------------------------------------
 DISCOVER_ALL = True
@@ -637,160 +633,76 @@ def trigger_5m(direction, c5, armed):
     return None
 
 
-# ------------------------------- email ------------------------------------
-STYLES = {
-    "LONG":  {"accent": "#0FB98C", "soft": "#E6F7F1", "mark": "&#9650;"},
-    "SHORT": {"accent": "#E8524A", "soft": "#FCEAE8", "mark": "&#9660;"},
-    "TP1":   {"accent": "#0FB98C", "soft": "#E6F7F1", "mark": "&#10003;"},
-    "TP2":   {"accent": "#0FB98C", "soft": "#E6F7F1", "mark": "&#10003;&#10003;"},
-    "STOP":  {"accent": "#E8524A", "soft": "#FCEAE8", "mark": "&#10007;"},
-}
-
-
-def send_email(subject, body, html=None):
-    if html:
-        msg = MIMEMultipart("alternative")
-        msg.attach(MIMEText(body, "plain"))
-        msg.attach(MIMEText(html, "html"))
-    else:
-        msg = MIMEText(body, "plain")
-    msg["Subject"] = subject
-    msg["From"] = EMAIL_FROM
-    msg["To"] = EMAIL_TO
-    ctx = ssl.create_default_context()
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=ctx) as server:
-        server.login(EMAIL_FROM, EMAIL_APP_PASSWORD.replace(" ", ""))
-        server.sendmail(EMAIL_FROM, [EMAIL_TO], msg.as_string())
-
-
-def _html_shell(kind, headline_small, headline_big, headline_sub, rows_html,
-                footer_text, extra_section=""):
-    s = STYLES[kind]
-    return f"""\
-<!DOCTYPE html>
-<html>
-<body style="margin:0;padding:0;background:#F2F5F7;">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F2F5F7;padding:24px 12px;">
-<tr><td align="center">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0"
-       style="max-width:480px;background:#FFFFFF;border-radius:12px;overflow:hidden;
-              font-family:-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;">
-  <tr><td style="background:{s['accent']};padding:22px 24px;">
-    <div style="font-size:11px;letter-spacing:2px;color:rgba(255,255,255,.75);
-                text-transform:uppercase;">{headline_small}</div>
-    <div style="font-size:30px;font-weight:800;color:#FFFFFF;line-height:1.15;">
-      {s['mark']}&nbsp;{headline_big}</div>
-    <div style="font-size:12px;color:rgba(255,255,255,.85);margin-top:4px;">{headline_sub}</div>
-  </td></tr>
-  <tr><td style="padding:20px 24px 8px;">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0">{rows_html}</table>
-  </td></tr>
-  {extra_section}
-  <tr><td style="padding:16px 24px 22px;">
-    <div style="background:{s['soft']};border-radius:8px;padding:12px 14px;
-                font-size:11px;line-height:1.6;color:#5B6C7A;">{footer_text}</div>
-  </td></tr>
-</table>
-</td></tr>
-</table>
-</body>
-</html>"""
-
-
-def _row(label, value, color="#1A2530", bold=False):
-    w = "700" if bold else "500"
-    return (f'<tr><td style="padding:9px 0;border-bottom:1px solid #EDF1F4;'
-            f'font-size:12px;color:#7A8B99;">{label}</td>'
-            f'<td style="padding:9px 0;border-bottom:1px solid #EDF1F4;'
-            f'font-size:14px;color:{color};font-weight:{w};text-align:right;'
-            f'font-family:Menlo,Consolas,monospace;">{value}</td></tr>')
-
-
-def _check_rows(title, checks):
-    rows = "".join(
-        f'<tr><td style="padding:6px 0;border-bottom:1px solid #EDF1F4;'
-        f'font-size:12px;color:{"#0FB98C" if ok else "#C4CED6"};width:18px;">'
-        f'{"&#10003;" if ok else "&#10007;"}</td>'
-        f'<td style="padding:6px 0;border-bottom:1px solid #EDF1F4;font-size:12.5px;'
-        f'color:{"#1A2530" if ok else "#9AAAB6"};">{desc}</td></tr>'
-        for desc, ok in checks)
-    return (f'<tr><td style="padding:12px 24px 4px;">'
-            f'<div style="font-size:11px;letter-spacing:2px;color:#7A8B99;'
-            f'text-transform:uppercase;margin-bottom:4px;">{title}</div>'
-            f'<table role="presentation" width="100%" cellpadding="0" '
-            f'cellspacing="0">{rows}</table></td></tr>')
-
-
-DISCLAIMER = ("Automated technical signal for research &mdash; not financial advice. "
-              "Any single signal can fail; size accordingly.")
-DISCLAIMER_TXT = ("Automated technical signal for research - not financial advice. "
+# ----------------------------- telegram ------------------------------------
+DISCLAIMER_TXT = ("Research signal - not financial advice. "
                   "Any single signal can fail; size accordingly.")
 
 
-def entry_email(asset, direction, trigger_name, plan, bias_checks, setup_checks,
-                setup_count, source, t):
+def esc(s):
+    """Escape Telegram-HTML special characters in dynamic text."""
+    return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+
+def send_telegram(text):
+    resp = http_json(
+        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+        {"chat_id": TELEGRAM_CHAT_ID, "text": text,
+         "parse_mode": "HTML", "disable_web_page_preview": True})
+    if not resp.get("ok"):
+        raise RuntimeError(f"Telegram send failed: {resp.get('description')}")
+
+
+def entry_message(asset, direction, trigger_name, plan, bias_checks,
+                  setup_checks, setup_count, source, t):
     sym = asset["symbol"]
-    ts = fmt_ts(t)
-    subject = (f"[{direction}] {sym} entry @ ${fmt_px(plan['entry'])} "
-               f"- 5m trigger")
-    rows = (_row("Trigger", trigger_name, bold=True)
-            + _row("Entry", "$" + fmt_px(plan["entry"]), bold=True)
-            + _row("Stop &middot; structure", "$" + fmt_px(plan["stop"]), "#E8524A", True)
-            + _row(f"TP1 &middot; {R_TP1:.0f}R", "$" + fmt_px(plan["tp1"]), "#0FB98C", True)
-            + _row(f"TP2 &middot; {R_TP2:.0f}R", "$" + fmt_px(plan["tp2"]), "#0FB98C", True)
-            + _row("Risk (1R)", "$" + fmt_px(plan["r"])))
-    extra = (_check_rows("Higher-timeframe bias (4/4)", bias_checks)
-             + _check_rows(f"30m setup ({setup_count}/8)", setup_checks))
-    html = _html_shell(direction,
-                       f"{asset['label']} &middot; 4H/1H/30m/5m confluence",
-                       f"{direction} &middot; ${fmt_px(plan['entry'])}",
-                       f"{trigger_name} &nbsp;&middot;&nbsp; {ts}",
-                       rows, f"Source: {source}. {DISCLAIMER}", extra)
-    body = "\n".join([
-        f"{sym} {direction} entry - multi-timeframe confluence",
-        f"Trigger: {trigger_name}", f"Time: {ts}", f"Source: {source}", "",
-        "TRADE PLAN (structure stop, R-based targets)",
-        f"  Entry : ${fmt_px(plan['entry'])}",
-        f"  Stop  : ${fmt_px(plan['stop'])}",
-        f"  TP1   : ${fmt_px(plan['tp1'])}  ({R_TP1:.0f}R)",
-        f"  TP2   : ${fmt_px(plan['tp2'])}  ({R_TP2:.0f}R)", "",
-        "HTF BIAS (all passed)"] +
-        [f"  [x] {d}" for d, _ in bias_checks] +
-        ["", f"30M SETUP ({setup_count}/8)"] +
-        [f"  [{'x' if ok else ' '}] {d}" for d, ok in setup_checks] +
-        ["", DISCLAIMER_TXT])
-    return subject, body, html
+    icon = "\U0001F7E2" if direction == "LONG" else "\U0001F534"
+    lines = [
+        f"{icon} <b>{direction} \u00b7 {esc(sym)}</b> \u2014 <code>${fmt_px(plan['entry'])}</code>",
+        f"<i>{esc(asset['label'])} \u00b7 4H/1H/30m/5m confluence</i>",
+        "",
+        f"\u26A1 <b>Trigger:</b> {esc(trigger_name)}",
+        f"\U0001F552 {esc(fmt_ts(t))}",
+        "",
+        "\U0001F4CB <b>Trade plan</b>",
+        f"<code>Entry  ${fmt_px(plan['entry'])}</code>",
+        f"<code>Stop   ${fmt_px(plan['stop'])}</code>  (structure)",
+        f"<code>TP1    ${fmt_px(plan['tp1'])}</code>  ({R_TP1:.0f}R)",
+        f"<code>TP2    ${fmt_px(plan['tp2'])}</code>  ({R_TP2:.0f}R)",
+        f"<code>Risk   ${fmt_px(plan['r'])}</code>  (1R)",
+        "",
+        "\u2705 <b>HTF bias 4/4</b>",
+    ]
+    lines += [f"\u2705 {esc(d)}" for d, _ in bias_checks]
+    lines += ["", f"\U0001F4CA <b>30m setup {setup_count}/8</b>"]
+    lines += [f"{'\u2705' if ok else '\u25AB'} {esc(d)}" for d, ok in setup_checks]
+    lines += ["", f"<i>Source: {esc(source)}. \u26A0 {DISCLAIMER_TXT}</i>"]
+    return "\n".join(lines)
 
 
-def lifecycle_email(asset, kind, trade, exit_px, event_t, note):
+def lifecycle_message(asset, kind, trade, exit_px, event_t, note):
     sym = asset["symbol"]
     v = trade["verdict"]
     pl = pnl_pct(trade, exit_px)
     pl_s = f"{pl:+.2f}%"
-    ts = fmt_ts(event_t)
-    titles = {
-        "TP1":  (f"[TP1 HIT] {sym} {v} {pl_s}", "TP1 HIT", "First target (2R) reached"),
-        "TP2":  (f"[TP2 HIT] {sym} {v} {pl_s} - trade complete", "TP2 HIT",
-                 "Final target (3R) reached &mdash; trade complete"),
-        "STOP": (f"[STOPPED] {sym} {v} {pl_s}", "STOPPED OUT",
-                 "Structure stop hit &mdash; trade closed"),
-    }
-    subject, big, sub = titles[kind]
-    pl_color = "#0FB98C" if pl >= 0 else "#E8524A"
-    rows = (_row("Direction", v)
-            + _row("Entry", "$" + fmt_px(trade["entry"]))
-            + _row("Exit level", "$" + fmt_px(exit_px), bold=True)
-            + _row("P&amp;L (approx)", pl_s, pl_color, True)
-            + _row("Opened", fmt_ts(trade["opened_t"], "%b %d %I:%M %p %Z")))
-    html = _html_shell(kind, f"{asset['label']} &middot; trade update",
-                       f"{big} &middot; {sym}", f"{sub} &nbsp;&middot;&nbsp; {ts}",
-                       rows, f"{note} {DISCLAIMER}")
-    body = "\n".join([
-        f"{sym} {v} trade update: {big}", f"Time: {ts}",
-        f"Entry: ${fmt_px(trade['entry'])}",
-        f"Exit level: ${fmt_px(exit_px)}",
-        f"P&L (approx): {pl_s}", "", note, "", DISCLAIMER_TXT])
-    return subject, body, html
+    meta = {
+        "TP1":  ("\u2705", "TP1 HIT", "First target (2R) reached"),
+        "TP2":  ("\U0001F3C1", "TP2 HIT - trade complete", "Final target (3R) reached"),
+        "STOP": ("\u274C", "STOPPED OUT", "Structure stop hit"),
+    }[kind]
+    icon, big, sub = meta
+    lines = [
+        f"{icon} <b>{big} \u00b7 {esc(sym)} {v}</b>  <code>{pl_s}</code>",
+        f"<i>{sub}</i>",
+        "",
+        f"<code>Entry  ${fmt_px(trade['entry'])}</code>",
+        f"<code>Exit   ${fmt_px(exit_px)}</code>",
+        f"Opened {esc(fmt_ts(trade['opened_t'], '%b %d %I:%M %p %Z'))}",
+        f"\U0001F552 {esc(fmt_ts(event_t))}",
+        "",
+        f"{esc(note)}",
+        f"<i>\u26A0 {DISCLAIMER_TXT}</i>",
+    ]
+    return "\n".join(lines)
 
 
 # ------------------------------- state ------------------------------------
@@ -828,19 +740,17 @@ def process_open_trade(asset, trade, candles, last_closed_t):
             note = ("Stop moved to breakeven after TP1, so this exit is at entry."
                     if trade["tp1_hit"] else
                     "Structure stop was hit. Wait for the next armed setup.")
-            subject, body, html = lifecycle_email(asset, "STOP", trade,
-                                                  trade["stop"], c["t"], note)
-            send_email(subject, body, html)
-            log(f"{sym}: STOPPED OUT at ${fmt_px(trade['stop'])} -> email sent")
+            send_telegram(lifecycle_message(asset, "STOP", trade,
+                                             trade["stop"], c["t"], note))
+            log(f"{sym}: STOPPED OUT at ${fmt_px(trade['stop'])} -> telegram sent")
             RUN_ALERTS.append(f"{sym} STOPPED OUT ({pnl_pct(trade, trade['stop']):+.2f}%)")
             return None, True
 
         if hit_tp2:
-            subject, body, html = lifecycle_email(
+            send_telegram(lifecycle_message(
                 asset, "TP2", trade, trade["tp2"], c["t"],
-                "Full 3R target reached. Trade closed.")
-            send_email(subject, body, html)
-            log(f"{sym}: TP2 HIT at ${fmt_px(trade['tp2'])} -> email sent")
+                "Full 3R target reached. Trade closed."))
+            log(f"{sym}: TP2 HIT at ${fmt_px(trade['tp2'])} -> telegram sent")
             RUN_ALERTS.append(f"{sym} TP2 HIT ({pnl_pct(trade, trade['tp2']):+.2f}%)")
             return None, True
 
@@ -850,10 +760,9 @@ def process_open_trade(asset, trade, candles, last_closed_t):
             if BREAKEVEN_AFTER_TP1:
                 trade["stop"] = trade["entry"]
                 note += " Stop moved to breakeven - remaining position is risk-free."
-            subject, body, html = lifecycle_email(asset, "TP1", trade,
-                                                  trade["tp1"], c["t"], note)
-            send_email(subject, body, html)
-            log(f"{sym}: TP1 HIT at ${fmt_px(trade['tp1'])} -> email sent")
+            send_telegram(lifecycle_message(asset, "TP1", trade,
+                                             trade["tp1"], c["t"], note))
+            log(f"{sym}: TP1 HIT at ${fmt_px(trade['tp1'])} -> telegram sent")
             RUN_ALERTS.append(f"{sym} TP1 HIT ({pnl_pct(trade, trade['tp1']):+.2f}%)")
             changed = True
 
@@ -910,12 +819,12 @@ def check_asset(asset, state):
                         plan = {"entry": entry, "stop": stop, "r": r,
                                 "tp1": entry + sign * R_TP1 * r,
                                 "tp2": entry + sign * R_TP2 * r}
-                        subject, body, html = entry_email(
+                        send_telegram(entry_message(
                             asset, direction, name, plan,
                             armed["bias_checks"], armed["setup_checks"],
-                            armed["setup_count"], source, c5[-2]["t"])
-                        send_email(subject, body, html)
-                        log(f"ALERT SENT -> {EMAIL_TO}: {subject}")
+                            armed["setup_count"], source, c5[-2]["t"]))
+                        log(f"ALERT SENT -> telegram: {sym} {direction} "
+                            f"entry @ ${fmt_px(entry)}")
                         RUN_ALERTS.append(f"{sym} {direction} entry @ ${fmt_px(entry)} ({name})")
                         ast["trade"] = {"verdict": direction, "entry": entry,
                                         "stop": stop, "tp1": plan["tp1"],
@@ -1020,8 +929,8 @@ def run_loop():
 
 
 if __name__ == "__main__":
-    if not (EMAIL_FROM and EMAIL_APP_PASSWORD and EMAIL_TO):
-        print("Missing config: set EMAIL_FROM, EMAIL_APP_PASSWORD and EMAIL_TO "
+    if not (TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID):
+        print("Missing config: set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID "
               "as environment variables (GitHub repo Secrets).")
         sys.exit(1)
     if "--test" in sys.argv:
@@ -1030,12 +939,12 @@ if __name__ == "__main__":
                        f"${MIN_DAY_VOLUME_USD:,.0f} 24h volume, max {MAX_ASSETS}")
         else:
             watched = ", ".join(a["symbol"] for a in ASSETS)
-        send_email("Signal alert agent - test email",
-                   f"Your alert pipeline works. Watching: {watched}. "
-                   "Strategy: 4H/1H bias -> 30m pullback setup (5 of 8) -> "
-                   "5m trigger entries with structure stops, 2R/3R targets, "
-                   "breakeven after TP1.")
-        print(f"Test email sent to {EMAIL_TO}.")
+        send_telegram("\u2705 <b>Signal alert agent - test message</b>\n"
+                      f"Your alert pipeline works. Watching: {esc(watched)}.\n"
+                      "Strategy: 4H/1H bias \u2192 30m pullback setup (5 of 8) "
+                      "\u2192 5m trigger entries with structure stops, "
+                      "2R/3R targets, breakeven after TP1.")
+        print("Test message sent to Telegram.")
     elif "--loop" in sys.argv:
         run_loop()
     else:
