@@ -11,7 +11,8 @@ SETUP CONFLUENCES (7 scored; mirrored for shorts):
   C2  1H EMA20 above EMA50
   C3  Price above daily VWAP
   C4  15m pullback into support / moving averages / VWAP
-  C5  RSI(15m) in 50-65 (35-50 for shorts)
+  C5  Bollinger %B in the pullback zone (0.45-0.80 longs,
+      0.20-0.55 shorts) - volatility-adaptive momentum check
   C6  No major opposing level within 1R of the trigger
   C7  2R+ of clear air to the first major level (R:R >= 2:1 by design)
 
@@ -86,6 +87,9 @@ PULLBACK_MIN_ATR = 0.60      # swing must sit at least this far above price
 TRIGGER_PAD_ATR = 0.10       # trigger sits this far beyond the counter-swing
 STOP_PAD_ATR = 0.15          # stop sits this far beyond the pullback extreme
 VOL_CONFIRM_MULT = 1.30      # 5m breakout volume vs 20-avg to count as confirmed
+BB_PERIOD, BB_MULT = 20, 2.0 # Bollinger Bands on 15m closes
+BB_PB_LO, BB_PB_HI = 0.45, 0.80  # healthy %B pullback zone for longs
+                             # (shorts mirror to 0.20-0.55)
 R_TP1, R_TP2 = 2.0, 3.0      # targets in R multiples of entry-to-stop risk
 BREAKEVEN_AFTER_TP1 = True
 PIVOT_WING = 3               # candles each side to confirm a swing point
@@ -307,6 +311,20 @@ def sma(values, period):
     return out
 
 
+def bollinger(closes, period=BB_PERIOD, mult=BB_MULT):
+    """Returns (upper, middle, lower) bands: period-SMA +- mult std devs."""
+    mid = sma(closes, period)
+    up = [None] * len(closes)
+    lo = [None] * len(closes)
+    for i in range(period - 1, len(closes)):
+        mean = mid[i]
+        var = sum((x - mean) ** 2 for x in closes[i - period + 1:i + 1]) / period
+        sd = var ** 0.5
+        up[i] = mean + mult * sd
+        lo[i] = mean - mult * sd
+    return up, mid, lo
+
+
 def rsi(closes, period=14):
     out = [None] * len(closes)
     avg_gain = avg_loss = 0.0
@@ -494,12 +512,23 @@ def scalp_setup(direction, c4h, c15):
             or (not long and not stop > px > trigger - 2 * a):
         return None, checks, None
 
-    # C5 - RSI in the scalp zone
-    r = rsi(closes)
-    zone = (50, 65) if long else (35, 50)
-    c5 = r[i] is not None and zone[0] <= r[i] <= zone[1]
-    checks.append((f"RSI {r[i]:.1f} in {zone[0]}-{zone[1]} zone"
-                   if r[i] is not None else "RSI unavailable", c5))
+    # C5 - Bollinger %B in the pullback zone (volatility-adaptive)
+    bb_up, bb_mid, bb_lo = bollinger(closes)
+    r = rsi(closes)   # kept for the RSI>72 extended safety gate
+    c5 = False
+    bb_desc = "Bollinger Bands unavailable"
+    if bb_up[i] is not None and bb_up[i] > bb_lo[i]:
+        width = bb_up[i] - bb_lo[i]
+        pb = (px - bb_lo[i]) / width
+        zone = (BB_PB_LO, BB_PB_HI) if long else (1 - BB_PB_HI, 1 - BB_PB_LO)
+        c5 = zone[0] <= pb <= zone[1]
+        # bandwidth state: contracting bands favor cleaner breakouts
+        prior_w = [bb_up[j] - bb_lo[j] for j in range(max(0, i - 50), i)
+                   if bb_up[j] is not None]
+        squeeze = prior_w and width < sum(prior_w) / len(prior_w)
+        bb_desc = (f"BB %B {pb:.2f} in {zone[0]:.2f}-{zone[1]:.2f} zone"
+                   f" \u00b7 bands {'contracting' if squeeze else 'expanded'}")
+    checks.append((bb_desc, c5))
 
     # C6 / C7 - room ahead, measured from the trigger
     if long:
