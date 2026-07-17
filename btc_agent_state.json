@@ -1,290 +1,280 @@
 {
   "BTC": {
     "phase": "IDLE",
-    "last_setup_check": 1784306185905,
+    "last_setup_check": 1784310213116,
     "watch": null,
     "trade": null,
     "extended": null
   },
   "ETH": {
     "phase": "IDLE",
-    "last_setup_check": 1784306186591,
+    "last_setup_check": 1784310213707,
     "watch": null,
     "trade": null,
     "extended": null
   },
   "xyz:xyz:SKHX": {
     "phase": "IDLE",
-    "last_setup_check": 1784306187163,
+    "last_setup_check": 1784310214585,
     "watch": null,
     "trade": null,
     "extended": null
   },
   "xyz:xyz:XYZ100": {
     "phase": "IDLE",
-    "last_setup_check": 1784306188453,
+    "last_setup_check": 1784310215171,
     "watch": null,
     "trade": null,
     "extended": null
   },
   "HYPE": {
     "phase": "IDLE",
-    "last_setup_check": 1784296615400,
+    "last_setup_check": 1784310215789,
     "watch": null,
     "trade": null,
     "extended": null
   },
   "xyz:xyz:SNDK": {
     "phase": "IDLE",
-    "last_setup_check": 1784306188963,
+    "last_setup_check": 1784310216613,
     "watch": null,
     "trade": null,
     "extended": null
   },
   "xyz:xyz:SKHY": {
     "phase": "IDLE",
-    "last_setup_check": 1784306190513,
+    "last_setup_check": 1784310218269,
     "watch": null,
     "trade": null,
     "extended": null
   },
   "xyz:xyz:MU": {
     "phase": "IDLE",
-    "last_setup_check": 1784306189433,
+    "last_setup_check": 1784310217192,
     "watch": null,
     "trade": null,
     "extended": null
   },
   "xyz:xyz:DRAM": {
     "phase": "IDLE",
-    "last_setup_check": 1784306189998,
+    "last_setup_check": 1784310217715,
     "watch": null,
     "trade": null,
     "extended": null
   },
   "xyz:xyz:CL": {
     "phase": "IDLE",
-    "last_setup_check": 1784306191918,
+    "last_setup_check": 1784310219792,
     "watch": null,
     "trade": null,
     "extended": null
   },
   "xyz:xyz:SPCX": {
     "phase": "IDLE",
-    "last_setup_check": 1784306191049,
+    "last_setup_check": 1784310219311,
     "watch": null,
     "trade": null,
     "extended": null
   },
   "xyz:xyz:SP500": {
     "phase": "IDLE",
-    "last_setup_check": 1784306191488,
+    "last_setup_check": 1784310218788,
     "watch": null,
     "trade": null,
     "extended": null
   },
   "xyz:xyz:SILVER": {
     "phase": "IDLE",
-    "last_setup_check": 1784306192337,
+    "last_setup_check": 1784310220299,
     "watch": null,
     "trade": null,
     "extended": null
   },
   "SOL": {
-    "phase": "WATCH",
+    "phase": "IDLE",
     "last_setup_check": 1784301390861,
-    "watch": {
-      "direction": "SHORT",
-      "trigger": 73.83037596587475,
-      "stop": 74.83443605118788,
-      "tp1": 71.8222557952485,
-      "tp2": 70.81819570993537,
-      "px": 73.935,
-      "risk": 1.004060085313128,
-      "tier": "B",
-      "expires_t": 1784308590861
-    },
+    "watch": null,
     "trade": null,
     "extended": null
   },
   "xyz:xyz:BRENTOIL": {
     "phase": "IDLE",
-    "last_setup_check": 1784306193024,
+    "last_setup_check": 1784310221419,
     "watch": null,
     "trade": null,
     "extended": null
   },
   "ZEC": {
     "phase": "IDLE",
-    "last_setup_check": 1784306193452,
+    "last_setup_check": 1784310221958,
     "watch": null,
     "trade": null,
     "extended": null
   },
   "xyz:xyz:NVDA": {
     "phase": "IDLE",
-    "last_setup_check": 1784306193885,
+    "last_setup_check": 1784310223668,
     "watch": null,
     "trade": null,
     "extended": null
   },
   "xyz:xyz:SMSN": {
     "phase": "IDLE",
-    "last_setup_check": 1784306195155,
+    "last_setup_check": 1784310223179,
     "watch": null,
     "trade": null,
     "extended": null
   },
   "xyz:xyz:EWY": {
     "phase": "IDLE",
-    "last_setup_check": 1784306194732,
+    "last_setup_check": 1784310224169,
     "watch": null,
     "trade": null,
     "extended": null
   },
   "CASHCAT": {
     "phase": "IDLE",
-    "last_setup_check": 1784306195575,
+    "last_setup_check": 1784310224687,
     "watch": null,
     "trade": null,
     "extended": null
   },
   "xyz:xyz:CRCL": {
     "phase": "IDLE",
-    "last_setup_check": 1784306197477,
+    "last_setup_check": 1784310226229,
     "watch": null,
     "trade": null,
     "extended": null
   },
   "xyz:xyz:INTC": {
     "phase": "IDLE",
-    "last_setup_check": 1784306196632,
+    "last_setup_check": 1784310225705,
     "watch": null,
     "trade": null,
     "extended": null
   },
   "xyz:xyz:GOLD": {
     "phase": "IDLE",
-    "last_setup_check": 1784306197892,
+    "last_setup_check": 1784310227703,
     "watch": null,
     "trade": null,
     "extended": null
   },
   "xyz:xyz:GOOGL": {
     "phase": "IDLE",
-    "last_setup_check": 1784306198734,
+    "last_setup_check": 1784310228264,
     "watch": null,
     "trade": null,
     "extended": null
   },
   "xyz:xyz:META": {
     "phase": "IDLE",
-    "last_setup_check": 1784306196208,
+    "last_setup_check": 1784310225210,
     "watch": null,
     "trade": null,
     "extended": null
   },
   "PUMP": {
     "phase": "IDLE",
-    "last_setup_check": 1784306201059,
+    "last_setup_check": 1784310233011,
     "watch": null,
     "trade": null,
     "extended": null
   },
   "ONDO": {
     "phase": "IDLE",
-    "last_setup_check": 1784306203703,
+    "last_setup_check": 1784310234960,
     "watch": null,
     "trade": null,
     "extended": null
   },
   "xyz:xyz:AAPL": {
     "phase": "IDLE",
-    "last_setup_check": 1784306194311,
+    "last_setup_check": 1784310222659,
     "watch": null,
     "trade": null,
     "extended": null
   },
   "NEAR": {
     "phase": "IDLE",
-    "last_setup_check": 1784306200492,
+    "last_setup_check": 1784310230484,
     "watch": null,
     "trade": null,
     "extended": null
   },
   "xyz:xyz:MRVL": {
     "phase": "IDLE",
-    "last_setup_check": 1784306198315,
+    "last_setup_check": 1784310227218,
     "watch": null,
     "trade": null,
     "extended": null
   },
   "LIT": {
     "phase": "IDLE",
-    "last_setup_check": 1784306199175,
+    "last_setup_check": 1784310228768,
     "watch": null,
     "trade": null,
     "extended": null
   },
   "xyz:xyz:MSFT": {
     "phase": "IDLE",
-    "last_setup_check": 1784306200063,
+    "last_setup_check": 1784310229972,
     "watch": null,
     "trade": null,
     "extended": null
   },
   "xyz:xyz:NBIS": {
     "phase": "IDLE",
-    "last_setup_check": 1784306199627,
+    "last_setup_check": 1784310229482,
     "watch": null,
     "trade": null,
     "extended": null
   },
   "xyz:xyz:AMD": {
     "phase": "IDLE",
-    "last_setup_check": 1784306197054,
+    "last_setup_check": 1784310226722,
     "watch": null,
     "trade": null,
     "extended": null
   },
   "XRP": {
     "phase": "IDLE",
-    "last_setup_check": 1784306202539,
+    "last_setup_check": 1784310231292,
     "watch": null,
     "trade": null,
     "extended": null
   },
   "xyz:xyz:CBRS": {
     "phase": "IDLE",
-    "last_setup_check": 1784306206498,
+    "last_setup_check": 1784310237000,
     "watch": null,
     "trade": null,
     "extended": null
   },
   "xyz:xyz:TSLA": {
     "phase": "IDLE",
-    "last_setup_check": 1784306202116,
+    "last_setup_check": 1784310232513,
     "watch": null,
     "trade": null,
     "extended": null
   },
   "xyz:xyz:NFLX": {
     "phase": "IDLE",
-    "last_setup_check": 1784306203281,
+    "last_setup_check": 1784310233651,
     "watch": null,
     "trade": null,
     "extended": null
   },
   "xyz:xyz:AMZN": {
     "phase": "IDLE",
-    "last_setup_check": 1784306201698,
+    "last_setup_check": 1784310231929,
     "watch": null,
     "trade": null,
     "extended": null
   },
   "xyz:xyz:CXMT": {
     "phase": "IDLE",
-    "last_setup_check": 1784306205574,
+    "last_setup_check": 1784310236008,
     "watch": null,
     "trade": null,
     "extended": null
@@ -312,14 +302,14 @@
   },
   "xyz:xyz:ORCL": {
     "phase": "IDLE",
-    "last_setup_check": 1784306205140,
+    "last_setup_check": 1784310235505,
     "watch": null,
     "trade": null,
     "extended": null
   },
   "xyz:xyz:TSM": {
     "phase": "IDLE",
-    "last_setup_check": 1784306206077,
+    "last_setup_check": 1784310236514,
     "watch": null,
     "trade": null,
     "extended": null
@@ -333,7 +323,7 @@
   },
   "KAITO": {
     "phase": "IDLE",
-    "last_setup_check": 1784301402988,
+    "last_setup_check": 1784310234156,
     "watch": null,
     "trade": null,
     "extended": null
@@ -347,14 +337,14 @@
   },
   "xyz:xyz:BABA": {
     "phase": "IDLE",
-    "last_setup_check": 1784306206917,
+    "last_setup_check": 1784310237496,
     "watch": null,
     "trade": null,
     "extended": null
   },
   "xyz:xyz:MSTR": {
     "phase": "IDLE",
-    "last_setup_check": 1784306208176,
+    "last_setup_check": 1784310238018,
     "watch": null,
     "trade": null,
     "extended": null
@@ -367,25 +357,15 @@
     "extended": null
   },
   "kBONK": {
-    "phase": "WATCH",
+    "phase": "IDLE",
     "last_setup_check": 1784301406868,
-    "watch": {
-      "direction": "SHORT",
-      "trigger": 0.0031563178605602373,
-      "stop": 0.0032310232091596436,
-      "tp1": 0.0030069071633614247,
-      "tp2": 0.0029322018147620184,
-      "px": 0.003175,
-      "risk": 7.470534859940628e-05,
-      "tier": "B",
-      "expires_t": 1784308606868
-    },
+    "watch": null,
     "trade": null,
     "extended": null
   },
   "xyz:xyz:HOOD": {
     "phase": "IDLE",
-    "last_setup_check": 1784306207379,
+    "last_setup_check": 1784310239062,
     "watch": null,
     "trade": null,
     "extended": null
