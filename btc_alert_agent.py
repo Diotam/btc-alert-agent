@@ -1,36 +1,29 @@
 #!/usr/bin/env python3
 """
-MULTI-TIMEFRAME SCALP SNIPER AGENT - tiered confluence, full lifecycle
------------------------------------------------------------------------
-Scalping playbook: 4H/1H/VWAP alignment -> 15m pullback -> 5m breakout.
-Watches are opened BEFORE the breakout with resting-order levels, and
-graded by setup quality.
+HEIKIN ASHI + STOCHASTIC REVERSAL AGENT - 15m - full trade lifecycle
+---------------------------------------------------------------------
+Spots trend reversals using Heikin Ashi candle sequences confirmed by
+stochastic exhaustion. Pattern logic reads HA candles; entries and stops
+use REAL candle prices (HA values are averages and cannot be traded).
 
-SETUP CONFLUENCES (7 scored; mirrored for shorts):
-  C1  4H trend agrees (price above EMA200)
-  C2  1H EMA20 above EMA50
-  C3  Price above daily VWAP
-  C4  15m pullback into support / moving averages / VWAP
-  C5  Bollinger %B in the pullback zone (0.45-0.80 longs,
-      0.20-0.55 shorts) - volatility-adaptive momentum check
-  C6  No major opposing level within 1R of the trigger
-  C7  2R+ of clear air to the first major level (R:R >= 2:1 by design)
+LONG sequence (all stages in order, on 15m closed candles):
+  1. SETUP    stochastic %K crosses below the bottom line (20) and
+              downward momentum is weakening
+  2. DOJI     a GREEN Heikin Ashi doji appears (indecision -> turn)
+  3. CONFIRM  two consecutive GREEN HA candles, LARGE bodies,
+              wicks at the TOP ONLY (no lower wicks)
+  4. ENTER    at the close of the 2nd confirmation candle
+              stop below the pattern's real low, TP1 2R, TP2 3R
 
-QUALITY TIERS:
-  A+  all 7 met                  -> always alerted
-  B   6 of 7 (one missing)       -> alerted if TIER_B_ALERTS = True
-  Ignore  anything less          -> silent
+SHORT sequence (exact mirror):
+  1. SETUP    %K crosses above the top line (80), upward momentum weak
+  2. DOJI     a RED HA doji appears
+  3. CONFIRM  two consecutive RED HA candles, LARGE bodies,
+              wicks at the BOTTOM ONLY (no upper wicks)
+  4. ENTER    at the close of the 2nd confirmation candle
 
-TRIGGER: 5m break of the pullback's counter-swing. The watch alert
-carries buy/sell-stop, stop, TP1 (2R), TP2 (3R) so a resting order can
-sit on the exchange before the move. When the level breaks, the fill
-alert reports whether 5m volume confirmed the breakout (above-average)
-or flags a low-volume break as fade-prone.
-
-RSI-extended gate: RSI > 72 (< 28 shorts) never opens a fresh watch -
-the market is labeled EXTENDED and must retest first.
-
-Lifecycle: TP1 (stop -> breakeven) / TP2 / STOPPED OUT, tracked on 5m.
+Alerts: DOJI SPOTTED (heads-up), ENTRY (rule checklist + plan),
+then TP1 (stop -> breakeven) / TP2 / STOPPED OUT tracked on 5m candles.
 
 Alerts are delivered to Telegram. Config from environment variables
 (GitHub repo Secrets):
@@ -39,8 +32,7 @@ Alerts are delivered to Telegram. Config from environment variables
 Modes:
   python3 btc_alert_agent.py           single scan (workflow default)
   python3 btc_alert_agent.py --test    send a test message
-  python3 btc_alert_agent.py --loop    run continuously (local PC -
-                                       recommended for scalping: no lag)
+  python3 btc_alert_agent.py --loop    run continuously (local PC)
 """
 
 import json
@@ -59,9 +51,9 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 # --- Asset universe -------------------------------------------------------
 DISCOVER_ALL = True
 DEXES = ["", "xyz"]                # "" = main crypto dex, "xyz" = TradeXYZ stocks
-MIN_DAY_VOLUME_USD = 10_000_000    # scalping needs liquidity: fees+slippage eat thin books
-MAX_ASSETS = 150                   # hard cap per run, highest-volume first
-FETCH_DELAY_S = 0.12               # pause between per-asset API calls
+MIN_DAY_VOLUME_USD = 10_000_000    # liquid markets only
+MAX_ASSETS = 150
+FETCH_DELAY_S = 0.12
 
 ASSETS = [                         # used when DISCOVER_ALL = False / discovery fails
     {"symbol": "BTC",   "label": "BTC-PERP",        "hl_coin": "BTC",
@@ -75,33 +67,36 @@ ASSETS = [                         # used when DISCOVER_ALL = False / discovery 
 ]
 
 # --- Strategy dials -------------------------------------------------------
-ENABLE_SHORTS = True         # mirror the whole playbook for shorts
-TIER_B_ALERTS = True         # also alert B setups (6 of 7); A+ always alerts
-RSI_EXTENDED = 72            # RSI beyond this never opens a fresh watch
-                             # (mirrored at 100-72=28 for shorts): the market is
-                             # labeled EXTENDED and must retest before watching
-EXTENDED_TTL_MIN = 360       # give an extended market up to 6h to retest
-SETUP_REFRESH_MIN = 12       # re-scan the 15m setup roughly every 15m candle
-WATCH_TTL_MIN = 120          # scalp watches go stale fast: 2h then cancel
-PULLBACK_MIN_ATR = 0.60      # swing must sit at least this far above price
-TRIGGER_PAD_ATR = 0.10       # trigger sits this far beyond the counter-swing
-STOP_PAD_ATR = 0.15          # stop sits this far beyond the pullback extreme
-VOL_CONFIRM_MULT = 1.30      # 5m breakout volume vs 20-avg to count as confirmed
-BB_PERIOD, BB_MULT = 20, 2.0 # Bollinger Bands on 15m closes
-BB_PB_LO, BB_PB_HI = 0.45, 0.80  # healthy %B pullback zone for longs
-                             # (shorts mirror to 0.20-0.55)
-R_TP1, R_TP2 = 2.0, 3.0      # targets in R multiples of entry-to-stop risk
+ENABLE_SHORTS = True
+STOCH_K = 14                 # stochastic lookback
+STOCH_SMOOTH = 3             # %K smoothing (slow stochastic)
+STOCH_D = 3                  # %D smoothing
+STOCH_OVERSOLD = 20          # the "bottom line"
+STOCH_OVERBOUGHT = 80        # the "top line"
+CROSS_LOOKBACK = 6           # the cross must have happened within this many candles
+DOJI_BODY_FRAC = 0.12        # HA body <= this fraction of range = doji
+BIG_BODY_FRAC = 0.45         # HA body >= this fraction of range = large body
+                             # (HA open starts at the doji midpoint, capping
+                             #  the first confirmation candle near 0.5)
+BODY_MIN_ATR = 0.50          # ...and >= this fraction of ATR (absolute size vs
+                             #  current volatility, not the dead trend's bodies)
+RANGE_MIN_ATR = 0.80         # candle range must be meaningful vs ATR (filters
+                             #  micro flat candles whose ratios look strong)
+WICK_TOL_FRAC = 0.15         # "no wick" tolerance: <= this fraction of range
+WICK_TOL_BODY = 0.20         # ...or <= this fraction of the body (HA-open lag)
+WAIT_DOJI_TTL = 10           # candles to wait for the doji after setup
+CONFIRM_TTL = 6              # candles to complete both confirmations
+STOP_PAD_ATR = 0.15          # stop pad beyond the pattern's real extreme
+R_TP1, R_TP2 = 2.0, 3.0
 BREAKEVEN_AFTER_TP1 = True
-PIVOT_WING = 3               # candles each side to confirm a swing point
-LEVEL_TOL_ATR = 0.30         # cluster pivots within this many ATRs into a level
-PULLBACK_ZONE_ATR = 0.50     # "near" EMA20/VWAP/level = within this many ATRs
+SETUP_REFRESH_MIN = 12       # scan cadence (new 15m candles processed as they close)
 
 TIMEZONE = "America/New_York"
 STATE_FILE = Path(__file__).parent / "btc_agent_state.json"
 # ===========================================================================
 
-MS = {"5m": 300_000, "15m": 900_000, "30m": 1_800_000, "1h": 3_600_000, "4h": 14_400_000}
-LOOKBACK = {"5m": 300, "15m": 500, "30m": 500, "4h": 260}
+MS = {"5m": 300_000, "15m": 900_000}
+LOOKBACK = {"5m": 300, "15m": 400}
 LOCAL_TZ = ZoneInfo(TIMEZONE)
 
 
@@ -130,15 +125,14 @@ RUN_STATUS = []
 
 def write_run_summary():
     n = len(RUN_STATUS)
-    watching = sum(1 for s in RUN_STATUS if "WATCH" in s)
+    staged = [s for s in RUN_STATUS if ("DOJI" in s or "CONFIRM" in s)]
     open_t = sum(1 for s in RUN_STATUS if "IN_TRADE" in s)
     if RUN_ALERTS:
         headline = "ALERT SENT: " + " | ".join(RUN_ALERTS)
     else:
         extras = []
-        if watching:
-            extras.append(f"{watching} watching: " + "; ".join(
-                s for s in RUN_STATUS if "WATCH" in s)[:120])
+        if staged:
+            extras.append("staging: " + "; ".join(staged)[:120])
         if open_t:
             extras.append(f"{open_t} in trade")
         headline = (f"No signal - {n} markets scanned"
@@ -162,7 +156,7 @@ def write_run_summary():
 # --------------------------- data sources ---------------------------------
 def http_json(url, payload=None, timeout=20):
     headers = {"Content-Type": "application/json",
-               "User-Agent": "Mozilla/5.0 (signal-alert-agent/6.0)"}
+               "User-Agent": "Mozilla/5.0 (signal-alert-agent/7.0)"}
     data = json.dumps(payload).encode() if payload is not None else None
     req = urllib.request.Request(url, data=data, headers=headers,
                                  method="POST" if payload is not None else "GET")
@@ -200,9 +194,7 @@ def fetch_kraken(pair, interval, lookback):
 
 
 def fetch_yahoo(ticker, interval, lookback):
-    if interval == "4h":
-        raise ValueError("yahoo has no 4h interval")
-    yint = {"5m": "5m", "30m": "30m", "1h": "60m"}[interval]
+    yint = {"5m": "5m", "15m": "15m"}[interval]
     rng = "5d" if interval == "5m" else "1mo"
     from urllib.parse import quote
     data = http_json(f"https://query1.finance.yahoo.com/v8/finance/chart/{quote(ticker)}"
@@ -285,20 +277,6 @@ def active_assets():
 
 
 # ------------------------------ indicators --------------------------------
-def ema(values, period):
-    k = 2 / (period + 1)
-    out = [None] * len(values)
-    prev = None
-    for i, v in enumerate(values):
-        if i == period - 1:
-            prev = sum(values[:period]) / period
-            out[i] = prev
-        elif i >= period:
-            prev = v * k + prev * (1 - k)
-            out[i] = prev
-    return out
-
-
 def sma(values, period):
     out = [None] * len(values)
     s = 0.0
@@ -309,51 +287,6 @@ def sma(values, period):
         if i >= period - 1:
             out[i] = s / period
     return out
-
-
-def bollinger(closes, period=BB_PERIOD, mult=BB_MULT):
-    """Returns (upper, middle, lower) bands: period-SMA +- mult std devs."""
-    mid = sma(closes, period)
-    up = [None] * len(closes)
-    lo = [None] * len(closes)
-    for i in range(period - 1, len(closes)):
-        mean = mid[i]
-        var = sum((x - mean) ** 2 for x in closes[i - period + 1:i + 1]) / period
-        sd = var ** 0.5
-        up[i] = mean + mult * sd
-        lo[i] = mean - mult * sd
-    return up, mid, lo
-
-
-def rsi(closes, period=14):
-    out = [None] * len(closes)
-    avg_gain = avg_loss = 0.0
-    for i in range(1, len(closes)):
-        d = closes[i] - closes[i - 1]
-        gain, loss = max(d, 0), max(-d, 0)
-        if i <= period:
-            avg_gain += gain / period
-            avg_loss += loss / period
-            if i == period:
-                rs = 100 if avg_loss == 0 else avg_gain / avg_loss
-                out[i] = 100 - 100 / (1 + rs)
-        else:
-            avg_gain = (avg_gain * (period - 1) + gain) / period
-            avg_loss = (avg_loss * (period - 1) + loss) / period
-            rs = 100 if avg_loss == 0 else avg_gain / avg_loss
-            out[i] = 100 - 100 / (1 + rs)
-    return out
-
-
-def macd(closes, fast=12, slow=26, signal=9):
-    ef, es = ema(closes, fast), ema(closes, slow)
-    line = [ef[i] - es[i] if ef[i] is not None and es[i] is not None else None
-            for i in range(len(closes))]
-    sig_raw = ema([v if v is not None else 0 for v in line], signal)
-    sig = [sig_raw[i] if line[i] is not None else None for i in range(len(line))]
-    hist = [line[i] - sig[i] if line[i] is not None and sig[i] is not None else None
-            for i in range(len(line))]
-    return line, sig, hist
 
 
 def atr(candles, period=14):
@@ -373,273 +306,108 @@ def atr(candles, period=14):
     return out
 
 
-def vwap(candles):
-    """Daily-anchored VWAP, reset each UTC day."""
-    out = [None] * len(candles)
-    cum_pv = cum_v = 0.0
-    day = None
+def heikin_ashi(candles):
+    """HA candle series. HA prices are averages - never trade them directly."""
+    out = []
     for i, c in enumerate(candles):
-        d = datetime.fromtimestamp(c["t"] / 1000, tz=timezone.utc).date()
-        if d != day:
-            day, cum_pv, cum_v = d, 0.0, 0.0
-        tp = (c["h"] + c["l"] + c["c"]) / 3
-        cum_pv += tp * c["v"]
-        cum_v += c["v"]
-        out[i] = cum_pv / cum_v if cum_v > 0 else None
+        hc = (c["o"] + c["h"] + c["l"] + c["c"]) / 4
+        ho = (c["o"] + c["c"]) / 2 if i == 0 else (out[-1]["o"] + out[-1]["c"]) / 2
+        out.append({"t": c["t"], "o": ho, "c": hc,
+                    "h": max(c["h"], ho, hc), "l": min(c["l"], ho, hc)})
     return out
 
 
-def resample(candles, target_ms):
-    """Aggregate candles into a larger timeframe aligned to target_ms."""
-    buckets, order = {}, []
-    for c in candles:
-        b = c["t"] - (c["t"] % target_ms)
-        if b not in buckets:
-            buckets[b] = dict(t=b, o=c["o"], h=c["h"], l=c["l"], c=c["c"], v=c["v"])
-            order.append(b)
-        else:
-            k = buckets[b]
-            k["h"] = max(k["h"], c["h"])
-            k["l"] = min(k["l"], c["l"])
-            k["c"] = c["c"]
-            k["v"] += c["v"]
-    return [buckets[b] for b in order]
+def stochastic(candles, k=STOCH_K, smooth=STOCH_SMOOTH, d=STOCH_D):
+    """Slow stochastic on REAL candles. Returns (%K smoothed, %D)."""
+    n = len(candles)
+    raw = [None] * n
+    for i in range(k - 1, n):
+        hh = max(x["h"] for x in candles[i - k + 1:i + 1])
+        ll = min(x["l"] for x in candles[i - k + 1:i + 1])
+        raw[i] = 100 * (candles[i]["c"] - ll) / (hh - ll) if hh > ll else 50.0
+
+    def smoo(arr, p):
+        out = [None] * n
+        for i in range(n):
+            w = [arr[j] for j in range(max(0, i - p + 1), i + 1)
+                 if arr[j] is not None]
+            if len(w) == p:
+                out[i] = sum(w) / p
+        return out
+
+    kline = smoo(raw, smooth)
+    dline = smoo(kline, d)
+    return kline, dline
 
 
-def find_pivots(candles, upto, wing=PIVOT_WING):
-    highs, lows = [], []
-    for i in range(wing, upto - wing + 1):
-        h, l = candles[i]["h"], candles[i]["l"]
-        if (all(h > candles[j]["h"] for j in range(i - wing, i)) and
-                all(h >= candles[j]["h"] for j in range(i + 1, i + wing + 1))):
-            highs.append((i, h))
-        if (all(l < candles[j]["l"] for j in range(i - wing, i)) and
-                all(l <= candles[j]["l"] for j in range(i + 1, i + wing + 1))):
-            lows.append((i, l))
-    return highs, lows
+# --------------------------- HA candle grammar -----------------------------
+def ha_props(ha):
+    body = abs(ha["c"] - ha["o"])
+    rng = ha["h"] - ha["l"]
+    up_w = ha["h"] - max(ha["o"], ha["c"])
+    dn_w = min(ha["o"], ha["c"]) - ha["l"]
+    return body, rng, up_w, dn_w
 
 
-def build_levels(pivot_prices, tol):
-    levels = []
-    for p in sorted(pivot_prices):
-        if levels and p - levels[-1][0] <= tol:
-            price, n = levels[-1]
-            levels[-1] = ((price * n + p) / (n + 1), n + 1)
-        else:
-            levels.append((p, 1))
-    return levels
+def is_green(ha):
+    return ha["c"] > ha["o"]
 
 
-def daily_open(candles):
-    """Open of the first candle of the current UTC day."""
-    for c in reversed(candles):
-        dt = datetime.fromtimestamp(c["t"] / 1000, tz=timezone.utc)
-        if dt.hour == 0 and dt.minute == 0:
-            return c["o"]
-    return None
-
-
-# ------------------------- scalp setup scoring ------------------------------
-def scalp_setup(direction, c4h, c15):
-    """Score the 7 scalp confluences on the last closed 15m candle.
-    Returns (tier, checks, ctx) where tier is "A+", "B" or None.
-    ctx carries trigger / stop / targets for the watch."""
-    long = direction == "LONG"
-    closes = [c["c"] for c in c15]
-    a_arr = atr(c15)
-    i = len(c15) - 2
-    if i < 210 or a_arr[i] is None or len(c4h) < 205:
-        return None, [], None
-    a = a_arr[i]
-    px = closes[i]
-    checks = []
-
-    # C1 - 4H trend agrees
-    closes4 = [c["c"] for c in c4h]
-    e200_4h = ema(closes4, 200)
-    i4 = len(c4h) - 2
-    c1 = (e200_4h[i4] is not None and
-          (closes4[i4] > e200_4h[i4] if long else closes4[i4] < e200_4h[i4]))
-    checks.append((f"4H trend agrees (price {'above' if long else 'below'} EMA200)", c1))
-
-    # C2 - 1H EMA20 vs EMA50 (resampled from 15m)
-    c1h = resample(c15, MS["1h"])
-    cl1 = [c["c"] for c in c1h]
-    e20_1h, e50_1h = ema(cl1, 20), ema(cl1, 50)
-    i1 = len(c1h) - 2
-    c2 = (i1 >= 0 and e20_1h[i1] is not None and e50_1h[i1] is not None and
-          (e20_1h[i1] > e50_1h[i1] if long else e20_1h[i1] < e50_1h[i1]))
-    checks.append((f"1H EMA20 {'above' if long else 'below'} EMA50", c2))
-
-    # C3 - daily VWAP alignment
-    w = vwap(c15)
-    c3 = w[i] is not None and (px > w[i] if long else px < w[i])
-    checks.append((f"Price {'above' if long else 'below'} daily VWAP"
-                   + (f" (${fmt_px(w[i])})" if w[i] else ""), c3))
-
-    # C4 - 15m pullback into support / MAs / VWAP
-    e20_15 = ema(closes, 20)
-    window = c15[i - 9:i + 1]
-    highs, lows = find_pivots(c15, i)
-    levels = build_levels([p for _, p in highs] + [p for _, p in lows],
-                          LEVEL_TOL_ATR * a)
-    if long:
-        swing = max(c["h"] for c in window)
-        pulled = swing - px >= PULLBACK_MIN_ATR * a
-        pb_ext = min(c["l"] for c in c15[i - 5:i + 1])       # pullback low
-        counter = max(c["h"] for c in c15[i - 3:i + 1])      # local counter-swing
-    else:
-        swing = min(c["l"] for c in window)
-        pulled = px - swing >= PULLBACK_MIN_ATR * a
-        pb_ext = max(c["h"] for c in c15[i - 5:i + 1])
-        counter = min(c["l"] for c in c15[i - 3:i + 1])
-    dists = [abs(px - e20_15[i])] if e20_15[i] is not None else []
-    if w[i]:
-        dists.append(abs(px - w[i]))
-    zone_side = [lv for lv, _ in levels if (lv < px if long else lv > px)]
-    if zone_side:
-        dists.append(min(abs(px - lv) for lv in zone_side))
-    c4 = pulled and dists and min(dists) <= PULLBACK_ZONE_ATR * a
-    checks.append(("15m pullback into support / EMA20 / VWAP" if long
-                   else "15m rally into resistance / EMA20 / VWAP", c4))
-
-    # trigger / stop geometry (needed for C6, C7)
-    sign = 1 if long else -1
-    trigger = counter + sign * TRIGGER_PAD_ATR * a
-    stop = pb_ext - sign * STOP_PAD_ATR * a
-    risk = abs(trigger - stop)
-    if risk <= 0 or (long and not stop < px < trigger + 2 * a) \
-            or (not long and not stop > px > trigger - 2 * a):
-        return None, checks, None
-
-    # C5 - Bollinger %B in the pullback zone (volatility-adaptive)
-    bb_up, bb_mid, bb_lo = bollinger(closes)
-    r = rsi(closes)   # kept for the RSI>72 extended safety gate
-    c5 = False
-    bb_desc = "Bollinger Bands unavailable"
-    if bb_up[i] is not None and bb_up[i] > bb_lo[i]:
-        width = bb_up[i] - bb_lo[i]
-        pb = (px - bb_lo[i]) / width
-        zone = (BB_PB_LO, BB_PB_HI) if long else (1 - BB_PB_HI, 1 - BB_PB_LO)
-        c5 = zone[0] <= pb <= zone[1]
-        # bandwidth state: contracting bands favor cleaner breakouts
-        prior_w = [bb_up[j] - bb_lo[j] for j in range(max(0, i - 50), i)
-                   if bb_up[j] is not None]
-        squeeze = prior_w and width < sum(prior_w) / len(prior_w)
-        bb_desc = (f"BB %B {pb:.2f} in {zone[0]:.2f}-{zone[1]:.2f} zone"
-                   f" \u00b7 bands {'contracting' if squeeze else 'expanded'}")
-    checks.append((bb_desc, c5))
-
-    # C6 / C7 - room ahead, measured from the trigger
-    if long:
-        majors = sorted(lv for lv, n in levels if lv > trigger and n >= 2)
-        near = majors[0] - trigger if majors else None
-    else:
-        majors = sorted((lv for lv, n in levels if lv < trigger and n >= 2),
-                        reverse=True)
-        near = trigger - majors[0] if majors else None
-    c6 = near is None or near >= risk
-    checks.append(("No major opposing level within 1R of the trigger", c6))
-    c7 = near is None or near >= 2 * risk
-    checks.append(("2R+ clear air to the first major level (R:R >= 2:1)", c7))
-
-    passed = sum(1 for _, ok in checks if ok)
-    tier = "A+" if passed == 7 else "B" if passed == 6 else None
-    ctx = {"trigger": trigger, "stop": stop, "risk": risk,
-           "tp1": trigger + sign * R_TP1 * risk,
-           "tp2": trigger + sign * R_TP2 * risk,
-           "px": px, "rsi": r[i], "atr": a, "tier": tier, "passed": passed,
-           "checks": checks}
-    return tier, checks, ctx
-
-
-# --------------------- extended-market retest gate --------------------------
-def is_extended(direction, rsi_val):
-    if rsi_val is None:
+def is_doji(ha, color_long):
+    """Green doji (for longs) / red doji (for shorts): tiny HA body."""
+    body, rng, _, _ = ha_props(ha)
+    if rng <= 0:
         return False
-    return rsi_val > RSI_EXTENDED if direction == "LONG" \
-        else rsi_val < (100 - RSI_EXTENDED)
+    right_color = is_green(ha) if color_long else not is_green(ha)
+    return right_color and body <= DOJI_BODY_FRAC * rng
 
 
-def retest_check(direction, candles):
-    """After an EXTENDED reading: has price retested structure with
-    contracting volume and returning confirmation? All three must hold."""
-    long = direction == "LONG"
-    closes = [c["c"] for c in candles]
-    vols = [c["v"] for c in candles]
-    e20, e50 = ema(closes, 20), ema(closes, 50)
-    r = rsi(closes)
-    a = atr(candles)
-    w = vwap(candles)
-    vol_avg = sma(vols, 20)
-    i = len(candles) - 2
-    if i < 200 or a[i] is None:
+def is_strong(ha, atr_now, long):
+    """The three entry rules: right color, large body, wick on one side only.
+    LONG: green, big body, no lower wick (top wick allowed).
+    SHORT: red, big body, no upper wick (bottom wick allowed)."""
+    body, rng, up_w, dn_w = ha_props(ha)
+    if rng <= 0 or (atr_now and rng < RANGE_MIN_ATR * atr_now):
         return False, []
-    px = closes[i]
-    checks = []
-
-    # 1 - price retested structure (EMA20 / VWAP / pivot level zone)
-    highs, lows = find_pivots(candles, i)
-    levels = build_levels([p for _, p in highs] + [p for _, p in lows],
-                          LEVEL_TOL_ATR * a[i])
-    dists = [abs(px - e20[i])]
-    if w[i]:
-        dists.append(abs(px - w[i]))
-    if levels:
-        dists.append(min(abs(px - lv) for lv, _ in levels))
-    c1 = min(dists) <= PULLBACK_ZONE_ATR * a[i]
-    checks.append(("Price retested structure (EMA20/VWAP/level)", c1))
-
-    # 2 - volume contracted on the retest
-    c2 = (vol_avg[i] is not None and vol_avg[i] > 0
-          and sum(vols[i - 2:i + 1]) / 3 < vol_avg[i])
-    checks.append(("Volume contracting", c2))
-
-    # 3 - confirmation returned: RSI cooled + with-trend close + trend intact
-    zone = (45, 68) if long else (32, 55)
-    zone_ok = r[i] is not None and zone[0] <= r[i] <= zone[1]
-    candle_ok = candles[i]["c"] > candles[i]["o"] if long else candles[i]["c"] < candles[i]["o"]
-    trend_ok = e20[i] > e50[i] if long else e20[i] < e50[i]
-    c3 = zone_ok and candle_ok and trend_ok
-    checks.append((f"Confirmation returned (RSI "
-                   f"{r[i]:.1f}, {'bullish' if long else 'bearish'} close, "
-                   f"trend intact)" if r[i] is not None
-                   else "Confirmation returned", c3))
-
-    return all(ok for _, ok in checks), checks
+    color_ok = is_green(ha) if long else not is_green(ha)
+    big = body >= BIG_BODY_FRAC * rng and (not atr_now or body >= BODY_MIN_ATR * atr_now)
+    w = dn_w if long else up_w
+    wick_ok = w <= WICK_TOL_FRAC * rng or w <= WICK_TOL_BODY * body
+    rules = [("Green HA candle" if long else "Red HA candle", color_ok),
+             ("Large body", big),
+             ("No lower wick" if long else "No upper wick", wick_ok)]
+    return color_ok and big and wick_ok, rules
 
 
-# ----------------------------- watch monitor --------------------------------
-def watch_check(direction, c5, watch):
-    """While a breakout watch is live: did the trigger level get touched
-    (= resting order fill), did the coil break down (cancel), or is heavy
-    volume pressing into the trigger (surge nudge)?"""
-    long = direction == "LONG"
-    i = len(c5) - 2
-    if i < 21:
-        return None
-    c = c5[i]
-    # FILL: trigger level touched - matches a resting stop order.
-    # Volume grading: above-average 5m volume = confirmed breakout.
-    if (c["h"] >= watch["trigger"] if long else c["l"] <= watch["trigger"]):
-        va = sma([x["v"] for x in c5], 20)[i]
-        vol_ok = bool(va and c["v"] > VOL_CONFIRM_MULT * va)
-        return ("FILL", watch["trigger"], c["t"], vol_ok)
-    # CANCEL: closed through the protective side of the coil
-    if (c["c"] < watch["stop"] if long else c["c"] > watch["stop"]):
-        return ("CANCEL", c["c"], c["t"], None)
-    # SURGE: one-time nudge - unusual volume pressing into the trigger
-    if not watch.get("surged"):
-        a5 = atr(c5)[i]
-        vols = [x["v"] for x in c5]
-        va = sma(vols, 20)[i]
-        if a5 and va:
-            press = ((watch["trigger"] - c["c"]) <= 0.3 * a5 if long
-                     else (c["c"] - watch["trigger"]) <= 0.3 * a5)
-            with_trend = c["c"] > c["o"] if long else c["c"] < c["o"]
-            if press and with_trend and vols[i] > 2 * va:
-                return ("SURGE", c["c"], c["t"], None)
-    return None
+def stoch_setup(kline, i, long):
+    """LONG: %K crossed below the bottom line recently AND downward momentum
+    is weakening. SHORT: mirrored at the top line."""
+    if i < 3 or kline[i] is None or kline[i - 1] is None or kline[i - 2] is None:
+        return False
+    # a fresh cross through the line within the lookback, OR still pinned
+    # in the exhaustion zone (deep trends keep %K below the line for long
+    # stretches - the tradeable moment is when momentum fades while there)
+    in_zone = (kline[i] < STOCH_OVERSOLD if long
+               else kline[i] > STOCH_OVERBOUGHT)
+    crossed = in_zone
+    for j in range(max(3, i - CROSS_LOOKBACK + 1), i + 1):
+        if kline[j] is None or kline[j - 1] is None:
+            continue
+        if long and kline[j - 1] >= STOCH_OVERSOLD > kline[j]:
+            crossed = True
+        if not long and kline[j - 1] <= STOCH_OVERBOUGHT < kline[j]:
+            crossed = True
+    if not crossed:
+        return False
+    d_now = kline[i] - kline[i - 1]
+    d_prev = kline[i - 1] - kline[i - 2]
+    if long:
+        weak = d_now > d_prev or d_now > 0     # decline decelerating or turning up
+        below = kline[i] < STOCH_OVERSOLD + 10
+        return weak and below
+    weak = d_now < d_prev or d_now < 0         # climb decelerating or turning down
+    above = kline[i] > STOCH_OVERBOUGHT - 10
+    return weak and above
 
 
 # ----------------------------- telegram ------------------------------------
@@ -648,7 +416,6 @@ DISCLAIMER_TXT = ("Research signal - not financial advice. "
 
 
 def esc(s):
-    """Escape Telegram-HTML special characters in dynamic text."""
     return (str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
 
 
@@ -661,110 +428,50 @@ def send_telegram(text):
         raise RuntimeError(f"Telegram send failed: {resp.get('description')}")
 
 
-def watch_message(asset, direction, ctx, source, t):
+def doji_message(asset, direction, kval, px, t):
     sym = asset["symbol"]
-    tier = ctx["tier"]
-    badge = "\U0001F7E2 A+ SETUP" if tier == "A+" else "\U0001F7E1 B SETUP"
-    order = "Buy-stop " if direction == "LONG" else "Sell-stop"
-    lines = [
-        f"{badge} \u00b7 <b>{esc(sym)} {direction}</b> \u2014 scalp watch",
-        f"<i>{esc(asset['label'])} \u00b7 confluence {ctx['passed']}/7 "
+    color = "green" if direction == "LONG" else "red"
+    line = STOCH_OVERSOLD if direction == "LONG" else STOCH_OVERBOUGHT
+    return "\n".join([
+        f"\U0001F56F <b>DOJI SPOTTED \u00b7 {esc(sym)}</b> \u2014 possible "
+        f"{direction} reversal",
+        f"<i>{esc(asset['label'])} \u00b7 price <code>${fmt_px(px)}</code> "
         f"\u00b7 {esc(fmt_ts(t))}</i>",
         "",
-        "\U0001F4CB <b>Sniper plan - place the resting order now:</b>",
-        f"<code>{order}  ${fmt_px(ctx['trigger'])}</code>",
-        f"<code>Stop      ${fmt_px(ctx['stop'])}</code>",
-        f"<code>TP1       ${fmt_px(ctx['tp1'])}</code>  ({R_TP1:.0f}R)",
-        f"<code>TP2       ${fmt_px(ctx['tp2'])}</code>  ({R_TP2:.0f}R)",
-        f"<code>Risk      ${fmt_px(ctx['risk'])}</code>  (1R)",
+        f"Stochastic exhausted through {line} (%K {kval:.1f}, momentum fading) "
+        f"and a {color} Heikin Ashi doji just printed.",
         "",
-        "\U0001F50D <b>Confluence</b>",
-    ]
-    lines += [f"{'\u2705' if ok else '\u274C'} {esc(d)}" for d, ok in ctx["checks"]]
-    lines += ["",
-              f"\u23F3 Watch valid ~{WATCH_TTL_MIN // 60}h. Fill alert will grade "
-              "breakout volume. Cancel alert = pull the order.",
-              f"<i>Source: {esc(source)}. \u26A0 {DISCLAIMER_TXT}</i>"]
-    return "\n".join(lines)
-
-
-def fill_message(asset, direction, watch, t, vol_ok):
-    sym = asset["symbol"]
-    grade = ("\u2705 Volume-confirmed breakout (above-average 5m volume)"
-             if vol_ok else
-             "\u26A0 <b>Low-volume break</b> - fade-prone, consider "
-             "tightening or skipping")
-    lines = [
-        f"\U0001F680 <b>TRIGGERED \u00b7 {esc(sym)} {direction}</b> \u2014 "
-        f"broke <code>${fmt_px(watch['trigger'])}</code>",
-        f"<i>{esc(fmt_ts(t))}</i>",
-        "",
-        grade,
-        "",
-        "If your resting order filled, the plan is live:",
-        f"<code>Entry  ${fmt_px(watch['trigger'])}</code>",
-        f"<code>Stop   ${fmt_px(watch['stop'])}</code>",
-        f"<code>TP1    ${fmt_px(watch['tp1'])}</code>  ({R_TP1:.0f}R)",
-        f"<code>TP2    ${fmt_px(watch['tp2'])}</code>  ({R_TP2:.0f}R)",
-        "",
-        f"<i>\u26A0 {DISCLAIMER_TXT}</i>",
-    ]
-    return "\n".join(lines)
-
-
-def surge_message(asset, direction, watch, px, t):
-    sym = asset["symbol"]
-    return "\n".join([
-        f"\u26A1 <b>Pressure building \u00b7 {esc(sym)}</b>",
-        f"Heavy 5m volume pressing into <code>${fmt_px(watch['trigger'])}</code> "
-        f"(now <code>${fmt_px(px)}</code>). {esc(fmt_ts(t))}",
-        "Breakout attempt may be imminent - resting order should be in place.",
+        f"\u23F3 Watching for two consecutive {color} large-body HA candles "
+        f"with {'no lower wicks' if direction == 'LONG' else 'no upper wicks'}. "
+        "Entry alert follows only if both confirm.",
     ])
 
 
-def cancel_message(asset, direction, watch, px, reason, t):
-    sym = asset["symbol"]
-    return "\n".join([
-        f"\U0001F6D1 <b>WATCH CANCELLED \u00b7 {esc(sym)} {direction}</b>",
-        f"{esc(reason)} (price <code>${fmt_px(px)}</code>). {esc(fmt_ts(t))}",
-        "",
-        f"<b>Pull any resting {'buy' if direction == 'LONG' else 'sell'}-stop "
-        f"at <code>${fmt_px(watch['trigger'])}</code>.</b>",
-    ])
-
-
-def extended_message(asset, direction, rsi_val, px, t):
-    sym = asset["symbol"]
-    lines = [
-        f"\U0001F536 <b>EXTENDED \u00b7 {esc(sym)}</b> \u2014 RSI <code>{rsi_val:.1f}</code>",
-        f"<i>{esc(asset['label'])} \u00b7 price <code>${fmt_px(px)}</code> \u00b7 {esc(fmt_ts(t))}</i>",
-        "",
-        f"HTF bias and trend favor a {direction}, but momentum is too hot "
-        f"(RSI &gt; {RSI_EXTENDED if direction == 'LONG' else 100 - RSI_EXTENDED}). "
-        "Not chasing.",
-        "",
-        "\u23F3 <b>Waiting for retest:</b> price back into structure, "
-        "volume contraction, and confirmation returning. "
-        "You'll get a second alert if it sets up.",
-    ]
-    return "\n".join(lines)
-
-
-def retest_armed_message(asset, direction, checks, px, structural, counter, t):
+def entry_message(asset, direction, plan, rules1, rules2, kval, source, t):
     sym = asset["symbol"]
     icon = "\U0001F7E2" if direction == "LONG" else "\U0001F534"
     lines = [
-        f"\u2705 <b>RETEST CONFIRMED \u00b7 {esc(sym)}</b> \u2014 breakout watch {direction}",
-        f"<i>{esc(asset['label'])} \u00b7 price <code>${fmt_px(px)}</code> \u00b7 {esc(fmt_ts(t))}</i>",
+        f"{icon} <b>{direction} REVERSAL ENTRY \u00b7 {esc(sym)}</b> \u2014 "
+        f"<code>${fmt_px(plan['entry'])}</code>",
+        f"<i>{esc(asset['label'])} \u00b7 HA + stochastic \u00b7 {esc(fmt_ts(t))}</i>",
         "",
-    ]
-    lines += [f"\u2705 {esc(d)}" for d, _ in checks]
-    lines += [
+        "\U0001F4CB <b>Trade plan (enter at market):</b>",
+        f"<code>Entry  ${fmt_px(plan['entry'])}</code>",
+        f"<code>Stop   ${fmt_px(plan['stop'])}</code>  (beyond pattern "
+        f"{'low' if direction == 'LONG' else 'high'})",
+        f"<code>TP1    ${fmt_px(plan['tp1'])}</code>  ({R_TP1:.0f}R)",
+        f"<code>TP2    ${fmt_px(plan['tp2'])}</code>  ({R_TP2:.0f}R)",
+        f"<code>Risk   ${fmt_px(plan['risk'])}</code>  (1R)",
         "",
-        f"{icon} Structure <code>${fmt_px(structural)}</code> \u00b7 "
-        f"breakout line <code>${fmt_px(counter)}</code>",
-        "Scanning for a coil - a breakout watch follows if one forms.",
+        f"\U0001F50D <b>Sequence completed</b> (stoch %K {kval:.1f} at setup)",
+        "\u2705 Exhaustion cross + weak momentum",
+        f"\u2705 {'Green' if direction == 'LONG' else 'Red'} HA doji",
+        "<b>Confirmation candle 1</b>",
     ]
+    lines += [f"\u2705 {esc(d)}" for d, _ in rules1]
+    lines += ["<b>Confirmation candle 2</b>"]
+    lines += [f"\u2705 {esc(d)}" for d, _ in rules2]
+    lines += ["", f"<i>Source: {esc(source)}. \u26A0 {DISCLAIMER_TXT}</i>"]
     return "\n".join(lines)
 
 
@@ -776,10 +483,10 @@ def lifecycle_message(asset, kind, trade, exit_px, event_t, note):
     meta = {
         "TP1":  ("\u2705", "TP1 HIT", "First target (2R) reached"),
         "TP2":  ("\U0001F3C1", "TP2 HIT - trade complete", "Final target (3R) reached"),
-        "STOP": ("\u274C", "STOPPED OUT", "Structure stop hit"),
+        "STOP": ("\u274C", "STOPPED OUT", "Pattern stop hit"),
     }[kind]
     icon, big, sub = meta
-    lines = [
+    return "\n".join([
         f"{icon} <b>{big} \u00b7 {esc(sym)} {v}</b>  <code>{pl_s}</code>",
         f"<i>{sub}</i>",
         "",
@@ -790,8 +497,7 @@ def lifecycle_message(asset, kind, trade, exit_px, event_t, note):
         "",
         f"{esc(note)}",
         f"<i>\u26A0 {DISCLAIMER_TXT}</i>",
-    ]
-    return "\n".join(lines)
+    ])
 
 
 # ------------------------------- state ------------------------------------
@@ -808,13 +514,12 @@ def save_state(state):
 
 
 def blank_asset_state():
-    return {"phase": "IDLE", "last_setup_check": 0, "watch": None,
-            "trade": None, "extended": None}
+    return {"phase": "SCAN", "last_setup_check": 0, "last_candle_t": 0,
+            "seq": None, "trade": None}
 
 
 # ------------------------------- agent ------------------------------------
 def process_open_trade(asset, trade, candles, last_closed_t):
-    """Stop/TP tracking on 5m candles."""
     sym = asset["symbol"]
     changed = False
     new_candles = [c for c in candles
@@ -829,9 +534,9 @@ def process_open_trade(asset, trade, candles, last_closed_t):
         if hit_stop:
             note = ("Stop moved to breakeven after TP1, so this exit is at entry."
                     if trade["tp1_hit"] else
-                    "Structure stop was hit. Wait for the next breakout watch.")
+                    "Pattern stop was hit. Wait for the next full sequence.")
             send_telegram(lifecycle_message(asset, "STOP", trade,
-                                             trade["stop"], c["t"], note))
+                                            trade["stop"], c["t"], note))
             log(f"{sym}: STOPPED OUT at ${fmt_px(trade['stop'])} -> telegram sent")
             RUN_ALERTS.append(f"{sym} STOPPED OUT ({pnl_pct(trade, trade['stop']):+.2f}%)")
             return None, True
@@ -851,7 +556,7 @@ def process_open_trade(asset, trade, candles, last_closed_t):
                 trade["stop"] = trade["entry"]
                 note += " Stop moved to breakeven - remaining position is risk-free."
             send_telegram(lifecycle_message(asset, "TP1", trade,
-                                             trade["tp1"], c["t"], note))
+                                            trade["tp1"], c["t"], note))
             log(f"{sym}: TP1 HIT at ${fmt_px(trade['tp1'])} -> telegram sent")
             RUN_ALERTS.append(f"{sym} TP1 HIT ({pnl_pct(trade, trade['tp1']):+.2f}%)")
             changed = True
@@ -862,6 +567,105 @@ def process_open_trade(asset, trade, candles, last_closed_t):
         trade["checked_t"] = last_closed_t
         changed = True
     return trade, changed
+
+
+def process_candle(asset, ast, real, ha, kline, a15, i, source):
+    """Walk ONE newly closed 15m candle (index i) through the sequence."""
+    sym = asset["symbol"]
+    ha_c = ha[i]
+
+    def enter_confirm(direction, kval):
+        ast["seq"] = {"direction": direction, "stage": "CONFIRM",
+                      "ttl": CONFIRM_TTL, "kval": kval,
+                      "pattern_ext": real[i]["l"] if direction == "LONG"
+                      else real[i]["h"],
+                      "confirms": 0, "rules": []}
+        ast["phase"] = "CONFIRM"
+        send_telegram(doji_message(asset, direction, kval,
+                                   real[i]["c"], real[i]["t"]))
+        log(f"{sym}: {'green' if direction == 'LONG' else 'red'} HA doji -> "
+            "telegram sent, watching for 2 strong candles")
+        RUN_ALERTS.append(f"{sym} {direction} doji spotted - watching")
+
+    seq = ast["seq"]
+
+    # expiry falls through to a fresh scan of this same candle
+    if seq is not None:
+        seq["ttl"] -= 1
+        if seq["ttl"] <= 0:
+            log(f"{sym}: {seq['stage']} {seq['direction']} expired - rescanning")
+            ast["seq"], ast["phase"], seq = None, "SCAN", None
+
+    # ---- SCAN: hunt a stochastic setup (and catch a same-candle doji) ------
+    if seq is None:
+        for direction in (["LONG"] + (["SHORT"] if ENABLE_SHORTS else [])):
+            if stoch_setup(kline, i, direction == "LONG"):
+                if is_doji(ha_c, direction == "LONG"):
+                    enter_confirm(direction, kline[i])
+                else:
+                    ast["seq"] = {"direction": direction, "stage": "WAIT_DOJI",
+                                  "ttl": WAIT_DOJI_TTL, "kval": kline[i],
+                                  "pattern_ext": None, "confirms": 0,
+                                  "rules": []}
+                    ast["phase"] = "WAIT_DOJI"
+                    log(f"{sym}: stoch setup {direction} (%K {kline[i]:.1f}) - "
+                        "waiting for doji")
+                return True
+        return False
+
+    direction = seq["direction"]
+    long = direction == "LONG"
+
+    # ---- WAIT_DOJI ----------------------------------------------------------
+    if seq["stage"] == "WAIT_DOJI":
+        if is_doji(ha_c, long):
+            enter_confirm(direction, seq["kval"])
+        return True
+
+    # ---- CONFIRM: need two consecutive rule-perfect candles -----------------
+    if seq["stage"] == "CONFIRM":
+        ok, rules = is_strong(ha_c, a15[i], long)
+        if long:
+            seq["pattern_ext"] = min(seq["pattern_ext"], real[i]["l"])
+        else:
+            seq["pattern_ext"] = max(seq["pattern_ext"], real[i]["h"])
+        if ok:
+            seq["confirms"] += 1
+            seq["rules"].append(rules)
+            if seq["confirms"] >= 2:
+                entry = real[i]["c"]
+                pad = STOP_PAD_ATR * (a15[i] or 0)
+                stop = (seq["pattern_ext"] - pad) if long                     else (seq["pattern_ext"] + pad)
+                risk = abs(entry - stop)
+                if risk > 0:
+                    sign = 1 if long else -1
+                    plan = {"entry": entry, "stop": stop, "risk": risk,
+                            "tp1": entry + sign * R_TP1 * risk,
+                            "tp2": entry + sign * R_TP2 * risk}
+                    send_telegram(entry_message(asset, direction, plan,
+                                                seq["rules"][0], seq["rules"][1],
+                                                seq["kval"], source,
+                                                real[i]["t"]))
+                    log(f"ALERT SENT -> telegram: {sym} {direction} "
+                        f"REVERSAL ENTRY @ ${fmt_px(entry)}")
+                    RUN_ALERTS.append(f"{sym} {direction} reversal entry "
+                                      f"@ ${fmt_px(entry)}")
+                    ast["trade"] = {"verdict": direction, "entry": entry,
+                                    "stop": stop, "tp1": plan["tp1"],
+                                    "tp2": plan["tp2"], "tp1_hit": False,
+                                    "opened_t": real[i]["t"],
+                                    "checked_t": real[i]["t"]}
+                    ast["phase"] = "IN_TRADE"
+                ast["seq"] = None
+        elif is_doji(ha_c, long):
+            seq["confirms"] = 0        # extra doji: still waiting, streak resets
+            seq["rules"] = []
+        else:
+            log(f"{sym}: confirmation broken ({direction}) - back to SCAN")
+            ast["seq"], ast["phase"] = None, "SCAN"
+        return True
+
+    return False
 
 
 def check_asset(asset, state):
@@ -880,142 +684,45 @@ def check_asset(asset, state):
             ast["trade"] = trade
             changed = changed or ch
             if trade is None:
-                ast["phase"] = "IDLE"
-        RUN_STATUS.append(f"{sym} IN_TRADE" if ast["trade"] else f"{sym} IDLE")
+                ast["phase"] = "SCAN"
+        RUN_STATUS.append(f"{sym} IN_TRADE" if ast["trade"] else f"{sym} SCAN")
         state[sym] = ast
         return changed
 
-    # ---- WATCH: monitor the coil for a fill / cancel / surge ---------------
-    if ast.get("watch"):
-        watch = ast["watch"]
-        direction = watch["direction"]
-        if now_ms > watch["expires_t"]:
-            log(f"{sym}: breakout watch expired untriggered")
-            send_telegram(cancel_message(asset, direction, watch, watch["px"],
-                                         "Watch expired without a breakout",
-                                         now_ms))
-            RUN_ALERTS.append(f"{sym} watch expired - pull orders")
-            ast["watch"], ast["phase"] = None, "IDLE"
-            changed = True
-        else:
-            source, c5 = fetch(asset, "5m", 30)
-            if c5:
-                ev = watch_check(direction, c5, watch)
-                if ev:
-                    kind, px, t, vol_ok = ev
-                    if kind == "FILL":
-                        send_telegram(fill_message(asset, direction, watch, t, vol_ok))
-                        log(f"ALERT SENT -> telegram: {sym} {direction} "
-                            f"TRIGGERED @ ${fmt_px(watch['trigger'])}")
-                        RUN_ALERTS.append(
-                            f"{sym} {direction} TRIGGERED @ ${fmt_px(watch['trigger'])}"
-                            + ("" if vol_ok else " (low-vol)"))
-                        ast["trade"] = {"verdict": direction,
-                                        "entry": watch["trigger"],
-                                        "stop": watch["stop"],
-                                        "tp1": watch["tp1"],
-                                        "tp2": watch["tp2"],
-                                        "tp1_hit": False,
-                                        "opened_t": t, "checked_t": t}
-                        ast["watch"], ast["phase"] = None, "IN_TRADE"
-                    elif kind == "CANCEL":
-                        send_telegram(cancel_message(
-                            asset, direction, watch, px,
-                            "Coil broke down through the stop side", t))
-                        log(f"{sym}: watch cancelled - coil broke down")
-                        RUN_ALERTS.append(f"{sym} watch cancelled - pull orders")
-                        ast["watch"], ast["phase"] = None, "IDLE"
-                    elif kind == "SURGE":
-                        watch["surged"] = True
-                        send_telegram(surge_message(asset, direction, watch, px, t))
-                        log(f"{sym}: surge nudge sent")
-                        RUN_ALERTS.append(f"{sym} pressure surge into trigger")
-                    changed = True
-        RUN_STATUS.append(f"{sym} {ast['phase']}"
-                          + (f" (WATCH {direction})" if ast.get("watch") else ""))
-        state[sym] = ast
-        return changed
-
-    # ---- EXTENDED / IDLE both refresh on the ~30m cadence -------------------
-    if now_ms - ast["last_setup_check"] < SETUP_REFRESH_MIN * 60_000:
+    # ---- gate the 15m scan cadence ----------------------------------------
+    if now_ms - ast["last_setup_check"] < SETUP_REFRESH_MIN * 60_000 \
+            and ast["seq"] is None:
         RUN_STATUS.append(f"{sym} {ast['phase']}")
         state[sym] = ast
         return changed
-
     ast["last_setup_check"] = now_ms
     changed = True
-    src15, c15 = fetch(asset, "15m", 215)
-    src4h, c4h = fetch(asset, "4h", 205)
-    if not c15 or not c4h:
+
+    source, c15 = fetch(asset, "15m", 60)
+    if not c15:
         RUN_STATUS.append(f"{sym} feed failed")
         state[sym] = ast
         return changed
 
-    def open_watch(direction, ctx, source, t):
-        ast["watch"] = {"direction": direction,
-                        "trigger": ctx["trigger"], "stop": ctx["stop"],
-                        "tp1": ctx["tp1"], "tp2": ctx["tp2"],
-                        "px": ctx["px"], "risk": ctx["risk"],
-                        "tier": ctx["tier"],
-                        "expires_t": now_ms + WATCH_TTL_MIN * 60_000}
-        ast["phase"] = "WATCH"
-        send_telegram(watch_message(asset, direction, ctx, source, t))
-        log(f"{sym}: {ctx['tier']} SCALP WATCH {direction} - "
-            f"trigger ${fmt_px(ctx['trigger'])}, stop ${fmt_px(ctx['stop'])} "
-            f"({ctx['passed']}/7)")
-        RUN_ALERTS.append(f"{sym} {ctx['tier']} watch {direction} "
-                          f"@ ${fmt_px(ctx['trigger'])}")
+    ha = heikin_ashi(c15)
+    kline, _ = stochastic(c15)
+    a15 = atr(c15)
 
-    # ---- EXTENDED: wait for the retest before opening a watch ---------------
-    if ast["extended"]:
-        ext = ast["extended"]
-        direction = ext["direction"]
-        if now_ms > ext["expires_t"]:
-            log(f"{sym}: EXTENDED {direction} expired - back to IDLE")
-            ast["extended"], ast["phase"] = None, "IDLE"
-        else:
-            ok, retest_checks = retest_check(direction, c15)
-            tier, checks, ctx = scalp_setup(direction, c4h, c15)
-            if ok and ctx is not None and tier is not None \
-                    and not is_extended(direction, ctx["rsi"]) \
-                    and (tier == "A+" or TIER_B_ALERTS):
-                send_telegram(retest_armed_message(
-                    asset, direction, retest_checks, ctx["px"],
-                    ctx["stop"], ctx["trigger"], c15[-2]["t"]))
-                log(f"{sym}: RETEST CONFIRMED -> scalp watch {direction}")
-                RUN_ALERTS.append(f"{sym} retest confirmed - {tier} watch {direction}")
-                ast["extended"] = None
-                open_watch(direction, ctx, src15, c15[-2]["t"])
-        RUN_STATUS.append(f"{sym} {ast['phase']}"
-                          + (f" ({direction})" if ast["phase"] != "IDLE" else ""))
-        state[sym] = ast
-        return True
-
-    # ---- IDLE: fresh tiered scan --------------------------------------------
-    directions = ["LONG"] + (["SHORT"] if ENABLE_SHORTS else [])
-    for direction in directions:
-        tier, checks, ctx = scalp_setup(direction, c4h, c15)
-        if ctx is None or tier is None:
+    # process each newly CLOSED candle exactly once, in order
+    last_closed = len(c15) - 2
+    for i in range(len(c15)):
+        if i > last_closed or c15[i]["t"] <= ast["last_candle_t"]:
             continue
-        if is_extended(direction, ctx["rsi"]):
-            ast["extended"] = {"direction": direction, "since": now_ms,
-                               "expires_t": now_ms + EXTENDED_TTL_MIN * 60_000,
-                               "rsi": ctx["rsi"]}
-            ast["phase"] = "EXTENDED"
-            send_telegram(extended_message(asset, direction, ctx["rsi"],
-                                           ctx["px"], c15[-2]["t"]))
-            log(f"{sym}: EXTENDED {direction} (RSI {ctx['rsi']:.1f})")
-            RUN_ALERTS.append(f"{sym} EXTENDED (RSI {ctx['rsi']:.0f}) - wait for retest")
+        ch = process_candle(asset, ast, c15, ha, kline, a15, i, source)
+        changed = changed or ch
+        ast["last_candle_t"] = c15[i]["t"]
+        if ast["trade"]:
             break
-        if tier == "B" and not TIER_B_ALERTS:
-            continue
-        open_watch(direction, ctx, src15, c15[-2]["t"])
-        break
 
-    RUN_STATUS.append(f"{sym} {ast['phase']}"
-                      + (f" ({ast['watch']['direction']})" if ast.get("watch")
-                         else f" ({ast['extended']['direction']})" if ast.get("extended")
-                         else ""))
+    stage = ast["phase"]
+    if ast["seq"]:
+        stage += f" ({ast['seq']['direction']})"
+    RUN_STATUS.append(f"{sym} {stage}")
     state[sym] = ast
     return changed
 
@@ -1050,7 +757,7 @@ def seconds_to_next_close(buffer_s=15):
 
 
 def run_loop():
-    log("Multi-timeframe alert agent started (loop mode). Ctrl+C to stop.")
+    log("Heikin Ashi reversal agent started (loop mode). Ctrl+C to stop.")
     check_once()
     while True:
         wait = seconds_to_next_close()
@@ -1070,16 +777,16 @@ if __name__ == "__main__":
         sys.exit(1)
     if "--test" in sys.argv:
         if DISCOVER_ALL:
-            watched = (f"all Hyperliquid markets (crypto + xyz stocks) above "
+            watched = (f"all Hyperliquid markets above "
                        f"${MIN_DAY_VOLUME_USD:,.0f} 24h volume, max {MAX_ASSETS}")
         else:
             watched = ", ".join(a["symbol"] for a in ASSETS)
         send_telegram("\u2705 <b>Signal alert agent - test message</b>\n"
                       f"Your alert pipeline works. Watching: {esc(watched)}.\n"
-                      "Strategy: 4H/1H/VWAP alignment \u2192 15m pullback "
-                      "\u2192 5m breakout, tiered \U0001F7E2 A+ / \U0001F7E1 B "
-                      "watches with resting-order plans, volume-graded fills, "
-                      "2R/3R targets, breakeven after TP1.")
+                      "Strategy: 15m Heikin Ashi + stochastic reversals - "
+                      "exhaustion cross \u2192 doji \u2192 two strong HA candles "
+                      "\u2192 entry with pattern stop, 2R/3R targets, "
+                      "breakeven after TP1.")
         print("Test message sent to Telegram.")
     elif "--loop" in sys.argv:
         run_loop()
