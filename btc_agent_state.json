@@ -1,1 +1,1241 @@
-{}
+{
+  "BTC": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346714244,
+    "last_candle_t": 1784345400000,
+    "seq": null,
+    "trade": null
+  },
+  "ETH": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346714722,
+    "last_candle_t": 1784345400000,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:SKHX": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346715087,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:SNDK": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346715348,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:XYZ100": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346715598,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:MU": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346715891,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "HYPE": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346716154,
+    "last_candle_t": 1784345400000,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:SP500": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346716624,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:SKHY": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346716875,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:DRAM": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346717211,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:CL": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346717470,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:SPCX": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346717737,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:BRENTOIL": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346717987,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:SILVER": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346718250,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "SOL": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346718549,
+    "last_candle_t": 1784345400000,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:AAPL": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346718911,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "ZEC": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346719168,
+    "last_candle_t": 1784345400000,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:SMSN": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346719424,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:EWY": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346719682,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:NVDA": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346719943,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "CASHCAT": {
+    "phase": "WAIT_DOJI",
+    "last_setup_check": 1784346720194,
+    "last_candle_t": 1784345400000,
+    "seq": {
+      "direction": "LONG",
+      "stage": "WAIT_DOJI",
+      "ttl": 8,
+      "kval": 16.855721937922045,
+      "pattern_ext": null,
+      "confirms": 0,
+      "rules": []
+    },
+    "trade": null
+  },
+  "xyz:xyz:META": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346720450,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:INTC": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346720702,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:CRCL": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346720963,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:MRVL": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346721232,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:AMD": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346721492,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:GOLD": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346721773,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:NBIS": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346722030,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "LIT": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346722428,
+    "last_candle_t": 1784345400000,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:TSLA": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346722796,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:GOOGL": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346723067,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "XRP": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346723324,
+    "last_candle_t": 1784345400000,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:MSFT": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346723793,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:AMZN": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346724056,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "KAITO": {
+    "phase": "WAIT_DOJI",
+    "last_setup_check": 1784346724318,
+    "last_candle_t": 1784345400000,
+    "seq": {
+      "direction": "LONG",
+      "stage": "WAIT_DOJI",
+      "ttl": 8,
+      "kval": 5.177247676819444,
+      "pattern_ext": null,
+      "confirms": 0,
+      "rules": []
+    },
+    "trade": null
+  },
+  "PUMP": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346724588,
+    "last_candle_t": 1784345400000,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:ORCL": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346724846,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "NEAR": {
+    "phase": "WAIT_DOJI",
+    "last_setup_check": 1784346725099,
+    "last_candle_t": 1784345400000,
+    "seq": {
+      "direction": "SHORT",
+      "stage": "WAIT_DOJI",
+      "ttl": 9,
+      "kval": 80.92130755402091,
+      "pattern_ext": null,
+      "confirms": 0,
+      "rules": []
+    },
+    "trade": null
+  },
+  "xyz:xyz:CBRS": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346725570,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "ONDO": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346725820,
+    "last_candle_t": 1784345400000,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:NATGAS": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346726124,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:MSTR": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346726384,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:CXMT": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346726632,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:TSM": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346726884,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:HOOD": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346727139,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "FARTCOIN": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346727476,
+    "last_candle_t": 1784345400000,
+    "seq": null,
+    "trade": null
+  },
+  "SUI": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346727880,
+    "last_candle_t": 1784345400000,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:NFLX": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346728146,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "GRAM": {
+    "phase": "CONFIRM",
+    "last_setup_check": 1784346728399,
+    "last_candle_t": 1784345400000,
+    "seq": {
+      "direction": "LONG",
+      "stage": "CONFIRM",
+      "ttl": 6,
+      "kval": 13.089005235602274,
+      "pattern_ext": 1.4836,
+      "confirms": 0,
+      "rules": []
+    },
+    "trade": null
+  },
+  "WLD": {
+    "phase": "WAIT_DOJI",
+    "last_setup_check": 1784346729324,
+    "last_candle_t": 1784345400000,
+    "seq": {
+      "direction": "LONG",
+      "stage": "WAIT_DOJI",
+      "ttl": 10,
+      "kval": 8.072062043606637,
+      "pattern_ext": null,
+      "confirms": 0,
+      "rules": []
+    },
+    "trade": null
+  },
+  "AAVE": {
+    "phase": "WAIT_DOJI",
+    "last_setup_check": 1784346729682,
+    "last_candle_t": 1784345400000,
+    "seq": {
+      "direction": "LONG",
+      "stage": "WAIT_DOJI",
+      "ttl": 9,
+      "kval": 7.445212428582241,
+      "pattern_ext": null,
+      "confirms": 0,
+      "rules": []
+    },
+    "trade": null
+  },
+  "UNI": {
+    "phase": "WAIT_DOJI",
+    "last_setup_check": 1784346729945,
+    "last_candle_t": 1784345400000,
+    "seq": {
+      "direction": "LONG",
+      "stage": "WAIT_DOJI",
+      "ttl": 10,
+      "kval": 3.29155140796118,
+      "pattern_ext": null,
+      "confirms": 0,
+      "rules": []
+    },
+    "trade": null
+  },
+  "xyz:xyz:CRWV": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346730222,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:BABA": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346730487,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:BB": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346730737,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "VVV": {
+    "phase": "WAIT_DOJI",
+    "last_setup_check": 1784346731000,
+    "last_candle_t": 1784345400000,
+    "seq": {
+      "direction": "SHORT",
+      "stage": "WAIT_DOJI",
+      "ttl": 8,
+      "kval": 85.91834939273694,
+      "pattern_ext": null,
+      "confirms": 0,
+      "rules": []
+    },
+    "trade": null
+  },
+  "xyz:xyz:KIOXIA": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346731254,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "kBONK": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346731507,
+    "last_candle_t": 1784345400000,
+    "seq": null,
+    "trade": null
+  },
+  "kPEPE": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346731764,
+    "last_candle_t": 1784345400000,
+    "seq": null,
+    "trade": null
+  },
+  "LINK": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346732019,
+    "last_candle_t": 1784345400000,
+    "seq": null,
+    "trade": null
+  },
+  "ADA": {
+    "phase": "IN_TRADE",
+    "last_setup_check": 1784346732431,
+    "last_candle_t": 1784345400000,
+    "seq": null,
+    "trade": {
+      "verdict": "SHORT",
+      "entry": 0.16724,
+      "stop": 0.1687795982514385,
+      "tp1": 0.16416080349712298,
+      "tp2": 0.16262120524568446,
+      "tp1_hit": false,
+      "opened_t": 1784345400000,
+      "checked_t": 1784345400000
+    }
+  },
+  "BNB": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346733861,
+    "last_candle_t": 1784345400000,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:PURRDAT": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346734197,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:RKLB": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346734461,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:ZHIPU": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346734712,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:COPPER": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346734970,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:ARM": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346735256,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "AVAX": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346735508,
+    "last_candle_t": 1784345400000,
+    "seq": null,
+    "trade": null
+  },
+  "XMR": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346735955,
+    "last_candle_t": 1784345400000,
+    "seq": null,
+    "trade": null
+  },
+  "TRX": {
+    "phase": "WAIT_DOJI",
+    "last_setup_check": 1784346736807,
+    "last_candle_t": 1784345400000,
+    "seq": {
+      "direction": "LONG",
+      "stage": "WAIT_DOJI",
+      "ttl": 10,
+      "kval": 8.386075949369724,
+      "pattern_ext": null,
+      "confirms": 0,
+      "rules": []
+    },
+    "trade": null
+  },
+  "ARB": {
+    "phase": "WAIT_DOJI",
+    "last_setup_check": 1784346737063,
+    "last_candle_t": 1784345400000,
+    "seq": {
+      "direction": "LONG",
+      "stage": "WAIT_DOJI",
+      "ttl": 9,
+      "kval": 5.66801619433166,
+      "pattern_ext": null,
+      "confirms": 0,
+      "rules": []
+    },
+    "trade": null
+  },
+  "ENA": {
+    "phase": "WAIT_DOJI",
+    "last_setup_check": 1784346737579,
+    "last_candle_t": 1784345400000,
+    "seq": {
+      "direction": "SHORT",
+      "stage": "WAIT_DOJI",
+      "ttl": 8,
+      "kval": 81.60965534776783,
+      "pattern_ext": null,
+      "confirms": 0,
+      "rules": []
+    },
+    "trade": null
+  },
+  "XPL": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346737943,
+    "last_candle_t": 1784345400000,
+    "seq": null,
+    "trade": null
+  },
+  "TAO": {
+    "phase": "WAIT_DOJI",
+    "last_setup_check": 1784346738211,
+    "last_candle_t": 1784345400000,
+    "seq": {
+      "direction": "LONG",
+      "stage": "WAIT_DOJI",
+      "ttl": 9,
+      "kval": 7.92113810328808,
+      "pattern_ext": null,
+      "confirms": 0,
+      "rules": []
+    },
+    "trade": null
+  },
+  "xyz:xyz:LITE": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346738605,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:COIN": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346738855,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:JPY": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346739112,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "AERO": {
+    "phase": "CONFIRM",
+    "last_setup_check": 1784346739375,
+    "last_candle_t": 1784345400000,
+    "seq": {
+      "direction": "SHORT",
+      "stage": "CONFIRM",
+      "ttl": 6,
+      "kval": 93.15487138420656,
+      "pattern_ext": 0.4777,
+      "confirms": 0,
+      "rules": []
+    },
+    "trade": null
+  },
+  "LTC": {
+    "phase": "WAIT_DOJI",
+    "last_setup_check": 1784346740192,
+    "last_candle_t": 1784345400000,
+    "seq": {
+      "direction": "SHORT",
+      "stage": "WAIT_DOJI",
+      "ttl": 8,
+      "kval": 88.77611076127276,
+      "pattern_ext": null,
+      "confirms": 0,
+      "rules": []
+    },
+    "trade": null
+  },
+  "xyz:xyz:SHAZ": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346740451,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "DOGE": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346740702,
+    "last_candle_t": 1784345400000,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:HYUNDAI": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346741174,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "ETHFI": {
+    "phase": "WAIT_DOJI",
+    "last_setup_check": 1784346741440,
+    "last_candle_t": 1784345400000,
+    "seq": {
+      "direction": "LONG",
+      "stage": "WAIT_DOJI",
+      "ttl": 8,
+      "kval": 6.88744900407939,
+      "pattern_ext": null,
+      "confirms": 0,
+      "rules": []
+    },
+    "trade": null
+  },
+  "xyz:xyz:PLATINUM": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346741807,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:NOK": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346742060,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "CRV": {
+    "phase": "WAIT_DOJI",
+    "last_setup_check": 1784346742480,
+    "last_candle_t": 1784345400000,
+    "seq": {
+      "direction": "LONG",
+      "stage": "WAIT_DOJI",
+      "ttl": 9,
+      "kval": 1.624602153654762,
+      "pattern_ext": null,
+      "confirms": 0,
+      "rules": []
+    },
+    "trade": null
+  },
+  "xyz:xyz:JP225": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346742948,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "TRUMP": {
+    "phase": "WAIT_DOJI",
+    "last_setup_check": 1784346743210,
+    "last_candle_t": 1784345400000,
+    "seq": {
+      "direction": "SHORT",
+      "stage": "WAIT_DOJI",
+      "ttl": 8,
+      "kval": 88.57253252141719,
+      "pattern_ext": null,
+      "confirms": 0,
+      "rules": []
+    },
+    "trade": null
+  },
+  "xyz:xyz:IBM": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346743571,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:PLTR": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346743831,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:DELL": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346744170,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:BE": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346744462,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "PAXG": {
+    "phase": "WAIT_DOJI",
+    "last_setup_check": 1784346744732,
+    "last_candle_t": 1784345400000,
+    "seq": {
+      "direction": "SHORT",
+      "stage": "WAIT_DOJI",
+      "ttl": 10,
+      "kval": 98.4126984126998,
+      "pattern_ext": null,
+      "confirms": 0,
+      "rules": []
+    },
+    "trade": null
+  },
+  "xyz:xyz:QNT": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346744987,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "BCH": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346745257,
+    "last_candle_t": 1784345400000,
+    "seq": null,
+    "trade": null
+  },
+  "VIRTUAL": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346745686,
+    "last_candle_t": 1784345400000,
+    "seq": null,
+    "trade": null
+  },
+  "DOT": {
+    "phase": "WAIT_DOJI",
+    "last_setup_check": 1784346746046,
+    "last_candle_t": 1784345400000,
+    "seq": {
+      "direction": "LONG",
+      "stage": "WAIT_DOJI",
+      "ttl": 10,
+      "kval": 11.689958896065734,
+      "pattern_ext": null,
+      "confirms": 0,
+      "rules": []
+    },
+    "trade": null
+  },
+  "ENS": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346746410,
+    "last_candle_t": 1784345400000,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:WDC": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346746729,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "ZRO": {
+    "phase": "WAIT_DOJI",
+    "last_setup_check": 1784346746980,
+    "last_candle_t": 1784345400000,
+    "seq": {
+      "direction": "SHORT",
+      "stage": "WAIT_DOJI",
+      "ttl": 8,
+      "kval": 88.48625979915204,
+      "pattern_ext": null,
+      "confirms": 0,
+      "rules": []
+    },
+    "trade": null
+  },
+  "PENGU": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346747236,
+    "last_candle_t": 1784345400000,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:SMH": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346747793,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "EIGEN": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346748057,
+    "last_candle_t": 1784345400000,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:NOW": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346748528,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "INJ": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346748785,
+    "last_candle_t": 1784345400000,
+    "seq": null,
+    "trade": null
+  },
+  "JTO": {
+    "phase": "WAIT_DOJI",
+    "last_setup_check": 1784346749255,
+    "last_candle_t": 1784345400000,
+    "seq": {
+      "direction": "LONG",
+      "stage": "WAIT_DOJI",
+      "ttl": 10,
+      "kval": 10.168865010643593,
+      "pattern_ext": null,
+      "confirms": 0,
+      "rules": []
+    },
+    "trade": null
+  },
+  "xyz:xyz:STRC": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346749512,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:HIMS": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346749765,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "LDO": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346750016,
+    "last_candle_t": 1784345400000,
+    "seq": null,
+    "trade": null
+  },
+  "JUP": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346750286,
+    "last_candle_t": 1784345400000,
+    "seq": null,
+    "trade": null
+  },
+  "XLM": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346750672,
+    "last_candle_t": 1784345400000,
+    "seq": null,
+    "trade": null
+  },
+  "SPX": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346750932,
+    "last_candle_t": 1784345400000,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:ZM": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346751199,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:BOT": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346751464,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "WLFI": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346751714,
+    "last_candle_t": 1784345400000,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:EWJ": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346751987,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:XLE": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346752267,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:KR200": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346752858,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "APT": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346753113,
+    "last_candle_t": 1784345400000,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:LLY": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346753368,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:QCOM": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346753640,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:AVGO": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346753891,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "MET": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346754168,
+    "last_candle_t": 1784345400000,
+    "seq": null,
+    "trade": null
+  },
+  "MON": {
+    "phase": "WAIT_DOJI",
+    "last_setup_check": 1784346754421,
+    "last_candle_t": 1784345400000,
+    "seq": {
+      "direction": "LONG",
+      "stage": "WAIT_DOJI",
+      "ttl": 8,
+      "kval": 7.268957156984526,
+      "pattern_ext": null,
+      "confirms": 0,
+      "rules": []
+    },
+    "trade": null
+  },
+  "xyz:xyz:MINIMAX": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346754914,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:COST": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346755165,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "STABLE": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346755437,
+    "last_candle_t": 1784345400000,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:RIVN": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346755695,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "PYTH": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346755961,
+    "last_candle_t": 1784345400000,
+    "seq": null,
+    "trade": null
+  },
+  "MORPHO": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346756325,
+    "last_candle_t": 1784345400000,
+    "seq": null,
+    "trade": null
+  },
+  "TIA": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346756692,
+    "last_candle_t": 1784345400000,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:EUR": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346756965,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "ASTER": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346757217,
+    "last_candle_t": 1784345400000,
+    "seq": null,
+    "trade": null
+  },
+  "OP": {
+    "phase": "WAIT_DOJI",
+    "last_setup_check": 1784346757623,
+    "last_candle_t": 1784345400000,
+    "seq": {
+      "direction": "SHORT",
+      "stage": "WAIT_DOJI",
+      "ttl": 8,
+      "kval": 86.27655677655686,
+      "pattern_ext": null,
+      "confirms": 0,
+      "rules": []
+    },
+    "trade": null
+  },
+  "ICP": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346757880,
+    "last_candle_t": 1784345400000,
+    "seq": null,
+    "trade": null
+  },
+  "xyz:xyz:AMAT": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346758184,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "MEGA": {
+    "phase": "WAIT_DOJI",
+    "last_setup_check": 1784346758448,
+    "last_candle_t": 1784345400000,
+    "seq": {
+      "direction": "SHORT",
+      "stage": "WAIT_DOJI",
+      "ttl": 8,
+      "kval": 85.32425158722769,
+      "pattern_ext": null,
+      "confirms": 0,
+      "rules": []
+    },
+    "trade": null
+  },
+  "GRASS": {
+    "phase": "WAIT_DOJI",
+    "last_setup_check": 1784346758729,
+    "last_candle_t": 1784345400000,
+    "seq": {
+      "direction": "LONG",
+      "stage": "WAIT_DOJI",
+      "ttl": 9,
+      "kval": 10.540090302023271,
+      "pattern_ext": null,
+      "confirms": 0,
+      "rules": []
+    },
+    "trade": null
+  },
+  "xyz:xyz:BX": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346759000,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "STRK": {
+    "phase": "CONFIRM",
+    "last_setup_check": 1784346759256,
+    "last_candle_t": 1784345400000,
+    "seq": {
+      "direction": "LONG",
+      "stage": "CONFIRM",
+      "ttl": 6,
+      "kval": 11.779448621553746,
+      "pattern_ext": 0.02759,
+      "confirms": 0,
+      "rules": []
+    },
+    "trade": null
+  },
+  "xyz:xyz:ASML": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346760091,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "PENDLE": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346760355,
+    "last_candle_t": 1784345400000,
+    "seq": null,
+    "trade": null
+  },
+  "AR": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346760617,
+    "last_candle_t": 1784345400000,
+    "seq": null,
+    "trade": null
+  },
+  "VINE": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346760874,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "WIF": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346761128,
+    "last_candle_t": 0,
+    "seq": null,
+    "trade": null
+  },
+  "FET": {
+    "phase": "SCAN",
+    "last_setup_check": 1784346761387,
+    "last_candle_t": 1784345400000,
+    "seq": null,
+    "trade": null
+  }
+}
