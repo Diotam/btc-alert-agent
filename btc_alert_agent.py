@@ -70,7 +70,7 @@ ASSETS = [                         # used when DISCOVER_ALL = False / discovery 
 ENABLE_SHORTS = True
 ALERT_ENTRIES = True         # entry alerts (the signal itself)
 ALERT_STAGES = False         # "DOJI SPOTTED" heads-up messages
-ALERT_LIFECYCLE = False      # TP1 / TP2 / STOPPED OUT trade updates
+ALERT_LIFECYCLE = True       # TP1 / TP2 / STOPPED OUT trade updates
 STOCH_K = 14                 # stochastic lookback
 STOCH_SMOOTH = 3             # %K smoothing (slow stochastic)
 STOCH_D = 3                  # %D smoothing
