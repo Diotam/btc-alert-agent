@@ -1,12 +1,12 @@
 {
   "BTC": {
     "phase": "WAIT_DOJI",
-    "last_setup_check": 1784378225995,
-    "last_candle_t": 1784376900000,
+    "last_setup_check": 1784383589353,
+    "last_candle_t": 1784382300000,
     "seq": {
       "direction": "SHORT",
       "stage": "WAIT_DOJI",
-      "ttl": 8,
+      "ttl": 5,
       "kval": 86.14724480578138,
       "pattern_ext": null,
       "confirms": 0,
@@ -16,247 +16,239 @@
   },
   "ETH": {
     "phase": "SCAN",
-    "last_setup_check": 1784378226293,
-    "last_candle_t": 1784376900000,
+    "last_setup_check": 1784383589699,
+    "last_candle_t": 1784382300000,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:SKHX": {
     "phase": "SCAN",
-    "last_setup_check": 1784378227473,
+    "last_setup_check": 1784383591299,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:SNDK": {
     "phase": "SCAN",
-    "last_setup_check": 1784378227174,
+    "last_setup_check": 1784383590207,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:XYZ100": {
     "phase": "SCAN",
-    "last_setup_check": 1784378226878,
+    "last_setup_check": 1784383590948,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:MU": {
     "phase": "SCAN",
-    "last_setup_check": 1784378227765,
+    "last_setup_check": 1784383591648,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "HYPE": {
     "phase": "SCAN",
-    "last_setup_check": 1784378228346,
-    "last_candle_t": 1784376900000,
+    "last_setup_check": 1784383592146,
+    "last_candle_t": 1784382300000,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:SP500": {
     "phase": "SCAN",
-    "last_setup_check": 1784378228054,
+    "last_setup_check": 1784383590558,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:SKHY": {
     "phase": "SCAN",
-    "last_setup_check": 1784378228816,
+    "last_setup_check": 1784383593126,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:DRAM": {
     "phase": "SCAN",
-    "last_setup_check": 1784378229422,
+    "last_setup_check": 1784383593545,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:CL": {
     "phase": "SCAN",
-    "last_setup_check": 1784378229118,
+    "last_setup_check": 1784383592775,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:SPCX": {
     "phase": "SCAN",
-    "last_setup_check": 1784378229734,
+    "last_setup_check": 1784383593876,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:BRENTOIL": {
     "phase": "SCAN",
-    "last_setup_check": 1784378230022,
+    "last_setup_check": 1784383594249,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:SILVER": {
     "phase": "SCAN",
-    "last_setup_check": 1784378230898,
+    "last_setup_check": 1784383596127,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "SOL": {
     "phase": "SCAN",
-    "last_setup_check": 1784378230314,
-    "last_candle_t": 1784376900000,
+    "last_setup_check": 1784383595041,
+    "last_candle_t": 1784382300000,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:AAPL": {
     "phase": "SCAN",
-    "last_setup_check": 1784378232226,
+    "last_setup_check": 1784383597291,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "ZEC": {
     "phase": "SCAN",
-    "last_setup_check": 1784378231199,
-    "last_candle_t": 1784376900000,
+    "last_setup_check": 1784383594575,
+    "last_candle_t": 1784382300000,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:SMSN": {
     "phase": "SCAN",
-    "last_setup_check": 1784378231932,
+    "last_setup_check": 1784383595716,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:EWY": {
     "phase": "SCAN",
-    "last_setup_check": 1784378231634,
+    "last_setup_check": 1784383596451,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:NVDA": {
     "phase": "SCAN",
-    "last_setup_check": 1784378233153,
+    "last_setup_check": 1784383598659,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "CASHCAT": {
     "phase": "SCAN",
-    "last_setup_check": 1784378232558,
-    "last_candle_t": 1784376900000,
+    "last_setup_check": 1784383596810,
+    "last_candle_t": 1784382300000,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:META": {
     "phase": "SCAN",
-    "last_setup_check": 1784378232855,
+    "last_setup_check": 1784383597629,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:INTC": {
     "phase": "SCAN",
-    "last_setup_check": 1784378233440,
+    "last_setup_check": 1784383599026,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:CRCL": {
     "phase": "SCAN",
-    "last_setup_check": 1784378234029,
+    "last_setup_check": 1784383598333,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:MRVL": {
     "phase": "SCAN",
-    "last_setup_check": 1784378233733,
+    "last_setup_check": 1784383597956,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:AMD": {
     "phase": "SCAN",
-    "last_setup_check": 1784378234327,
+    "last_setup_check": 1784383599419,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:GOLD": {
     "phase": "SCAN",
-    "last_setup_check": 1784378234635,
+    "last_setup_check": 1784383601001,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:NBIS": {
     "phase": "SCAN",
-    "last_setup_check": 1784378235915,
+    "last_setup_check": 1784383601696,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "LIT": {
-    "phase": "WAIT_DOJI",
-    "last_setup_check": 1784378236505,
-    "last_candle_t": 1784376900000,
-    "seq": {
-      "direction": "LONG",
-      "stage": "WAIT_DOJI",
-      "ttl": 6,
-      "kval": 9.189111542052876,
-      "pattern_ext": null,
-      "confirms": 0,
-      "rules": []
-    },
+    "phase": "SCAN",
+    "last_setup_check": 1784383600134,
+    "last_candle_t": 1784382300000,
+    "seq": null,
     "trade": null
   },
   "xyz:xyz:TSLA": {
     "phase": "SCAN",
-    "last_setup_check": 1784378234933,
+    "last_setup_check": 1784383601371,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:GOOGL": {
     "phase": "SCAN",
-    "last_setup_check": 1784378236802,
+    "last_setup_check": 1784383602732,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "XRP": {
     "phase": "SCAN",
-    "last_setup_check": 1784378235284,
-    "last_candle_t": 1784376900000,
+    "last_setup_check": 1784383600482,
+    "last_candle_t": 1784382300000,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:MSFT": {
     "phase": "SCAN",
-    "last_setup_check": 1784378237089,
+    "last_setup_check": 1784383602021,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:AMZN": {
     "phase": "SCAN",
-    "last_setup_check": 1784378240088,
+    "last_setup_check": 1784383609161,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "KAITO": {
     "phase": "SCAN",
-    "last_setup_check": 1784378238934,
-    "last_candle_t": 1784376900000,
+    "last_setup_check": 1784383609548,
+    "last_candle_t": 1784382300000,
     "seq": null,
     "trade": null
   },
@@ -273,117 +265,101 @@
       "tp2": 0.0017057295308926016,
       "tp1_hit": false,
       "opened_t": 1784358900000,
-      "checked_t": 1784377800000
+      "checked_t": 1784383200000
     }
   },
   "xyz:xyz:ORCL": {
     "phase": "SCAN",
-    "last_setup_check": 1784378237683,
+    "last_setup_check": 1784383604830,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "NEAR": {
     "phase": "SCAN",
-    "last_setup_check": 1784378241897,
-    "last_candle_t": 1784376900000,
+    "last_setup_check": 1784383606777,
+    "last_candle_t": 1784382300000,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:CBRS": {
     "phase": "SCAN",
-    "last_setup_check": 1784378238349,
+    "last_setup_check": 1784383605222,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "ONDO": {
-    "phase": "WAIT_DOJI",
-    "last_setup_check": 1784378236208,
-    "last_candle_t": 1784376900000,
-    "seq": {
-      "direction": "LONG",
-      "stage": "WAIT_DOJI",
-      "ttl": 2,
-      "kval": 15.395480225988635,
-      "pattern_ext": null,
-      "confirms": 0,
-      "rules": []
-    },
+    "phase": "SCAN",
+    "last_setup_check": 1784383599743,
+    "last_candle_t": 1784382300000,
+    "seq": null,
     "trade": null
   },
   "xyz:xyz:NATGAS": {
     "phase": "SCAN",
-    "last_setup_check": 1784378238642,
+    "last_setup_check": 1784383604480,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:MSTR": {
     "phase": "SCAN",
-    "last_setup_check": 1784378239229,
+    "last_setup_check": 1784383605551,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:CXMT": {
     "phase": "SCAN",
-    "last_setup_check": 1784378243604,
+    "last_setup_check": 1784383607580,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:TSM": {
     "phase": "SCAN",
-    "last_setup_check": 1784378243245,
+    "last_setup_check": 1784383608815,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:HOOD": {
     "phase": "SCAN",
-    "last_setup_check": 1784378240406,
+    "last_setup_check": 1784383610045,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "FARTCOIN": {
     "phase": "SCAN",
-    "last_setup_check": 1784378237977,
-    "last_candle_t": 1784376900000,
+    "last_setup_check": 1784383603057,
+    "last_candle_t": 1784382300000,
     "seq": null,
     "trade": null
   },
   "SUI": {
-    "phase": "WAIT_DOJI",
-    "last_setup_check": 1784378245413,
-    "last_candle_t": 1784376900000,
-    "seq": {
-      "direction": "LONG",
-      "stage": "WAIT_DOJI",
-      "ttl": 3,
-      "kval": 16.65169732966368,
-      "pattern_ext": null,
-      "confirms": 0,
-      "rules": []
-    },
+    "phase": "SCAN",
+    "last_setup_check": 1784383613560,
+    "last_candle_t": 1784382300000,
+    "seq": null,
     "trade": null
   },
   "xyz:xyz:NFLX": {
     "phase": "SCAN",
-    "last_setup_check": 1784378242957,
+    "last_setup_check": 1784383611673,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "GRAM": {
     "phase": "WAIT_DOJI",
-    "last_setup_check": 1784378262146,
-    "last_candle_t": 1784376900000,
+    "last_setup_check": 1784383630748,
+    "last_candle_t": 1784382300000,
     "seq": {
       "direction": "LONG",
       "stage": "WAIT_DOJI",
-      "ttl": 5,
+      "ttl": 2,
       "kval": 11.133004926107803,
       "pattern_ext": null,
       "confirms": 0,
@@ -393,68 +369,84 @@
   },
   "WLD": {
     "phase": "SCAN",
-    "last_setup_check": 1784378239516,
-    "last_candle_t": 1784376900000,
+    "last_setup_check": 1784383603658,
+    "last_candle_t": 1784382300000,
     "seq": null,
     "trade": null
   },
   "AAVE": {
-    "phase": "SCAN",
-    "last_setup_check": 1784378241290,
-    "last_candle_t": 1784376900000,
-    "seq": null,
+    "phase": "WAIT_DOJI",
+    "last_setup_check": 1784383608419,
+    "last_candle_t": 1784382300000,
+    "seq": {
+      "direction": "SHORT",
+      "stage": "WAIT_DOJI",
+      "ttl": 8,
+      "kval": 85.15070921985736,
+      "pattern_ext": null,
+      "confirms": 0,
+      "rules": []
+    },
     "trade": null
   },
   "UNI": {
     "phase": "SCAN",
-    "last_setup_check": 1784378242200,
-    "last_candle_t": 1784376900000,
+    "last_setup_check": 1784383607184,
+    "last_candle_t": 1784382300000,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:CRWV": {
     "phase": "SCAN",
-    "last_setup_check": 1784378247326,
+    "last_setup_check": 1784383615483,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:BABA": {
     "phase": "SCAN",
-    "last_setup_check": 1784378252185,
+    "last_setup_check": 1784383623366,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:BB": {
     "phase": "SCAN",
-    "last_setup_check": 1784378246582,
+    "last_setup_check": 1784383613234,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "VVV": {
-    "phase": "SCAN",
-    "last_setup_check": 1784378240701,
-    "last_candle_t": 1784376900000,
-    "seq": null,
+    "phase": "WAIT_DOJI",
+    "last_setup_check": 1784383604015,
+    "last_candle_t": 1784382300000,
+    "seq": {
+      "direction": "LONG",
+      "stage": "WAIT_DOJI",
+      "ttl": 9,
+      "kval": 19.619823489477252,
+      "pattern_ext": null,
+      "confirms": 0,
+      "rules": []
+    },
     "trade": null
   },
   "xyz:xyz:KIOXIA": {
     "phase": "SCAN",
-    "last_setup_check": 1784378249385,
+    "last_setup_check": 1784383618325,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "kBONK": {
     "phase": "WAIT_DOJI",
-    "last_setup_check": 1784378244193,
-    "last_candle_t": 1784376900000,
+    "last_setup_check": 1784383610394,
+    "last_candle_t": 1784382300000,
     "seq": {
       "direction": "LONG",
       "stage": "WAIT_DOJI",
-      "ttl": 9,
+      "ttl": 6,
       "kval": 10.387554831998997,
       "pattern_ext": null,
       "confirms": 0,
@@ -464,12 +456,12 @@
   },
   "kPEPE": {
     "phase": "WAIT_DOJI",
-    "last_setup_check": 1784378246003,
-    "last_candle_t": 1784376900000,
+    "last_setup_check": 1784383616150,
+    "last_candle_t": 1784382300000,
     "seq": {
       "direction": "SHORT",
       "stage": "WAIT_DOJI",
-      "ttl": 5,
+      "ttl": 2,
       "kval": 87.84219001610326,
       "pattern_ext": null,
       "confirms": 0,
@@ -479,12 +471,12 @@
   },
   "LINK": {
     "phase": "WAIT_DOJI",
-    "last_setup_check": 1784378244815,
-    "last_candle_t": 1784376900000,
+    "last_setup_check": 1784383611998,
+    "last_candle_t": 1784382300000,
     "seq": {
       "direction": "SHORT",
       "stage": "WAIT_DOJI",
-      "ttl": 8,
+      "ttl": 5,
       "kval": 83.27080962349969,
       "pattern_ext": null,
       "confirms": 0,
@@ -500,22 +492,22 @@
     "trade": {
       "verdict": "SHORT",
       "entry": 0.16724,
-      "stop": 0.1687795982514385,
+      "stop": 0.16724,
       "tp1": 0.16416080349712298,
       "tp2": 0.16262120524568446,
-      "tp1_hit": false,
+      "tp1_hit": true,
       "opened_t": 1784345400000,
-      "checked_t": 1784377800000
+      "checked_t": 1784383200000
     }
   },
   "BNB": {
     "phase": "WAIT_DOJI",
-    "last_setup_check": 1784378245111,
-    "last_candle_t": 1784376900000,
+    "last_setup_check": 1784383614302,
+    "last_candle_t": 1784382300000,
     "seq": {
       "direction": "SHORT",
       "stage": "WAIT_DOJI",
-      "ttl": 4,
+      "ttl": 1,
       "kval": 90.66033138401554,
       "pattern_ext": null,
       "confirms": 0,
@@ -525,74 +517,66 @@
   },
   "xyz:xyz:PURRDAT": {
     "phase": "SCAN",
-    "last_setup_check": 1784378247616,
+    "last_setup_check": 1784383617996,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:RKLB": {
     "phase": "SCAN",
-    "last_setup_check": 1784378250419,
+    "last_setup_check": 1784383619536,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:ZHIPU": {
     "phase": "SCAN",
-    "last_setup_check": 1784378270199,
+    "last_setup_check": 1784383637889,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:COPPER": {
     "phase": "SCAN",
-    "last_setup_check": 1784378247907,
+    "last_setup_check": 1784383615808,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:ARM": {
     "phase": "SCAN",
-    "last_setup_check": 1784378248786,
+    "last_setup_check": 1784383619209,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "AVAX": {
     "phase": "SCAN",
-    "last_setup_check": 1784378244515,
-    "last_candle_t": 1784376900000,
+    "last_setup_check": 1784383611246,
+    "last_candle_t": 1784382300000,
     "seq": null,
     "trade": null
   },
   "XMR": {
-    "phase": "WAIT_DOJI",
-    "last_setup_check": 1784378249677,
-    "last_candle_t": 1784376900000,
+    "phase": "CONFIRM",
+    "last_setup_check": 1784383616497,
+    "last_candle_t": 1784382300000,
     "seq": {
       "direction": "SHORT",
-      "stage": "WAIT_DOJI",
-      "ttl": 8,
+      "stage": "CONFIRM",
+      "ttl": 5,
       "kval": 92.8222137508504,
-      "pattern_ext": null,
+      "pattern_ext": 331.35,
       "confirms": 0,
       "rules": []
     },
     "trade": null
   },
   "TRX": {
-    "phase": "WAIT_DOJI",
-    "last_setup_check": 1784378271643,
-    "last_candle_t": 1784373300000,
-    "seq": {
-      "direction": "LONG",
-      "stage": "WAIT_DOJI",
-      "ttl": 4,
-      "kval": 8.386075949369724,
-      "pattern_ext": null,
-      "confirms": 0,
-      "rules": []
-    },
+    "phase": "SCAN",
+    "last_setup_check": 1784383640490,
+    "last_candle_t": 1784382300000,
+    "seq": null,
     "trade": null
   },
   "ARB": {
@@ -608,7 +592,7 @@
       "tp2": 0.09417359656517128,
       "tp1_hit": false,
       "opened_t": 1784369700000,
-      "checked_t": 1784377800000
+      "checked_t": 1784383200000
     }
   },
   "ENA": {
@@ -624,52 +608,60 @@
       "tp2": 0.07849729563619605,
       "tp1_hit": false,
       "opened_t": 1784365200000,
-      "checked_t": 1784377800000
+      "checked_t": 1784383200000
     }
   },
   "XPL": {
-    "phase": "SCAN",
-    "last_setup_check": 1784378246896,
-    "last_candle_t": 1784376900000,
-    "seq": null,
+    "phase": "WAIT_DOJI",
+    "last_setup_check": 1784383607929,
+    "last_candle_t": 1784382300000,
+    "seq": {
+      "direction": "LONG",
+      "stage": "WAIT_DOJI",
+      "ttl": 8,
+      "kval": 15.139446591087287,
+      "pattern_ext": null,
+      "confirms": 0,
+      "rules": []
+    },
     "trade": null
   },
   "TAO": {
     "phase": "SCAN",
-    "last_setup_check": 1784378250708,
-    "last_candle_t": 1784376900000,
+    "last_setup_check": 1784383617651,
+    "last_candle_t": 1784382300000,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:LITE": {
     "phase": "SCAN",
-    "last_setup_check": 1784378251890,
+    "last_setup_check": 1784383620212,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:COIN": {
     "phase": "SCAN",
-    "last_setup_check": 1784378251005,
+    "last_setup_check": 1784383618882,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:JPY": {
     "phase": "SCAN",
-    "last_setup_check": 1784378251303,
+    "last_setup_check": 1784383617324,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "AERO": {
     "phase": "WAIT_DOJI",
-    "last_setup_check": 1784378253659,
-    "last_candle_t": 1784376900000,
+    "last_setup_check": 1784383620536,
+    "last_candle_t": 1784382300000,
     "seq": {
       "direction": "LONG",
       "stage": "WAIT_DOJI",
-      "ttl": 9,
+      "ttl": 6,
       "kval": 8.077096210076325,
       "pattern_ext": null,
       "confirms": 0,
@@ -679,12 +671,12 @@
   },
   "LTC": {
     "phase": "WAIT_DOJI",
-    "last_setup_check": 1784378258928,
-    "last_candle_t": 1784376900000,
+    "last_setup_check": 1784383624779,
+    "last_candle_t": 1784382300000,
     "seq": {
       "direction": "LONG",
       "stage": "WAIT_DOJI",
-      "ttl": 6,
+      "ttl": 3,
       "kval": 18.516509820858214,
       "pattern_ext": null,
       "confirms": 0,
@@ -694,34 +686,34 @@
   },
   "xyz:xyz:SHAZ": {
     "phase": "SCAN",
-    "last_setup_check": 1784378252482,
+    "last_setup_check": 1784383627506,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "DOGE": {
     "phase": "SCAN",
-    "last_setup_check": 1784378251595,
-    "last_candle_t": 1784376900000,
+    "last_setup_check": 1784383619864,
+    "last_candle_t": 1784382300000,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:HYUNDAI": {
     "phase": "SCAN",
-    "last_setup_check": 1784378249095,
+    "last_setup_check": 1784383614696,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "ETHFI": {
     "phase": "WAIT_DOJI",
-    "last_setup_check": 1784378249967,
-    "last_candle_t": 1784376900000,
+    "last_setup_check": 1784383612601,
+    "last_candle_t": 1784382300000,
     "seq": {
       "direction": "SHORT",
       "stage": "WAIT_DOJI",
-      "ttl": 3,
-      "kval": 88.3003269277271,
+      "ttl": 10,
+      "kval": 85.37699108313126,
       "pattern_ext": null,
       "confirms": 0,
       "rules": []
@@ -730,84 +722,85 @@
   },
   "xyz:xyz:PLATINUM": {
     "phase": "SCAN",
-    "last_setup_check": 1784378253078,
+    "last_setup_check": 1784383621201,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:NOK": {
     "phase": "SCAN",
-    "last_setup_check": 1784378261150,
+    "last_setup_check": 1784383632775,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "CRV": {
     "phase": "SCAN",
-    "last_setup_check": 1784378255184,
-    "last_candle_t": 1784376900000,
+    "last_setup_check": 1784383626907,
+    "last_candle_t": 1784382300000,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:JP225": {
     "phase": "SCAN",
-    "last_setup_check": 1784378264112,
+    "last_setup_check": 1784383634217,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "TRUMP": {
-    "phase": "CONFIRM",
-    "last_setup_check": 1784378242517,
-    "last_candle_t": 1784376900000,
-    "seq": {
-      "direction": "SHORT",
-      "stage": "CONFIRM",
-      "ttl": 4,
-      "kval": 89.08565148446098,
-      "pattern_ext": 1.704,
-      "confirms": 0,
-      "rules": []
-    },
-    "trade": null
+    "phase": "IN_TRADE",
+    "last_setup_check": 1784383605887,
+    "last_candle_t": 1784381400000,
+    "seq": null,
+    "trade": {
+      "verdict": "SHORT",
+      "entry": 1.6434,
+      "stop": 1.7069230864813287,
+      "tp1": 1.5163538270373424,
+      "tp2": 1.4528307405560137,
+      "tp1_hit": false,
+      "opened_t": 1784381400000,
+      "checked_t": 1784381400000
+    }
   },
   "xyz:xyz:IBM": {
     "phase": "SCAN",
-    "last_setup_check": 1784378266693,
+    "last_setup_check": 1784383635213,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:PLTR": {
     "phase": "SCAN",
-    "last_setup_check": 1784378253367,
+    "last_setup_check": 1784383623006,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:DELL": {
     "phase": "SCAN",
-    "last_setup_check": 1784378256357,
+    "last_setup_check": 1784383625383,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:BE": {
     "phase": "SCAN",
-    "last_setup_check": 1784378254290,
+    "last_setup_check": 1784383624454,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "PAXG": {
     "phase": "WAIT_DOJI",
-    "last_setup_check": 1784378253989,
-    "last_candle_t": 1784376900000,
+    "last_setup_check": 1784383621975,
+    "last_candle_t": 1784382300000,
     "seq": {
-      "direction": "SHORT",
+      "direction": "LONG",
       "stage": "WAIT_DOJI",
-      "ttl": 2,
-      "kval": 97.57936507936729,
+      "ttl": 9,
+      "kval": 11.9275461380784,
       "pattern_ext": null,
       "confirms": 0,
       "rules": []
@@ -816,19 +809,19 @@
   },
   "xyz:xyz:QNT": {
     "phase": "SCAN",
-    "last_setup_check": 1784378255632,
+    "last_setup_check": 1784383632394,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "BCH": {
     "phase": "WAIT_DOJI",
-    "last_setup_check": 1784378254884,
-    "last_candle_t": 1784376900000,
+    "last_setup_check": 1784383623855,
+    "last_candle_t": 1784382300000,
     "seq": {
       "direction": "SHORT",
       "stage": "WAIT_DOJI",
-      "ttl": 8,
+      "ttl": 5,
       "kval": 85.51587879493934,
       "pattern_ext": null,
       "confirms": 0,
@@ -838,13 +831,13 @@
   },
   "VIRTUAL": {
     "phase": "WAIT_DOJI",
-    "last_setup_check": 1784378257264,
-    "last_candle_t": 1784376900000,
+    "last_setup_check": 1784383626093,
+    "last_candle_t": 1784382300000,
     "seq": {
       "direction": "LONG",
       "stage": "WAIT_DOJI",
-      "ttl": 3,
-      "kval": 15.263581890574953,
+      "ttl": 10,
+      "kval": 17.456896551723926,
       "pattern_ext": null,
       "confirms": 0,
       "rules": []
@@ -853,68 +846,84 @@
   },
   "DOT": {
     "phase": "SCAN",
-    "last_setup_check": 1784378261444,
-    "last_candle_t": 1784376900000,
+    "last_setup_check": 1784383632047,
+    "last_candle_t": 1784382300000,
     "seq": null,
     "trade": null
   },
   "ENS": {
     "phase": "SCAN",
-    "last_setup_check": 1784378260700,
-    "last_candle_t": 1784376900000,
+    "last_setup_check": 1784383630076,
+    "last_candle_t": 1784382300000,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:WDC": {
     "phase": "SCAN",
-    "last_setup_check": 1784378264706,
+    "last_setup_check": 1784383635946,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "ZRO": {
-    "phase": "SCAN",
-    "last_setup_check": 1784378262940,
-    "last_candle_t": 1784376900000,
-    "seq": null,
+    "phase": "WAIT_DOJI",
+    "last_setup_check": 1784383633100,
+    "last_candle_t": 1784382300000,
+    "seq": {
+      "direction": "LONG",
+      "stage": "WAIT_DOJI",
+      "ttl": 10,
+      "kval": 2.786347852564876,
+      "pattern_ext": null,
+      "confirms": 0,
+      "rules": []
+    },
     "trade": null
   },
   "PENGU": {
     "phase": "SCAN",
-    "last_setup_check": 1784378258630,
-    "last_candle_t": 1784376900000,
+    "last_setup_check": 1784383629013,
+    "last_candle_t": 1784382300000,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:SMH": {
     "phase": "SCAN",
-    "last_setup_check": 1784378268241,
+    "last_setup_check": 1784383636273,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "EIGEN": {
-    "phase": "SCAN",
-    "last_setup_check": 1784378257749,
-    "last_candle_t": 1784376900000,
-    "seq": null,
+    "phase": "WAIT_DOJI",
+    "last_setup_check": 1784383629712,
+    "last_candle_t": 1784382300000,
+    "seq": {
+      "direction": "LONG",
+      "stage": "WAIT_DOJI",
+      "ttl": 9,
+      "kval": 3.889440582588364,
+      "pattern_ext": null,
+      "confirms": 0,
+      "rules": []
+    },
     "trade": null
   },
   "xyz:xyz:NOW": {
     "phase": "SCAN",
-    "last_setup_check": 1784378256678,
+    "last_setup_check": 1784383630423,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "INJ": {
     "phase": "WAIT_DOJI",
-    "last_setup_check": 1784378254587,
-    "last_candle_t": 1784376900000,
+    "last_setup_check": 1784383622323,
+    "last_candle_t": 1784382300000,
     "seq": {
       "direction": "SHORT",
       "stage": "WAIT_DOJI",
-      "ttl": 8,
+      "ttl": 5,
       "kval": 95.09445460085294,
       "pattern_ext": null,
       "confirms": 0,
@@ -924,33 +933,33 @@
   },
   "JTO": {
     "phase": "SCAN",
-    "last_setup_check": 1784378258041,
-    "last_candle_t": 1784376900000,
+    "last_setup_check": 1784383626560,
+    "last_candle_t": 1784382300000,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:STRC": {
     "phase": "SCAN",
-    "last_setup_check": 1784378256965,
+    "last_setup_check": 1784383627836,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:HIMS": {
     "phase": "SCAN",
-    "last_setup_check": 1784378264408,
+    "last_setup_check": 1784383634889,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "LDO": {
     "phase": "WAIT_DOJI",
-    "last_setup_check": 1784378255925,
-    "last_candle_t": 1784376900000,
+    "last_setup_check": 1784383625708,
+    "last_candle_t": 1784382300000,
     "seq": {
       "direction": "LONG",
       "stage": "WAIT_DOJI",
-      "ttl": 4,
+      "ttl": 1,
       "kval": 13.714420136438397,
       "pattern_ext": null,
       "confirms": 0,
@@ -960,34 +969,26 @@
   },
   "JUP": {
     "phase": "SCAN",
-    "last_setup_check": 1784378259512,
-    "last_candle_t": 1784376900000,
+    "last_setup_check": 1784383628491,
+    "last_candle_t": 1784382300000,
     "seq": null,
     "trade": null
   },
   "XLM": {
-    "phase": "WAIT_DOJI",
-    "last_setup_check": 1784378263814,
-    "last_candle_t": 1784376900000,
-    "seq": {
-      "direction": "LONG",
-      "stage": "WAIT_DOJI",
-      "ttl": 2,
-      "kval": 13.782051282051285,
-      "pattern_ext": null,
-      "confirms": 0,
-      "rules": []
-    },
+    "phase": "SCAN",
+    "last_setup_check": 1784383631696,
+    "last_candle_t": 1784382300000,
+    "seq": null,
     "trade": null
   },
   "SPX": {
     "phase": "WAIT_DOJI",
-    "last_setup_check": 1784378260105,
-    "last_candle_t": 1784376900000,
+    "last_setup_check": 1784383621568,
+    "last_candle_t": 1784382300000,
     "seq": {
       "direction": "LONG",
       "stage": "WAIT_DOJI",
-      "ttl": 9,
+      "ttl": 6,
       "kval": 21.541318477251718,
       "pattern_ext": null,
       "confirms": 0,
@@ -997,26 +998,26 @@
   },
   "xyz:xyz:ZM": {
     "phase": "SCAN",
-    "last_setup_check": 1784378259224,
+    "last_setup_check": 1784383628162,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:BOT": {
     "phase": "SCAN",
-    "last_setup_check": 1784378265597,
+    "last_setup_check": 1784383640953,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "WLFI": {
     "phase": "WAIT_DOJI",
-    "last_setup_check": 1784378265000,
-    "last_candle_t": 1784376900000,
+    "last_setup_check": 1784383631097,
+    "last_candle_t": 1784382300000,
     "seq": {
       "direction": "LONG",
       "stage": "WAIT_DOJI",
-      "ttl": 9,
+      "ttl": 6,
       "kval": 8.574399001374578,
       "pattern_ext": null,
       "confirms": 0,
@@ -1033,26 +1034,26 @@
   },
   "xyz:xyz:XLE": {
     "phase": "SCAN",
-    "last_setup_check": 1784378266398,
+    "last_setup_check": 1784383637564,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "xyz:xyz:KR200": {
     "phase": "SCAN",
-    "last_setup_check": 1784378270772,
+    "last_setup_check": 1784383641322,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
   },
   "APT": {
     "phase": "WAIT_DOJI",
-    "last_setup_check": 1784378263232,
-    "last_candle_t": 1784376900000,
+    "last_setup_check": 1784383634542,
+    "last_candle_t": 1784382300000,
     "seq": {
       "direction": "LONG",
       "stage": "WAIT_DOJI",
-      "ttl": 6,
+      "ttl": 3,
       "kval": 16.585365853658544,
       "pattern_ext": null,
       "confirms": 0,
@@ -1062,7 +1063,7 @@
   },
   "xyz:xyz:LLY": {
     "phase": "SCAN",
-    "last_setup_check": 1784378267953,
+    "last_setup_check": 1784383642001,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
@@ -1082,30 +1083,30 @@
     "trade": null
   },
   "MET": {
+    "phase": "SCAN",
+    "last_setup_check": 1784383635598,
+    "last_candle_t": 1784382300000,
+    "seq": null,
+    "trade": null
+  },
+  "MON": {
     "phase": "WAIT_DOJI",
-    "last_setup_check": 1784378267569,
-    "last_candle_t": 1784376900000,
+    "last_setup_check": 1784383636628,
+    "last_candle_t": 1784382300000,
     "seq": {
       "direction": "LONG",
       "stage": "WAIT_DOJI",
-      "ttl": 2,
-      "kval": 19.89664082687357,
+      "ttl": 10,
+      "kval": 7.612265084075197,
       "pattern_ext": null,
       "confirms": 0,
       "rules": []
     },
     "trade": null
   },
-  "MON": {
-    "phase": "SCAN",
-    "last_setup_check": 1784378268541,
-    "last_candle_t": 1784376900000,
-    "seq": null,
-    "trade": null
-  },
   "xyz:xyz:MINIMAX": {
     "phase": "SCAN",
-    "last_setup_check": 1784354231923,
+    "last_setup_check": 1784383641647,
     "last_candle_t": 0,
     "seq": null,
     "trade": null
@@ -1144,37 +1145,30 @@
       "tp2": 0.04987703485398757,
       "tp1_hit": false,
       "opened_t": 1784375100000,
-      "checked_t": 1784375100000
+      "checked_t": 1784383200000
     }
   },
   "MORPHO": {
-    "phase": "CONFIRM",
-    "last_setup_check": 1784378272558,
-    "last_candle_t": 1784376900000,
-    "seq": {
-      "direction": "LONG",
-      "stage": "CONFIRM",
-      "ttl": 6,
-      "kval": 8.524485988971549,
-      "pattern_ext": 1.9512,
-      "confirms": 0,
-      "rules": []
-    },
-    "trade": null
+    "phase": "IN_TRADE",
+    "last_setup_check": 1784383639498,
+    "last_candle_t": 1784381400000,
+    "seq": null,
+    "trade": {
+      "verdict": "LONG",
+      "entry": 1.9824,
+      "stop": 1.950001189497054,
+      "tp1": 2.0471976210058918,
+      "tp2": 2.079596431508838,
+      "tp1_hit": false,
+      "opened_t": 1784381400000,
+      "checked_t": 1784381400000
+    }
   },
   "TIA": {
-    "phase": "WAIT_DOJI",
-    "last_setup_check": 1784378265950,
-    "last_candle_t": 1784376900000,
-    "seq": {
-      "direction": "LONG",
-      "stage": "WAIT_DOJI",
-      "ttl": 2,
-      "kval": 17.99994181648912,
-      "pattern_ext": null,
-      "confirms": 0,
-      "rules": []
-    },
+    "phase": "SCAN",
+    "last_setup_check": 1784383633563,
+    "last_candle_t": 1784382300000,
+    "seq": null,
     "trade": null
   },
   "xyz:xyz:EUR": {
@@ -1216,8 +1210,8 @@
   },
   "ICP": {
     "phase": "SCAN",
-    "last_setup_check": 1784378270487,
-    "last_candle_t": 1784373300000,
+    "last_setup_check": 1784383638215,
+    "last_candle_t": 1784382300000,
     "seq": null,
     "trade": null
   },
@@ -1230,15 +1224,15 @@
   },
   "MEGA": {
     "phase": "SCAN",
-    "last_setup_check": 1784378271056,
-    "last_candle_t": 1784376900000,
+    "last_setup_check": 1784383638583,
+    "last_candle_t": 1784382300000,
     "seq": null,
     "trade": null
   },
   "GRASS": {
     "phase": "SCAN",
-    "last_setup_check": 1784378266993,
-    "last_candle_t": 1784376900000,
+    "last_setup_check": 1784383637100,
+    "last_candle_t": 1784382300000,
     "seq": null,
     "trade": null
   },
@@ -1273,8 +1267,8 @@
   },
   "PENDLE": {
     "phase": "SCAN",
-    "last_setup_check": 1784378271980,
-    "last_candle_t": 1784376900000,
+    "last_setup_check": 1784383642326,
+    "last_candle_t": 1784382300000,
     "seq": null,
     "trade": null
   },
@@ -1295,13 +1289,13 @@
   },
   "VINE": {
     "phase": "WAIT_DOJI",
-    "last_setup_check": 1784378262442,
-    "last_candle_t": 1784376900000,
+    "last_setup_check": 1784383629363,
+    "last_candle_t": 1784382300000,
     "seq": {
-      "direction": "SHORT",
+      "direction": "LONG",
       "stage": "WAIT_DOJI",
-      "ttl": 1,
-      "kval": 90.62499999999989,
+      "ttl": 9,
+      "kval": 5.264799793378218,
       "pattern_ext": null,
       "confirms": 0,
       "rules": []
