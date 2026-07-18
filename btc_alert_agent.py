@@ -708,8 +708,18 @@ def check_asset(asset, state):
     kline, _ = stochastic(c15)
     a15 = atr(c15)
 
-    # process each newly CLOSED candle exactly once, in order
+    # never replay history: on first contact (fresh state) or after downtime,
+    # fast-forward to the recent past instead of walking days of old candles
+    # through the sequence engine and alerting on long-dead patterns
     last_closed = len(c15) - 2
+    cutoff = c15[last_closed]["t"] - 3 * MS["15m"]   # at most ~3 recent candles
+    if ast["last_candle_t"] < cutoff:
+        if ast["last_candle_t"]:
+            log(f"{sym}: behind by more than 3 candles - fast-forwarding, "
+                "stale patterns skipped")
+        ast["last_candle_t"] = cutoff
+
+    # process each newly CLOSED candle exactly once, in order
     for i in range(len(c15)):
         if i > last_closed or c15[i]["t"] <= ast["last_candle_t"]:
             continue
