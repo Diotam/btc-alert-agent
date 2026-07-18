@@ -51,7 +51,7 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 # --- Asset universe -------------------------------------------------------
 DISCOVER_ALL = True
 DEXES = ["", "xyz"]                # "" = main crypto dex, "xyz" = TradeXYZ stocks
-MIN_DAY_VOLUME_USD = 1_000_000       # watch everything above $1M 24h notional
+MIN_DAY_VOLUME_USD = 500_000       # watch everything above $500K 24h notional
 MAX_ASSETS = 150
 FETCH_DELAY_S = 0.12
 
@@ -68,6 +68,9 @@ ASSETS = [                         # used when DISCOVER_ALL = False / discovery 
 
 # --- Strategy dials -------------------------------------------------------
 ENABLE_SHORTS = True
+ALERT_ENTRIES = True         # entry alerts (the signal itself)
+ALERT_STAGES = False         # "DOJI SPOTTED" heads-up messages
+ALERT_LIFECYCLE = False      # TP1 / TP2 / STOPPED OUT trade updates
 STOCH_K = 14                 # stochastic lookback
 STOCH_SMOOTH = 3             # %K smoothing (slow stochastic)
 STOCH_D = 3                  # %D smoothing
@@ -535,17 +538,19 @@ def process_open_trade(asset, trade, candles, last_closed_t):
             note = ("Stop moved to breakeven after TP1, so this exit is at entry."
                     if trade["tp1_hit"] else
                     "Pattern stop was hit. Wait for the next full sequence.")
-            send_telegram(lifecycle_message(asset, "STOP", trade,
-                                            trade["stop"], c["t"], note))
-            log(f"{sym}: STOPPED OUT at ${fmt_px(trade['stop'])} -> telegram sent")
+            if ALERT_LIFECYCLE:
+                send_telegram(lifecycle_message(asset, "STOP", trade,
+                                                trade["stop"], c["t"], note))
+            log(f"{sym}: STOPPED OUT at ${fmt_px(trade['stop'])}")
             RUN_ALERTS.append(f"{sym} STOPPED OUT ({pnl_pct(trade, trade['stop']):+.2f}%)")
             return None, True
 
         if hit_tp2:
-            send_telegram(lifecycle_message(
-                asset, "TP2", trade, trade["tp2"], c["t"],
-                "Full 3R target reached. Trade closed."))
-            log(f"{sym}: TP2 HIT at ${fmt_px(trade['tp2'])} -> telegram sent")
+            if ALERT_LIFECYCLE:
+                send_telegram(lifecycle_message(
+                    asset, "TP2", trade, trade["tp2"], c["t"],
+                    "Full 3R target reached. Trade closed."))
+            log(f"{sym}: TP2 HIT at ${fmt_px(trade['tp2'])}")
             RUN_ALERTS.append(f"{sym} TP2 HIT ({pnl_pct(trade, trade['tp2']):+.2f}%)")
             return None, True
 
@@ -555,9 +560,10 @@ def process_open_trade(asset, trade, candles, last_closed_t):
             if BREAKEVEN_AFTER_TP1:
                 trade["stop"] = trade["entry"]
                 note += " Stop moved to breakeven - remaining position is risk-free."
-            send_telegram(lifecycle_message(asset, "TP1", trade,
-                                            trade["tp1"], c["t"], note))
-            log(f"{sym}: TP1 HIT at ${fmt_px(trade['tp1'])} -> telegram sent")
+            if ALERT_LIFECYCLE:
+                send_telegram(lifecycle_message(asset, "TP1", trade,
+                                                trade["tp1"], c["t"], note))
+            log(f"{sym}: TP1 HIT at ${fmt_px(trade['tp1'])}")
             RUN_ALERTS.append(f"{sym} TP1 HIT ({pnl_pct(trade, trade['tp1']):+.2f}%)")
             changed = True
 
@@ -581,10 +587,11 @@ def process_candle(asset, ast, real, ha, kline, a15, i, source):
                       else real[i]["h"],
                       "confirms": 0, "rules": []}
         ast["phase"] = "CONFIRM"
-        send_telegram(doji_message(asset, direction, kval,
-                                   real[i]["c"], real[i]["t"]))
-        log(f"{sym}: {'green' if direction == 'LONG' else 'red'} HA doji -> "
-            "telegram sent, watching for 2 strong candles")
+        if ALERT_STAGES:
+            send_telegram(doji_message(asset, direction, kval,
+                                       real[i]["c"], real[i]["t"]))
+        log(f"{sym}: {'green' if direction == 'LONG' else 'red'} HA doji - "
+            "watching for 2 strong candles")
         RUN_ALERTS.append(f"{sym} {direction} doji spotted - watching")
 
     seq = ast["seq"]
@@ -642,10 +649,11 @@ def process_candle(asset, ast, real, ha, kline, a15, i, source):
                     plan = {"entry": entry, "stop": stop, "risk": risk,
                             "tp1": entry + sign * R_TP1 * risk,
                             "tp2": entry + sign * R_TP2 * risk}
-                    send_telegram(entry_message(asset, direction, plan,
-                                                seq["rules"][0], seq["rules"][1],
-                                                seq["kval"], source,
-                                                real[i]["t"]))
+                    if ALERT_ENTRIES:
+                        send_telegram(entry_message(
+                            asset, direction, plan,
+                            seq["rules"][0], seq["rules"][1],
+                            seq["kval"], source, real[i]["t"]))
                     log(f"ALERT SENT -> telegram: {sym} {direction} "
                         f"REVERSAL ENTRY @ ${fmt_px(entry)}")
                     RUN_ALERTS.append(f"{sym} {direction} reversal entry "
