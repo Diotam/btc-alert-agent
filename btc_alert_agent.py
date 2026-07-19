@@ -51,7 +51,7 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 # --- Asset universe -------------------------------------------------------
 DISCOVER_ALL = True
 DEXES = ["", "xyz"]                # "" = main crypto dex, "xyz" = TradeXYZ stocks
-MIN_DAY_VOLUME_USD = 500_000       # watch everything above $500K 24h notional
+MIN_DAY_VOLUME_USD = 1_000_000       # watch everything above $1M 24h notional
 MAX_ASSETS = 150
 FETCH_DELAY_S = 0.12
 
