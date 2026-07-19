@@ -51,7 +51,7 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 # --- Asset universe -------------------------------------------------------
 DISCOVER_ALL = True
 DEXES = ["", "xyz"]                # "" = main crypto dex, "xyz" = TradeXYZ stocks
-MIN_DAY_VOLUME_USD = 900_000       # watch everything above $900K 24h notional
+MIN_DAY_VOLUME_USD = 500_000       # watch everything above $500K 24h notional
 MAX_ASSETS = 150
 FETCH_DELAY_S = 0.12
 
@@ -94,7 +94,7 @@ R_TP1, R_TP2 = 2.0, 3.0
 BREAKEVEN_AFTER_TP1 = True
 SETUP_REFRESH_MIN = 12       # scan cadence (new 15m candles processed as they close)
 
-TIMEZONE = "America/New_York"
+TIMEZONE = "America/Chicago"
 STATE_FILE = Path(__file__).parent / "btc_agent_state.json"
 # ===========================================================================
 
@@ -113,7 +113,7 @@ def log(msg):
 
 
 def fmt_px(p):
-    return f"{p:,.0f}" if p >= 10000 else f"{p:,.2f}" if p >= 1 else f"{p:,.4f}"
+    return f"{p:,.0f}" if p >= 10000 else f"{p:,.2f}" if p >= 1 else f"{p:,.6f}"
 
 
 def pnl_pct(trade, exit_px):
