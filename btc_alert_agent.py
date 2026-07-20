@@ -69,8 +69,8 @@ ALERT_LIFECYCLE = True       # TP1 / TP2 / STOPPED OUT trade updates
 STOCH_K = 14                 # stochastic lookback
 STOCH_SMOOTH = 3             # %K smoothing (slow stochastic)
 STOCH_D = 3                  # %D smoothing
-STOCH_OVERSOLD = 20          # the "bottom line"
-STOCH_OVERBOUGHT = 80        # the "top line"
+STOCH_OVERSOLD = 15          # the "bottom line"
+STOCH_OVERBOUGHT = 85        # the "top line"
 CROSS_LOOKBACK = 6           # the cross must have happened within this many candles
 DOJI_BODY_FRAC = 0.12        # HA body <= this fraction of range = doji
 BIG_BODY_FRAC = 0.45         # HA body >= this fraction of range = large body
