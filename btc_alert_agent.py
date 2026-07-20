@@ -52,7 +52,7 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 DISCOVER_ALL = True
 DEXES = ["", "xyz"]                # "" = main crypto dex, "xyz" = TradeXYZ stocks
 MIN_DAY_VOLUME_USD = 1_000_000       # watch everything above $1M 24h notional
-MAX_ASSETS = 150
+MAX_ASSETS = 100
 FETCH_DELAY_S = 0.12
 
 ASSETS = [                         # used when DISCOVER_ALL = False / discovery fails
