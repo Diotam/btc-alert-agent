@@ -50,20 +50,15 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 # --- Asset universe -------------------------------------------------------
 DISCOVER_ALL = True
-DEXES = ["", "xyz"]                # "" = main crypto dex, "xyz" = TradeXYZ stocks
-MIN_DAY_VOLUME_USD = 1_000_000       # watch everything above $1M 24h notional
+DISCOVER_DEXES = False             # main crypto dex only (no stock venues)
+DEXES = [""]                       # "" = main crypto dex
+MIN_DAY_VOLUME_USD = 1_000_000     # skip markets below $1M 24h notional
 MAX_ASSETS = 100
 FETCH_DELAY_S = 0.12
 
 ASSETS = [                         # used when DISCOVER_ALL = False / discovery fails
-    {"symbol": "BTC",   "label": "BTC-PERP",        "hl_coin": "BTC",
+    {"symbol": "BTC", "label": "BTC-PERP", "hl_coin": "BTC",
      "fallbacks": ["binance:BTCUSDT", "kraken:XBTUSD"]},
-    {"symbol": "xyz:TSLA",  "label": "TSLA-PERP (xyz)", "hl_coin": "xyz:TSLA",
-     "fallbacks": ["yahoo:TSLA"]},
-    {"symbol": "xyz:SP500", "label": "SP500-PERP (xyz)", "hl_coin": "xyz:SP500",
-     "fallbacks": ["yahoo:^GSPC"]},
-    {"symbol": "xyz:SKHX",  "label": "SKHX-PERP (xyz)", "hl_coin": "xyz:SKHX",
-     "fallbacks": ["yahoo:SKHY"]},
 ]
 
 # --- Strategy dials -------------------------------------------------------
@@ -94,7 +89,7 @@ R_TP1, R_TP2 = 2.0, 3.0
 BREAKEVEN_AFTER_TP1 = True
 SETUP_REFRESH_MIN = 12       # scan cadence (new 15m candles processed as they close)
 
-TIMEZONE = "America/Chicago"
+TIMEZONE = "America/New_York"
 STATE_FILE = Path(__file__).parent / "btc_agent_state.json"
 # ===========================================================================
 
@@ -236,9 +231,37 @@ def fetch(asset, interval, min_candles):
     return None, None
 
 
+def list_dexes():
+    """All perp dexes on Hyperliquid: the main dex plus every HIP-3
+    builder dex (TradeXYZ stocks and any newer venues)."""
+    if not DISCOVER_DEXES:
+        return DEXES
+    try:
+        data = http_json("https://api.hyperliquid.xyz/info", {"type": "perpDexs"})
+        dexes = []
+        for d in data:
+            if d is None:
+                dexes.append("")                      # the main dex slot
+            elif isinstance(d, str):
+                dexes.append(d)
+            elif isinstance(d, dict) and d.get("name"):
+                dexes.append(d["name"])
+        if dexes:
+            if "" not in dexes:
+                dexes.insert(0, "")
+            return dexes
+    except Exception as e:
+        log(f"Dex discovery failed ({e}) - using configured DEXES list")
+    return DEXES
+
+
 def discover_assets():
     found = []
-    for dex in DEXES:
+    dexes = list_dexes()
+    if len(dexes) > 2:
+        log(f"Scanning {len(dexes)} dexes: "
+            + ", ".join(d or "main" for d in dexes))
+    for dex in dexes:
         payload = {"type": "metaAndAssetCtxs"}
         if dex:
             payload["dex"] = dex
