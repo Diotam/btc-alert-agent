@@ -53,7 +53,7 @@ DISCOVER_ALL = True
 DISCOVER_DEXES = False             # main crypto dex only (no stock venues)
 DEXES = [""]                       # "" = main crypto dex
 MIN_DAY_VOLUME_USD = 1_000_000     # skip markets below $1M 24h notional
-MAX_ASSETS = 100
+MAX_ASSETS = 150
 FETCH_DELAY_S = 0.12
 
 ASSETS = [                         # used when DISCOVER_ALL = False / discovery fails
@@ -85,6 +85,9 @@ WICK_TOL_BODY = 0.20         # ...or <= this fraction of the body (HA-open lag)
 WAIT_DOJI_TTL = 10           # candles to wait for the doji after setup
 CONFIRM_TTL = 6              # candles to complete both confirmations
 STOP_PAD_ATR = 0.15          # stop pad beyond the pattern's real extreme
+REQUIRE_ENTRY_CONFIRM = True # entry needs a volume spike OR a PA pattern
+VOL_SPIKE_MULT = 1.50        # confirmation-candle volume vs 20-candle average
+BASE_WINDOW = 20             # candles before the doji defining the reversal base
 R_TP1, R_TP2 = 2.0, 3.0
 BREAKEVEN_AFTER_TP1 = True
 SETUP_REFRESH_MIN = 12       # scan cadence (new 15m candles processed as they close)
@@ -436,6 +439,59 @@ def stoch_setup(kline, i, long):
     return weak and above
 
 
+# ----------------------- entry confirmation layer ---------------------------
+def entry_confirmations(real, vols_avg, doji_i, c1_i, c2_i, long):
+    """Volume spikes and price-action patterns on REAL candles around the
+    completed sequence. Returns a list of human-readable confirmations."""
+    out = []
+    # volume spike on either confirmation candle
+    best = 0.0
+    for j in (c1_i, c2_i):
+        if vols_avg[j]:
+            best = max(best, real[j]["v"] / vols_avg[j])
+    if best >= VOL_SPIKE_MULT:
+        out.append(f"Volume spike {best:.1f}x average")
+
+    # engulfing on either confirmation candle
+    for j in (c1_i, c2_i):
+        c, p = real[j], real[j - 1]
+        if long and c["c"] > c["o"] and p["c"] < p["o"] \
+                and c["c"] >= p["o"] and c["o"] <= p["c"]:
+            out.append("Bullish engulfing")
+            break
+        if not long and c["c"] < c["o"] and p["c"] > p["o"] \
+                and c["c"] <= p["o"] and c["o"] >= p["c"]:
+            out.append("Bearish engulfing")
+            break
+
+    # liquidity sweep of the pre-doji extreme, then reclaim
+    lo_w = max(0, doji_i - 8)
+    if lo_w < doji_i:
+        if long:
+            prior_low = min(c["l"] for c in real[lo_w:doji_i])
+            swept = min(c["l"] for c in real[doji_i:c2_i + 1]) < prior_low
+            if swept and real[c2_i]["c"] > prior_low:
+                out.append("Liquidity sweep & reclaim")
+        else:
+            prior_high = max(c["h"] for c in real[lo_w:doji_i])
+            swept = max(c["h"] for c in real[doji_i:c2_i + 1]) > prior_high
+            if swept and real[c2_i]["c"] < prior_high:
+                out.append("Liquidity sweep & reclaim")
+
+    # close through the broader reversal base
+    b_w = max(0, doji_i - BASE_WINDOW)
+    if b_w < doji_i:
+        if long:
+            base_high = max(c["h"] for c in real[b_w:doji_i])
+            if real[c2_i]["c"] > base_high:
+                out.append(f"Break above {BASE_WINDOW}-candle base")
+        else:
+            base_low = min(c["l"] for c in real[b_w:doji_i])
+            if real[c2_i]["c"] < base_low:
+                out.append(f"Break below {BASE_WINDOW}-candle base")
+    return out
+
+
 # ----------------------------- telegram ------------------------------------
 DISCLAIMER_TXT = ("Research signal - not financial advice. "
                   "Any single signal can fail; size accordingly.")
@@ -473,7 +529,8 @@ def doji_message(asset, direction, kval, px, t):
     ])
 
 
-def entry_message(asset, direction, plan, rules1, rules2, kval, source, t):
+def entry_message(asset, direction, plan, rules1, rules2, confirms,
+                  kval, source, t):
     sym = asset["symbol"]
     icon = "\U0001F7E2" if direction == "LONG" else "\U0001F534"
     lines = [
@@ -497,6 +554,9 @@ def entry_message(asset, direction, plan, rules1, rules2, kval, source, t):
     lines += [f"\u2705 {esc(d)}" for d, _ in rules1]
     lines += ["<b>Confirmation candle 2</b>"]
     lines += [f"\u2705 {esc(d)}" for d, _ in rules2]
+    lines += ["<b>Entry confirmation</b>"]
+    lines += ([f"\u2705 {esc(c)}" for c in confirms] if confirms
+              else ["\u26A0 None (unconfirmed entry)"])
     lines += ["", f"<i>Source: {esc(source)}. \u26A0 {DISCLAIMER_TXT}</i>"]
     return "\n".join(lines)
 
@@ -598,7 +658,7 @@ def process_open_trade(asset, trade, candles, last_closed_t):
     return trade, changed
 
 
-def process_candle(asset, ast, real, ha, kline, a15, i, source):
+def process_candle(asset, ast, real, ha, kline, a15, vol_avg, i, source):
     """Walk ONE newly closed 15m candle (index i) through the sequence."""
     sym = asset["symbol"]
     ha_c = ha[i]
@@ -608,6 +668,7 @@ def process_candle(asset, ast, real, ha, kline, a15, i, source):
                       "ttl": CONFIRM_TTL, "kval": kval,
                       "pattern_ext": real[i]["l"] if direction == "LONG"
                       else real[i]["h"],
+                      "doji_t": real[i]["t"], "c1_t": None,
                       "confirms": 0, "rules": []}
         ast["phase"] = "CONFIRM"
         if ALERT_STAGES:
@@ -662,7 +723,21 @@ def process_candle(asset, ast, real, ha, kline, a15, i, source):
         if ok:
             seq["confirms"] += 1
             seq["rules"].append(rules)
+            if seq["confirms"] == 1:
+                seq["c1_t"] = real[i]["t"]
             if seq["confirms"] >= 2:
+                t_index = {c["t"]: idx for idx, c in enumerate(real)}
+                doji_i = t_index.get(seq["doji_t"])
+                c1_i = t_index.get(seq["c1_t"], i)
+                confirms = []
+                if doji_i is not None:
+                    confirms = entry_confirmations(real, vol_avg, doji_i,
+                                                   c1_i, i, long)
+                if REQUIRE_ENTRY_CONFIRM and not confirms:
+                    log(f"{sym}: sequence complete but no volume/PA "
+                        "confirmation - discarded")
+                    ast["seq"], ast["phase"] = None, "SCAN"
+                    return True
                 entry = real[i]["c"]
                 pad = STOP_PAD_ATR * (a15[i] or 0)
                 stop = (seq["pattern_ext"] - pad) if long                     else (seq["pattern_ext"] + pad)
@@ -676,7 +751,7 @@ def process_candle(asset, ast, real, ha, kline, a15, i, source):
                         send_telegram(entry_message(
                             asset, direction, plan,
                             seq["rules"][0], seq["rules"][1],
-                            seq["kval"], source, real[i]["t"]))
+                            confirms, seq["kval"], source, real[i]["t"]))
                     log(f"ALERT SENT -> telegram: {sym} {direction} "
                         f"REVERSAL ENTRY @ ${fmt_px(entry)}")
                     RUN_ALERTS.append(f"{sym} {direction} reversal entry "
@@ -738,6 +813,7 @@ def check_asset(asset, state):
     ha = heikin_ashi(c15)
     kline, _ = stochastic(c15)
     a15 = atr(c15)
+    vol_avg = sma([c["v"] for c in c15], 20)
 
     # never replay history: on first contact (fresh state) or after downtime,
     # fast-forward to the recent past instead of walking days of old candles
@@ -754,7 +830,7 @@ def check_asset(asset, state):
     for i in range(len(c15)):
         if i > last_closed or c15[i]["t"] <= ast["last_candle_t"]:
             continue
-        ch = process_candle(asset, ast, c15, ha, kline, a15, i, source)
+        ch = process_candle(asset, ast, c15, ha, kline, a15, vol_avg, i, source)
         changed = changed or ch
         ast["last_candle_t"] = c15[i]["t"]
         if ast["trade"]:
