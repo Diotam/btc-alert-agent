@@ -90,6 +90,9 @@ VOL_SPIKE_MULT = 1.50        # confirmation-candle volume vs 20-candle average
 BASE_WINDOW = 20             # candles before the doji defining the reversal base
 R_TP1, R_TP2 = 2.0, 3.0
 BREAKEVEN_AFTER_TP1 = True
+SHA_EXIT = True              # after TP1, close the runner when smoothed HA flips
+SHA_LEN1 = 10                # pre-smoothing EMA on OHLC
+SHA_LEN2 = 10                # post-smoothing EMA on the HA values
 SETUP_REFRESH_MIN = 12       # scan cadence (new 15m candles processed as they close)
 
 TIMEZONE = "America/New_York"
@@ -335,6 +338,50 @@ def atr(candles, period=14):
     return out
 
 
+def ema(values, period):
+    k = 2 / (period + 1)
+    out = [None] * len(values)
+    prev = None
+    for i, v in enumerate(values):
+        if i == period - 1:
+            prev = sum(values[:period]) / period
+            out[i] = prev
+        elif i >= period:
+            prev = v * k + prev * (1 - k)
+            out[i] = prev
+    return out
+
+
+def smoothed_heikin_ashi(candles, len1=SHA_LEN1, len2=SHA_LEN2):
+    """Doubly-smoothed HA: EMA the OHLC first, HA on the smoothed values,
+    then EMA the HA open/close. Returns [{"t","o","c"} or None] - color only,
+    which is all the runner exit needs."""
+    n = len(candles)
+    eo = ema([c["o"] for c in candles], len1)
+    eh = ema([c["h"] for c in candles], len1)
+    el = ema([c["l"] for c in candles], len1)
+    ec = ema([c["c"] for c in candles], len1)
+    ho_arr, hc_arr = [None] * n, [None] * n
+    prev_o = prev_c = None
+    for i in range(n):
+        if eo[i] is None:
+            continue
+        hc = (eo[i] + eh[i] + el[i] + ec[i]) / 4
+        ho = (eo[i] + ec[i]) / 2 if prev_o is None else (prev_o + prev_c) / 2
+        ho_arr[i], hc_arr[i] = ho, hc
+        prev_o, prev_c = ho, hc
+    # post-smooth over the valid region
+    start = next((i for i in range(n) if ho_arr[i] is not None), n)
+    so = ema(ho_arr[start:], len2)
+    sc = ema(hc_arr[start:], len2)
+    out = [None] * n
+    for i in range(start, n):
+        if so[i - start] is not None:
+            out[i] = {"t": candles[i]["t"], "o": so[i - start],
+                      "c": sc[i - start]}
+    return out
+
+
 def heikin_ashi(candles):
     """HA candle series. HA prices are averages - never trade them directly."""
     out = []
@@ -570,6 +617,8 @@ def lifecycle_message(asset, kind, trade, exit_px, event_t, note):
         "TP1":  ("\u2705", "TP1 HIT", "First target (2R) reached"),
         "TP2":  ("\U0001F3C1", "TP2 HIT - trade complete", "Final target (3R) reached"),
         "STOP": ("\u274C", "STOPPED OUT", "Pattern stop hit"),
+        "RUNNER": ("\U0001F3C1", "RUNNER CLOSED",
+                   "Smoothed HA flipped - remaining position closed"),
     }[kind]
     icon, big, sub = meta
     return "\n".join([
@@ -791,6 +840,34 @@ def check_asset(asset, state):
             changed = changed or ch
             if trade is None:
                 ast["phase"] = "SCAN"
+        # runner exit: after TP1, a smoothed-HA color flip closes the rest
+        if ast["trade"] and ast["trade"].get("tp1_hit") and SHA_EXIT:
+            trade = ast["trade"]
+            _, c15 = fetch(asset, "15m", SHA_LEN1 + SHA_LEN2 + 20)
+            if c15:
+                sha = smoothed_heikin_ashi(c15)
+                long = trade["verdict"] == "LONG"
+                seen = trade.get("sha_checked_t", trade["opened_t"])
+                for i in range(len(c15) - 1):          # closed candles only
+                    if c15[i]["t"] <= seen or sha[i] is None:
+                        continue
+                    flipped = (sha[i]["c"] < sha[i]["o"] if long
+                               else sha[i]["c"] > sha[i]["o"])
+                    if flipped:
+                        exit_px = c15[i]["c"]
+                        if ALERT_LIFECYCLE:
+                            send_telegram(lifecycle_message(
+                                asset, "RUNNER", trade, exit_px, c15[i]["t"],
+                                "Smoothed HA flipped against the trade - "
+                                "runner closed at the 15m close."))
+                        log(f"{sym}: RUNNER CLOSED at ${fmt_px(exit_px)} "
+                            "(smoothed HA flip)")
+                        RUN_ALERTS.append(
+                            f"{sym} runner closed ({pnl_pct(trade, exit_px):+.2f}%)")
+                        ast["trade"], ast["phase"] = None, "SCAN"
+                        break
+                    trade["sha_checked_t"] = c15[i]["t"]
+                changed = True
         RUN_STATUS.append(f"{sym} IN_TRADE" if ast["trade"] else f"{sym} SCAN")
         state[sym] = ast
         return changed
