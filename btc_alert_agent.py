@@ -91,11 +91,11 @@ BASE_WINDOW = 20             # candles before the doji defining the reversal bas
 R_TP1, R_TP2 = 2.0, 3.0
 BREAKEVEN_AFTER_TP1 = True
 SHA_EXIT = True              # after TP1, close the runner when smoothed HA flips
-SHA_LEN1 = 10                # pre-smoothing EMA on OHLC
-SHA_LEN2 = 10                # post-smoothing EMA on the HA values
+SHA_LEN1 = 05                # pre-smoothing EMA on OHLC
+SHA_LEN2 = 05                # post-smoothing EMA on the HA values
 SETUP_REFRESH_MIN = 12       # scan cadence (new 15m candles processed as they close)
 
-TIMEZONE = "America/New_York"
+TIMEZONE = "America/Chicago"
 STATE_FILE = Path(__file__).parent / "btc_agent_state.json"
 # ===========================================================================
 
