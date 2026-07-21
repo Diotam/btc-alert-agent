@@ -17,6 +17,7 @@ from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
 STATE_FILE = Path("/opt/btc-agent/btc_agent_state.json")
+TRADES_LOG = Path("/opt/btc-agent/trades.log")
 DASH_KEY = os.environ.get("DASH_KEY", "")
 PORT = int(os.environ.get("DASH_PORT", "8080"))
 
@@ -24,7 +25,7 @@ _price_cache = {"t": 0.0, "mids": {}}
 
 
 def prices():
-    if time.time() - _price_cache["t"] < 5:
+    if time.time() - _price_cache["t"] < 2:
         return _price_cache["mids"]
     try:
         req = urllib.request.Request(
@@ -60,6 +61,22 @@ def journal_events(n=400, keep=25):
                                    "SUMMARY")):
             events.append(line.strip())
     return events[-keep:][::-1]
+
+
+def closed_trades(keep=15):
+    try:
+        lines = TRADES_LOG.read_text().splitlines()[-200:]
+    except OSError:
+        return [], 0.0
+    rows = []
+    for ln in lines:
+        try:
+            rows.append(json.loads(ln))
+        except json.JSONDecodeError:
+            continue
+    day_ago = (time.time() - 86400) * 1000
+    pnl24 = sum(r.get("pnl_pct", 0) for r in rows if r.get("t", 0) >= day_ago)
+    return rows[-keep:][::-1], round(pnl24, 2)
 
 
 def build_data():
@@ -99,9 +116,11 @@ def build_data():
                                           - time.time() * 1000) / 60000))})
     trades.sort(key=lambda t: t["sym"])
     zones.sort(key=lambda z: z["mins_left"])
+    closed, pnl24 = closed_trades()
     return {"now": time.time(),
             "state_age_s": int(time.time() - mtime) if mtime else None,
             "scanned": scanned, "trades": trades, "zones": zones,
+            "closed": closed, "pnl24": pnl24,
             "events": journal_events()}
 
 
@@ -133,15 +152,14 @@ h1{font-size:17px;margin:4px 0 12px}
 <span id=meta class=muted style="font-weight:400;font-size:12px"></span></h1>
 <div class=section>Open trades</div><div id=trades></div>
 <div class=section>Active zones</div><div id=zones></div>
+<div class=section>Closed trades <span id=pnl24 class=num style="float:right;text-transform:none;letter-spacing:0"></span></div><div id=closed></div>
 <div class=section>Recent events</div><div id=events></div>
 <script>
 const KEY=new URLSearchParams(location.search).get('key')||'';
 function px(p){if(p==null)return '-';
  return p>=10000?p.toLocaleString(undefined,{maximumFractionDigits:0})
  :p>=1?p.toFixed(2):p.toFixed(6)}
-async function tick(){
- try{
-  const d=await (await fetch('/data'+(KEY?'?key='+KEY:''))).json();
+function render(d){
   const st=document.getElementById('status');
   const fresh=d.state_age_s!=null&&d.state_age_s<180;
   st.textContent=fresh?'LIVE':'STALE '+(d.state_age_s==null?'':Math.round(d.state_age_s/60)+'m');
@@ -170,12 +188,33 @@ async function tick(){
     <div class=row><span class=muted>${z.stage}</span>
     <span class=muted>%K ${z.k==null?'-':z.k.toFixed(1)} · now <span class=num>$${px(z.mid)}</span></span></div></div>`
   }).join(''):'<div class="card muted">none</div>';
+  const p=document.getElementById('pnl24');
+  p.textContent=(d.pnl24>=0?'+':'')+d.pnl24.toFixed(2)+'% 24h';
+  p.className='num '+(d.pnl24>=0?'pnl-pos':'pnl-neg');
+  const icons={TP2:'🏁',STOP:'❌',RUNNER:'🏃'};
+  document.getElementById('closed').innerHTML=d.closed.length?d.closed.map(c=>{
+   const cls=c.dir==='LONG'?'long':'short';
+   const when=new Date(c.t).toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+   return `<div class=card><div class=row>
+    <span class=sym>${icons[c.kind]||''} ${c.sym} <span class=${cls}>${c.dir}</span>
+    <span class=muted style="font-weight:400">${c.kind}</span></span>
+    <span class="num ${c.pnl_pct>=0?'pnl-pos':'pnl-neg'}">${(c.pnl_pct>=0?'+':'')+c.pnl_pct.toFixed(2)}%</span></div>
+    <div class=row><span class=muted>$${px(c.entry)} → $${px(c.exit)}</span>
+    <span class=muted>${when}</span></div></div>`
+  }).join(''):'<div class="card muted">none yet</div>';
   document.getElementById('events').innerHTML=
    d.events.map(e=>`<div class=event>${e.replace(/</g,'&lt;')}</div>`).join('')||'<div class="card muted">none</div>';
- }catch(e){document.getElementById('status').textContent='OFFLINE';
-  document.getElementById('status').className='badge warn'}
 }
-tick();setInterval(tick,10000);
+function offline(){document.getElementById('status').textContent='OFFLINE';
+ document.getElementById('status').className='badge warn'}
+async function poll(){try{render(await (await fetch('/data'+(KEY?'?key='+KEY:''))).json())}
+ catch(e){offline()}}
+try{
+ const es=new EventSource('/stream'+(KEY?'?key='+KEY:''));
+ es.onmessage=e=>render(JSON.parse(e.data));
+ es.onerror=()=>{offline()};
+}catch(e){poll();setInterval(poll,5000)}
+poll();
 </script></body></html>"""
 
 
@@ -197,6 +236,19 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/data":
             self._send(200, json.dumps(build_data()).encode(),
                        "application/json")
+        elif url.path == "/stream":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            try:
+                while True:
+                    payload = json.dumps(build_data())
+                    self.wfile.write(f"data: {payload}\n\n".encode())
+                    self.wfile.flush()
+                    time.sleep(2)
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                return
         elif url.path == "/":
             self._send(200, PAGE.encode(), "text/html")
         else:
