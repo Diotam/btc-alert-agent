@@ -90,6 +90,9 @@ WICK_TOL_BODY = 0.20         # ...or <= this fraction of the body (HA-open lag)
 CONFIRM_TTL = 6              # 1m candles to complete both confirmations
 STOP_PAD_ATR = 0.30          # stop pad beyond the pattern's real extreme (1m ATR)
 MIN_RISK_ATR15 = 0.20        # risk floor vs 15m ATR so 1m stops aren't microscopic
+REPLAY_1M_CANDLES = 20       # 1m candles replayed per run; MUST exceed the gap
+                             # between runs (cron 5m + jitter/queue) or sequences
+                             # get chopped mid-pattern and no entry can complete
 REQUIRE_ENTRY_CONFIRM = True # entry needs a volume spike OR a PA pattern
 VOL_SPIKE_MULT = 1.50        # confirmation-candle volume vs 20-candle average
 BASE_WINDOW = 20             # candles before the doji defining the reversal base
@@ -905,7 +908,7 @@ def check_asset(asset, state):
         source, c1 = fetch(asset, "1m", 40)
         if c1:
             last_closed = len(c1) - 2
-            cutoff = c1[last_closed]["t"] - 5 * MS["1m"]
+            cutoff = c1[last_closed]["t"] - REPLAY_1M_CANDLES * MS["1m"]
             if ast["zone"]["last_1m_t"] < cutoff:
                 ast["zone"]["last_1m_t"] = cutoff
             ha = heikin_ashi(c1)
