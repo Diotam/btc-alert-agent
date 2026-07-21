@@ -38,6 +38,7 @@ import os
 import sys
 import time
 import urllib.request
+import zlib
 from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -53,6 +54,10 @@ DEXES = [""]                       # "" = main crypto dex
 MIN_DAY_VOLUME_USD = 1_000_000     # skip markets below $1M 24h notional
 MAX_ASSETS = 100
 FETCH_DELAY_S = 0.12
+REQUEST_TIMEOUT_S = 8              # fail fast: a throttled API must not burn 20s
+RUN_BUDGET_S = 480                 # hard per-run budget; remaining assets resume
+                                   # next run via a rotating cursor
+MAX_ZONES = 20                     # cap concurrently open reversal zones
 
 ASSETS = [                         # used when DISCOVER_ALL = False / discovery fails
     {"symbol": "BTC", "label": "BTC-PERP", "hl_coin": "BTC",
@@ -158,7 +163,8 @@ def write_run_summary():
 
 
 # --------------------------- data sources ---------------------------------
-def http_json(url, payload=None, timeout=20):
+def http_json(url, payload=None, timeout=None):
+    timeout = timeout or REQUEST_TIMEOUT_S
     headers = {"Content-Type": "application/json",
                "User-Agent": "Mozilla/5.0 (signal-alert-agent/7.0)"}
     data = json.dumps(payload).encode() if payload is not None else None
@@ -854,6 +860,12 @@ def check_asset(asset, state):
         state[sym] = ast
         return changed
 
+    # stagger each asset's context cadence so scans don't herd into one run
+    if ast["last_setup_check"] == 0:
+        ast["last_setup_check"] = now_ms - (
+            zlib.crc32(sym.encode()) % (SETUP_REFRESH_MIN * 60_000))
+        changed = True
+
     # ---- 15m context on its cadence: open / close the reversal zone --------
     if now_ms - ast["last_setup_check"] >= SETUP_REFRESH_MIN * 60_000:
         ast["last_setup_check"] = now_ms
@@ -873,7 +885,9 @@ def check_asset(asset, state):
                         else f"%K recovered past {ZONE_EXIT_K}"
                     log(f"{sym}: 15m zone {ast['zone']['direction']} closed - {why}")
                     ast["zone"], ast["phase"] = None, "SCAN"
-            if not ast["zone"]:
+            open_zones = sum(1 for v in state.values()
+                             if isinstance(v, dict) and v.get("zone"))
+            if not ast["zone"] and open_zones < MAX_ZONES:
                 for direction in (["LONG"] + (["SHORT"] if ENABLE_SHORTS else [])):
                     if stoch_setup(kline, i, direction == "LONG"):
                         ast["zone"] = {"direction": direction,
@@ -922,9 +936,19 @@ def check_once():
     state = load_state()
     changed = False
     failures = 0
+    start = time.time()
     assets = active_assets()
+    meta = state.get("_meta") or {}
+    cursor = meta.get("cursor", 0) % max(len(assets), 1)
+    order = assets[cursor:] + assets[:cursor]      # rotate for fairness
+    stopped_at = None
     try:
-        for asset in assets:
+        for n, asset in enumerate(order):
+            if time.time() - start > RUN_BUDGET_S:
+                stopped_at = (cursor + n) % len(assets)
+                log(f"Run budget ({RUN_BUDGET_S}s) reached after {n} assets - "
+                    f"resuming from {assets[stopped_at]['symbol']} next run")
+                break
             try:
                 changed = check_asset(asset, state) or changed
             except Exception as e:
@@ -932,6 +956,10 @@ def check_once():
                 log(f"{asset['symbol']}: check failed: {e}")
                 RUN_STATUS.append(f"{asset['symbol']} error")
             time.sleep(FETCH_DELAY_S)
+        new_cursor = stopped_at if stopped_at is not None else 0
+        if meta.get("cursor", 0) != new_cursor:
+            state["_meta"] = {"cursor": new_cursor}
+            changed = True
         if changed or not STATE_FILE.exists():
             save_state(state)
         if failures:
