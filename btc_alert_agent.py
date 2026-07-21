@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-HEIKIN ASHI + STOCHASTIC REVERSAL AGENT - 15m zones, 5m entries & exits
+HEIKIN ASHI + STOCHASTIC REVERSAL AGENT - 30m zones, 5m entries & exits
 ------------------------------------------------------------------------
-The 15m chart supplies the trade thesis; the 5m chart supplies entries
+The 30m chart supplies the trade thesis; the 5m chart supplies entries
 and exits. Pattern logic reads HA candles; entries and stops use REAL
 candle prices.
 
-15M REVERSAL ZONE (the thesis):
+30M REVERSAL ZONE (the thesis):
   %K crosses / pins beyond the exhaustion line (20 / 80) with weakening
-  momentum -> a directional zone opens for up to 8 x 15m candles, and
+  momentum -> a directional zone opens for up to 8 x 30m candles, and
   closes early if %K recovers past 50. Max 20 zones at once.
 
 5M ENTRY SEQUENCE (hunted while the zone is live):
@@ -18,7 +18,7 @@ candle prices.
 
 EXITS (all on 5m):
   Stop beyond the 5m pattern extreme (0.20 x 5m ATR pad, floored at
-  0.20 x 15m ATR). TP1 2R (stop -> breakeven), TP2 3R, and after TP1 a
+  0.20 x 30m ATR). TP1 2R (stop -> breakeven), TP2 3R, and after TP1 a
   smoothed-HA flip on 5m closes the runner. Closes recorded to
   trades.log.
 
@@ -74,7 +74,8 @@ STOCH_D = 3                  # %D smoothing
 STOCH_OVERSOLD = 20          # the "bottom line"
 STOCH_OVERBOUGHT = 80        # the "top line"
 CROSS_LOOKBACK = 6           # the cross must have happened within this many candles
-ZONE_TTL_15M = 8             # a 15m reversal zone stays live this many 15m candles
+CTX_TF = "30m"               # context timeframe: the trade thesis lives here
+ZONE_TTL = 8                 # a reversal zone stays live this many context candles
 ZONE_EXIT_K = 50             # zone closes early once 15m %K recovers past this
 DOJI_BODY_FRAC = 0.12        # HA body <= this fraction of range = doji
 BIG_BODY_FRAC = 0.45         # HA body >= this fraction of range = large body
@@ -88,17 +89,19 @@ WICK_TOL_FRAC = 0.15         # "no wick" tolerance: <= this fraction of range
 WICK_TOL_BODY = 0.20         # ...or <= this fraction of the body (HA-open lag)
 CONFIRM_TTL = 6              # 5m candles to complete both confirmations
 STOP_PAD_ATR = 0.20          # stop pad beyond the pattern's real extreme (5m ATR)
-MIN_RISK_ATR15 = 0.20        # risk floor vs 15m ATR so 5m stops aren't microscopic
+MIN_RISK_ATR_CTX = 0.20      # risk floor vs context ATR so 5m stops aren't microscopic
 REPLAY_5M_CANDLES = 6        # 5m candles replayed per run (covers cron jitter)
 REQUIRE_ENTRY_CONFIRM = True # entry needs a volume spike OR a PA pattern
 VOL_SPIKE_MULT = 1.50        # confirmation-candle volume vs 20-candle average
 BASE_WINDOW = 20             # candles before the doji defining the reversal base
 R_TP1, R_TP2 = 2.0, 3.0
+TP1_CLOSE_FRAC = 0.50        # fraction of the position taken off at TP1 -
+                             # ledger P&L blends TP1 and final-exit legs
 BREAKEVEN_AFTER_TP1 = True
 SHA_EXIT = True              # after TP1, close the runner when smoothed HA flips
 SHA_LEN1 = 5                 # pre-smoothing EMA on OHLC
 SHA_LEN2 = 5                 # post-smoothing EMA on the HA values
-SETUP_REFRESH_MIN = 12       # scan cadence (new 15m candles processed as they close)
+SETUP_REFRESH_MIN = 25       # context scan cadence (~every 30m candle)
 
 TIMEZONE = "America/Chicago"
 STATE_FILE = Path(__file__).parent / "btc_agent_state.json"
@@ -462,7 +465,7 @@ def is_strong(ha, atr_now, long):
 
 
 def stoch_setup(kline, sha, i, long):
-    """15m zone trigger: %K beyond the exhaustion line (or a recent cross
+    """Context-TF zone trigger: %K beyond the exhaustion line (or a recent cross
     back through it) PLUS fading momentum measured on smoothed HA - the
     trend-side candle bodies must be shrinking (or already flipped)."""
     if i < CROSS_LOOKBACK + 1 or kline[i] is None:
@@ -595,7 +598,7 @@ def entry_message(asset, direction, plan, rules1, rules2, confirms,
     lines = [
         f"{icon} <b>{direction} REVERSAL ENTRY \u00b7 {esc(sym)}</b> \u2014 "
         f"<code>${fmt_px(plan['entry'])}</code>",
-        f"<i>{esc(asset['label'])} \u00b7 15m zone \u00b7 5m sequence \u00b7 {esc(fmt_ts(t))}</i>",
+        f"<i>{esc(asset['label'])} \u00b7 30m zone \u00b7 5m sequence \u00b7 {esc(fmt_ts(t))}</i>",
         "",
         "\U0001F4CB <b>Trade plan (enter at market):</b>",
         f"<code>Entry  ${fmt_px(plan['entry'])}</code>",
@@ -605,7 +608,7 @@ def entry_message(asset, direction, plan, rules1, rules2, confirms,
         f"<code>TP2    ${fmt_px(plan['tp2'])}</code>  ({R_TP2:.0f}R)",
         f"<code>Risk   ${fmt_px(plan['risk'])}</code>  (1R)",
         "",
-        f"\U0001F50D <b>Sequence completed</b> (15m %K {kval:.1f} at zone open)",
+        f"\U0001F50D <b>Sequence completed</b> (30m %K {kval:.1f} at zone open)",
         "\u2705 Exhaustion cross + weak momentum",
         f"\u2705 {'Green' if direction == 'LONG' else 'Red'} HA doji",
         "<b>Confirmation candle 1</b>",
@@ -652,14 +655,22 @@ TRADES_LOG = Path(__file__).parent / "trades.log"
 
 
 def record_close(sym, trade, exit_px, kind):
-    """Append a closed trade to the ledger (best-effort)."""
+    """Append a closed trade to the ledger (best-effort). If TP1 was hit,
+    P&L blends the TP1 partial with the final exit so a breakeven stop
+    after TP1 shows the profit actually banked."""
     try:
+        final = pnl_pct(trade, exit_px)
+        if trade.get("tp1_hit"):
+            tp1_leg = pnl_pct(trade, trade["tp1"])
+            pnl = TP1_CLOSE_FRAC * tp1_leg + (1 - TP1_CLOSE_FRAC) * final
+        else:
+            pnl = final
         with open(TRADES_LOG, "a") as f:
             f.write(json.dumps({"t": int(time.time() * 1000), "sym": sym,
                                 "dir": trade["verdict"],
                                 "entry": trade["entry"], "exit": exit_px,
                                 "kind": kind,
-                                "pnl_pct": round(pnl_pct(trade, exit_px), 3)})
+                                "pnl_pct": round(pnl, 3)})
                     + "\n")
     except OSError:
         pass
@@ -758,7 +769,7 @@ def process_5m_candle(asset, ast, real, ha, a5, vol_avg, i, source):
             if ALERT_STAGES:
                 send_telegram(doji_message(asset, direction, zone["kval"],
                                            real[i]["c"], real[i]["t"]))
-            log(f"{sym}: 5m {'green' if long else 'red'} HA doji in 15m zone - "
+            log(f"{sym}: 5m {'green' if long else 'red'} HA doji in {CTX_TF} zone - "
                 "watching for 2 strong 5m candles")
         return True
 
@@ -792,7 +803,7 @@ def process_5m_candle(asset, ast, real, ha, a5, vol_avg, i, source):
             sign = 1 if long else -1
             stop = seq["pattern_ext"] - sign * STOP_PAD_ATR * (a5[i] or 0)
             risk = abs(entry - stop)
-            floor = MIN_RISK_ATR15 * zone.get("atr15", 0)
+            floor = MIN_RISK_ATR_CTX * zone.get("atr_ctx", 0)
             if floor and risk < floor:
                 stop = entry - sign * floor
                 risk = floor
@@ -894,7 +905,7 @@ def check_asset(asset, state):
     if now_ms - ast["last_setup_check"] >= SETUP_REFRESH_MIN * 60_000:
         ast["last_setup_check"] = now_ms
         changed = True
-        source15, c15 = fetch(asset, "15m", 60)
+        source15, c15 = fetch(asset, CTX_TF, 60)
         if c15:
             kline, _ = stochastic(c15)
             sha15 = smoothed_heikin_ashi(c15)
@@ -908,7 +919,7 @@ def check_asset(asset, state):
                 if now_ms > ast["zone"]["expires_t"] or recovered:
                     why = "expired" if now_ms > ast["zone"]["expires_t"] \
                         else f"%K recovered past {ZONE_EXIT_K}"
-                    log(f"{sym}: 15m zone {ast['zone']['direction']} closed - {why}")
+                    log(f"{sym}: {CTX_TF} zone {ast['zone']['direction']} closed - {why}")
                     ast["zone"], ast["phase"] = None, "SCAN"
             open_zones = sum(1 for v in state.values()
                              if isinstance(v, dict) and v.get("zone"))
@@ -917,11 +928,11 @@ def check_asset(asset, state):
                     if stoch_setup(kline, sha15, i, direction == "LONG"):
                         ast["zone"] = {"direction": direction,
                                        "kval": kline[i],
-                                       "atr15": a15[i] or 0,
-                                       "expires_t": now_ms + ZONE_TTL_15M * MS["15m"],
+                                       "atr_ctx": a15[i] or 0,
+                                       "expires_t": now_ms + ZONE_TTL * MS[CTX_TF],
                                        "seq": None, "last_5m_t": 0}
                         ast["phase"] = "ZONE"
-                        log(f"{sym}: 15m reversal zone {direction} open "
+                        log(f"{sym}: {CTX_TF} reversal zone {direction} open "
                             f"(%K {kline[i]:.1f}) - hunting 5m sequences")
                         break
 
@@ -1029,7 +1040,7 @@ if __name__ == "__main__":
             watched = ", ".join(a["symbol"] for a in ASSETS)
         send_telegram("\u2705 <b>Signal alert agent - test message</b>\n"
                       f"Your alert pipeline works. Watching: {esc(watched)}.\n"
-                      "Strategy: 15m stochastic reversal zones \u2192 5m HA "
+                      "Strategy: 30m stochastic reversal zones \u2192 5m HA "
                       "sequence (doji + two strong candles + volume/PA "
                       "confirmation) \u2192 entry; exits on 5m: 2R/3R targets, "
                       "breakeven after TP1, smoothed-HA runner exit.")
