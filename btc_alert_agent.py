@@ -51,7 +51,7 @@ DISCOVER_ALL = True
 DISCOVER_DEXES = False             # main crypto dex only (no stock venues)
 DEXES = [""]                       # "" = main crypto dex
 MIN_DAY_VOLUME_USD = 1_000_000     # skip markets below $1M 24h notional
-MAX_ASSETS = 150
+MAX_ASSETS = 100
 FETCH_DELAY_S = 0.12
 
 ASSETS = [                         # used when DISCOVER_ALL = False / discovery fails
@@ -91,11 +91,11 @@ BASE_WINDOW = 20             # candles before the doji defining the reversal bas
 R_TP1, R_TP2 = 2.0, 3.0
 BREAKEVEN_AFTER_TP1 = True
 SHA_EXIT = True              # after TP1, close the runner when smoothed HA flips
-SHA_LEN1 = 10                # pre-smoothing EMA on OHLC
-SHA_LEN2 = 10                # post-smoothing EMA on the HA values
+SHA_LEN1 = 5                 # pre-smoothing EMA on OHLC
+SHA_LEN2 = 5                 # post-smoothing EMA on the HA values
 SETUP_REFRESH_MIN = 12       # scan cadence (new 15m candles processed as they close)
 
-TIMEZONE = "America/New_York"
+TIMEZONE = "America/Chicago"
 STATE_FILE = Path(__file__).parent / "btc_agent_state.json"
 # ===========================================================================
 
