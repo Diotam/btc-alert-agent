@@ -75,11 +75,13 @@ def closed_trades(keep=200):
         except json.JSONDecodeError:
             continue
     now_ms = time.time() * 1000
-    def total(days):
+    def window(days):
         cut = now_ms - days * 86400_000
-        return round(sum(r.get("pnl_pct", 0) for r in rows
-                         if r.get("t", 0) >= cut), 2)
-    pnl = {"d": total(1), "w": total(7), "m": total(30)}
+        sub = [r for r in rows if r.get("t", 0) >= cut]
+        return {"pnl": round(sum(r.get("pnl_pct", 0) for r in sub), 2),
+                "w": sum(1 for r in sub if r.get("pnl_pct", 0) > 0),
+                "l": sum(1 for r in sub if r.get("pnl_pct", 0) < 0)}
+    pnl = {"d": window(1), "w": window(7), "m": window(30)}
     return rows[-keep:][::-1], pnl
 
 
@@ -163,6 +165,7 @@ h1{font-size:17px;margin:4px 0 12px}
 <span id=meta class=muted style="font-weight:400;font-size:12px"></span></h1>
 <div class=card>
   <div id=total class=total>-</div>
+  <div id=wl class=muted style="text-align:center;margin:-6px 0 10px"></div>
   <div class=tabs>
     <div class="tab active" data-p=d onclick="setP('d')">DAY</div>
     <div class=tab data-p=w onclick="setP('w')">WEEK</div>
@@ -185,10 +188,15 @@ function px(p){if(p==null)return '-';
  :p>=1?p.toFixed(2):p.toFixed(6)}
 function render(d){
   LAST=d;
-  const tot=d.pnl?d.pnl[PERIOD]:0;
+  const pw=d.pnl?d.pnl[PERIOD]:{pnl:0,w:0,l:0};
+  const tot=pw.pnl;
   const te=document.getElementById('total');
   te.textContent=(tot>=0?'+':'')+tot.toFixed(2)+'%';
   te.className='total '+(tot>=0?'pnl-pos':'pnl-neg');
+  const n=pw.w+pw.l;
+  document.getElementById('wl').innerHTML=n?
+   `<span class=pnl-pos>${pw.w}W</span> · <span class=pnl-neg>${pw.l}L</span> · ${Math.round(pw.w/n*100)}% win rate`
+   :'no closed trades yet';
   const st=document.getElementById('status');
   const fresh=d.state_age_s!=null&&d.state_age_s<480;
   st.textContent=fresh?'LIVE':'STALE '+(d.state_age_s==null?'':Math.round(d.state_age_s/60)+'m');
