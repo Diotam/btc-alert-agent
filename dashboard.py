@@ -129,6 +129,7 @@ def build_data():
 
 
 PAGE = """<!DOCTYPE html><html><head>
+<meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Signal Agent</title><style>
 body{background:#0d1117;color:#e6edf3;font-family:-apple-system,Segoe UI,sans-serif;
@@ -238,12 +239,21 @@ function offline(){document.getElementById('status').textContent='OFFLINE';
  document.getElementById('status').className='badge warn'}
 async function poll(){try{render(await (await fetch('/data'+(KEY?'?key='+KEY:''))).json())}
  catch(e){offline()}}
-try{
- const es=new EventSource('/stream'+(KEY?'?key='+KEY:''));
- es.onmessage=e=>render(JSON.parse(e.data));
- es.onerror=()=>{offline()};
-}catch(e){poll();setInterval(poll,5000)}
-poll();
+let ES=null, lastMsg=0;
+function connect(){
+ try{if(ES)ES.close()}catch(e){}
+ try{
+  ES=new EventSource('/stream'+(KEY?'?key='+KEY:''));
+  ES.onmessage=e=>{lastMsg=Date.now();render(JSON.parse(e.data))};
+  ES.onerror=()=>{offline()};
+ }catch(e){offline()}
+}
+// watchdog: if the stream goes quiet (backgrounded tab, dropped
+// connection), poll once and rebuild the stream
+setInterval(()=>{if(Date.now()-lastMsg>12000){poll();connect()}},6000);
+document.addEventListener('visibilitychange',()=>{
+ if(!document.hidden){poll();if(Date.now()-lastMsg>6000)connect()}});
+poll();connect();
 </script></body></html>"""
 
 
@@ -279,7 +289,7 @@ class Handler(BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError, OSError):
                 return
         elif url.path == "/":
-            self._send(200, PAGE.encode(), "text/html")
+            self._send(200, PAGE.encode(), "text/html; charset=utf-8")
         else:
             self._send(404, b"not found", "text/plain")
 
