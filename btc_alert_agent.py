@@ -114,8 +114,8 @@ def fmt_ts(ms, fmt="%Y-%m-%d %I:%M %p %Z"):
 
 
 def log(msg):
-    print(f"[{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC] {msg}",
-          flush=True)
+    ts = datetime.now(ZoneInfo(TIMEZONE))
+    print(f"[{ts.strftime('%Y-%m-%d %H:%M:%S %Z')}] {msg}", flush=True)
 
 
 def fmt_px(p):
