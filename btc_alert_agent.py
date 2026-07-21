@@ -461,38 +461,44 @@ def is_strong(ha, atr_now, long):
     return color_ok and big and wick_ok, rules
 
 
-def stoch_setup(kline, i, long):
-    """LONG: %K crossed below the bottom line recently AND downward momentum
-    is weakening. SHORT: mirrored at the top line."""
-    if i < 3 or kline[i] is None or kline[i - 1] is None or kline[i - 2] is None:
+def stoch_setup(kline, sha, i, long):
+    """15m zone trigger: %K beyond the exhaustion line (or a recent cross
+    back through it) PLUS fading momentum measured on smoothed HA - the
+    trend-side candle bodies must be shrinking (or already flipped)."""
+    if i < CROSS_LOOKBACK + 1 or kline[i] is None:
         return False
-    # a fresh cross through the line within the lookback, OR still pinned
-    # in the exhaustion zone (deep trends keep %K below the line for long
-    # stretches - the tradeable moment is when momentum fades while there)
-    in_zone = (kline[i] < STOCH_OVERSOLD if long
-               else kline[i] > STOCH_OVERBOUGHT)
-    crossed = in_zone
-    for j in range(max(3, i - CROSS_LOOKBACK + 1), i + 1):
+    line = STOCH_OVERSOLD if long else STOCH_OVERBOUGHT
+    beyond = kline[i] <= line if long else kline[i] >= line
+    crossed = False
+    for j in range(max(1, i - CROSS_LOOKBACK), i + 1):
         if kline[j] is None or kline[j - 1] is None:
             continue
-        if long and kline[j - 1] >= STOCH_OVERSOLD > kline[j]:
+        if long and kline[j - 1] <= line < kline[j]:
             crossed = True
-        if not long and kline[j - 1] <= STOCH_OVERBOUGHT < kline[j]:
+        if not long and kline[j - 1] >= line > kline[j]:
             crossed = True
-    if not crossed:
+    near = kline[i] <= STOCH_OVERSOLD + 10 if long \
+        else kline[i] >= STOCH_OVERBOUGHT - 10
+    if not (beyond or (crossed and near)):
         return False
-    d_now = kline[i] - kline[i - 1]
-    d_prev = kline[i - 1] - kline[i - 2]
+    # ---- weakening momentum on smoothed HA ---------------------------------
+    if sha[i] is None or sha[i - 1] is None:
+        return False
+    def body(c):
+        return abs(c["c"] - c["o"])
     if long:
-        weak = d_now > d_prev or d_now > 0     # decline decelerating or turning up
-        below = kline[i] < STOCH_OVERSOLD + 10
-        return weak and below
-    weak = d_now < d_prev or d_now < 0         # climb decelerating or turning down
-    above = kline[i] > STOCH_OVERBOUGHT - 10
-    return weak and above
+        turned = sha[i]["c"] >= sha[i]["o"]          # already flipped green
+        fading = (sha[i]["c"] < sha[i]["o"] and
+                  sha[i - 1]["c"] < sha[i - 1]["o"] and
+                  body(sha[i]) < body(sha[i - 1]))   # red bodies shrinking
+    else:
+        turned = sha[i]["c"] <= sha[i]["o"]
+        fading = (sha[i]["c"] > sha[i]["o"] and
+                  sha[i - 1]["c"] > sha[i - 1]["o"] and
+                  body(sha[i]) < body(sha[i - 1]))
+    return fading or turned
 
 
-# ----------------------- entry confirmation layer ---------------------------
 def entry_confirmations(real, vols_avg, doji_i, c1_i, c2_i, long):
     """Volume spikes and price-action patterns on REAL candles around the
     completed sequence. Returns a list of human-readable confirmations."""
@@ -891,6 +897,7 @@ def check_asset(asset, state):
         source15, c15 = fetch(asset, "15m", 60)
         if c15:
             kline, _ = stochastic(c15)
+            sha15 = smoothed_heikin_ashi(c15)
             a15 = atr(c15)
             i = len(c15) - 2
             if ast["zone"]:
@@ -907,7 +914,7 @@ def check_asset(asset, state):
                              if isinstance(v, dict) and v.get("zone"))
             if not ast["zone"] and open_zones < MAX_ZONES:
                 for direction in (["LONG"] + (["SHORT"] if ENABLE_SHORTS else [])):
-                    if stoch_setup(kline, i, direction == "LONG"):
+                    if stoch_setup(kline, sha15, i, direction == "LONG"):
                         ast["zone"] = {"direction": direction,
                                        "kval": kline[i],
                                        "atr15": a15[i] or 0,
