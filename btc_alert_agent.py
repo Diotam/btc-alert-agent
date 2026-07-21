@@ -644,6 +644,24 @@ def lifecycle_message(asset, kind, trade, exit_px, event_t, note):
     ])
 
 
+# ---------------------------- trade ledger ---------------------------------
+TRADES_LOG = Path(__file__).parent / "trades.log"
+
+
+def record_close(sym, trade, exit_px, kind):
+    """Append a closed trade to the ledger (best-effort)."""
+    try:
+        with open(TRADES_LOG, "a") as f:
+            f.write(json.dumps({"t": int(time.time() * 1000), "sym": sym,
+                                "dir": trade["verdict"],
+                                "entry": trade["entry"], "exit": exit_px,
+                                "kind": kind,
+                                "pnl_pct": round(pnl_pct(trade, exit_px), 3)})
+                    + "\n")
+    except OSError:
+        pass
+
+
 # ------------------------------- state ------------------------------------
 def load_state():
     try:
@@ -682,6 +700,7 @@ def process_open_trade(asset, trade, candles, last_closed_t):
                 send_telegram(lifecycle_message(asset, "STOP", trade,
                                                 trade["stop"], c["t"], note))
             log(f"{sym}: STOPPED OUT at ${fmt_px(trade['stop'])}")
+            record_close(sym, trade, trade["stop"], "STOP")
             RUN_ALERTS.append(f"{sym} STOPPED OUT ({pnl_pct(trade, trade['stop']):+.2f}%)")
             return None, True
 
@@ -691,6 +710,7 @@ def process_open_trade(asset, trade, candles, last_closed_t):
                     asset, "TP2", trade, trade["tp2"], c["t"],
                     "Full 3R target reached. Trade closed."))
             log(f"{sym}: TP2 HIT at ${fmt_px(trade['tp2'])}")
+            record_close(sym, trade, trade["tp2"], "TP2")
             RUN_ALERTS.append(f"{sym} TP2 HIT ({pnl_pct(trade, trade['tp2']):+.2f}%)")
             return None, True
 
@@ -853,6 +873,7 @@ def check_asset(asset, state):
                                 "runner closed at the 15m close."))
                         log(f"{sym}: RUNNER CLOSED at ${fmt_px(exit_px)} "
                             "(smoothed HA flip)")
+                        record_close(sym, trade, exit_px, "RUNNER")
                         RUN_ALERTS.append(
                             f"{sym} runner closed ({pnl_pct(trade, exit_px):+.2f}%)")
                         ast["trade"], ast["phase"] = None, "SCAN"
