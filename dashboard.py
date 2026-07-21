@@ -63,20 +63,24 @@ def journal_events(n=400, keep=25):
     return events[-keep:][::-1]
 
 
-def closed_trades(keep=15):
+def closed_trades(keep=200):
     try:
-        lines = TRADES_LOG.read_text().splitlines()[-200:]
+        lines = TRADES_LOG.read_text().splitlines()[-2000:]
     except OSError:
-        return [], 0.0
+        return [], {"d": 0.0, "w": 0.0, "m": 0.0}
     rows = []
     for ln in lines:
         try:
             rows.append(json.loads(ln))
         except json.JSONDecodeError:
             continue
-    day_ago = (time.time() - 86400) * 1000
-    pnl24 = sum(r.get("pnl_pct", 0) for r in rows if r.get("t", 0) >= day_ago)
-    return rows[-keep:][::-1], round(pnl24, 2)
+    now_ms = time.time() * 1000
+    def total(days):
+        cut = now_ms - days * 86400_000
+        return round(sum(r.get("pnl_pct", 0) for r in rows
+                         if r.get("t", 0) >= cut), 2)
+    pnl = {"d": total(1), "w": total(7), "m": total(30)}
+    return rows[-keep:][::-1], pnl
 
 
 def build_data():
@@ -116,11 +120,11 @@ def build_data():
                                           - time.time() * 1000) / 60000))})
     trades.sort(key=lambda t: t["sym"])
     zones.sort(key=lambda z: z["mins_left"])
-    closed, pnl24 = closed_trades()
+    closed, pnl = closed_trades()
     return {"now": time.time(),
             "state_age_s": int(time.time() - mtime) if mtime else None,
             "scanned": scanned, "trades": trades, "zones": zones,
-            "closed": closed, "pnl24": pnl24,
+            "closed": closed, "pnl": pnl,
             "events": journal_events()}
 
 
@@ -147,19 +151,43 @@ h1{font-size:17px;margin:4px 0 12px}
 .event{font-family:Menlo,monospace;font-size:11px;color:#8b949e;
        padding:3px 0;border-bottom:1px solid #161b22;word-break:break-all}
 .pnl-pos{color:#3fb950;font-weight:700}.pnl-neg{color:#f85149;font-weight:700}
+.tabs{display:flex;gap:6px}
+.tab{flex:1;text-align:center;padding:6px 0;border-radius:8px;font-size:12px;
+     font-weight:600;color:#8b949e;background:#0d1117;border:1px solid #21262d}
+.tab.active{color:#e6edf3;background:#21262d}
+.total{font-size:30px;font-weight:800;font-family:Menlo,monospace;
+       text-align:center;margin:8px 0 10px}
 </style></head><body>
 <h1>Signal Agent <span id=status class=badge></span>
 <span id=meta class=muted style="font-weight:400;font-size:12px"></span></h1>
+<div class=card>
+  <div id=total class=total>-</div>
+  <div class=tabs>
+    <div class="tab active" data-p=d onclick="setP('d')">DAY</div>
+    <div class=tab data-p=w onclick="setP('w')">WEEK</div>
+    <div class=tab data-p=m onclick="setP('m')">MONTH</div>
+  </div>
+</div>
 <div class=section>Open trades</div><div id=trades></div>
 <div class=section>Active zones</div><div id=zones></div>
-<div class=section>Closed trades <span id=pnl24 class=num style="float:right;text-transform:none;letter-spacing:0"></span></div><div id=closed></div>
+<div class=section>Closed trades <span id=csub class=muted style="float:right;text-transform:none;letter-spacing:0"></span></div><div id=closed></div>
 <div class=section>Recent events</div><div id=events></div>
 <script>
 const KEY=new URLSearchParams(location.search).get('key')||'';
+let PERIOD='d', LAST=null;
+const DAYS={d:1,w:7,m:30}, LABEL={d:'last 24h',w:'last 7 days',m:'last 30 days'};
+function setP(p){PERIOD=p;
+ document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.dataset.p===p));
+ if(LAST)render(LAST);}
 function px(p){if(p==null)return '-';
  return p>=10000?p.toLocaleString(undefined,{maximumFractionDigits:0})
  :p>=1?p.toFixed(2):p.toFixed(6)}
 function render(d){
+  LAST=d;
+  const tot=d.pnl?d.pnl[PERIOD]:0;
+  const te=document.getElementById('total');
+  te.textContent=(tot>=0?'+':'')+tot.toFixed(2)+'%';
+  te.className='total '+(tot>=0?'pnl-pos':'pnl-neg');
   const st=document.getElementById('status');
   const fresh=d.state_age_s!=null&&d.state_age_s<180;
   st.textContent=fresh?'LIVE':'STALE '+(d.state_age_s==null?'':Math.round(d.state_age_s/60)+'m');
@@ -188,11 +216,11 @@ function render(d){
     <div class=row><span class=muted>${z.stage}</span>
     <span class=muted>%K ${z.k==null?'-':z.k.toFixed(1)} · now <span class=num>$${px(z.mid)}</span></span></div></div>`
   }).join(''):'<div class="card muted">none</div>';
-  const p=document.getElementById('pnl24');
-  p.textContent=(d.pnl24>=0?'+':'')+d.pnl24.toFixed(2)+'% 24h';
-  p.className='num '+(d.pnl24>=0?'pnl-pos':'pnl-neg');
+  document.getElementById('csub').textContent=LABEL[PERIOD];
+  const cut=Date.now()-DAYS[PERIOD]*86400000;
+  const shown=d.closed.filter(c=>c.t>=cut).slice(0,20);
   const icons={TP2:'🏁',STOP:'❌',RUNNER:'🏃'};
-  document.getElementById('closed').innerHTML=d.closed.length?d.closed.map(c=>{
+  document.getElementById('closed').innerHTML=shown.length?shown.map(c=>{
    const cls=c.dir==='LONG'?'long':'short';
    const when=new Date(c.t).toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
    return `<div class=card><div class=row>
@@ -201,7 +229,7 @@ function render(d){
     <span class="num ${c.pnl_pct>=0?'pnl-pos':'pnl-neg'}">${(c.pnl_pct>=0?'+':'')+c.pnl_pct.toFixed(2)}%</span></div>
     <div class=row><span class=muted>$${px(c.entry)} → $${px(c.exit)}</span>
     <span class=muted>${when}</span></div></div>`
-  }).join(''):'<div class="card muted">none yet</div>';
+  }).join(''):'<div class="card muted">none in this period</div>';
   document.getElementById('events').innerHTML=
    d.events.map(e=>`<div class=event>${e.replace(/</g,'&lt;')}</div>`).join('')||'<div class="card muted">none</div>';
 }
