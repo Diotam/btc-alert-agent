@@ -189,10 +189,11 @@ function render(d){
   te.textContent=(tot>=0?'+':'')+tot.toFixed(2)+'%';
   te.className='total '+(tot>=0?'pnl-pos':'pnl-neg');
   const st=document.getElementById('status');
-  const fresh=d.state_age_s!=null&&d.state_age_s<180;
+  const fresh=d.state_age_s!=null&&d.state_age_s<480;
   st.textContent=fresh?'LIVE':'STALE '+(d.state_age_s==null?'':Math.round(d.state_age_s/60)+'m');
+  const age=d.state_age_s==null?'':' · scan '+(d.state_age_s<60?d.state_age_s+'s':Math.round(d.state_age_s/60)+'m')+' ago';
   st.className='badge '+(fresh?'ok':'warn');
-  document.getElementById('meta').textContent=d.scanned+' markets';
+  document.getElementById('meta').textContent=d.scanned+' markets'+age;
   document.getElementById('trades').innerHTML=d.trades.length?d.trades.map(t=>{
    const cls=t.dir==='LONG'?'long':'short';
    const rp=t.r==null?0:Math.max(0,Math.min(100,(t.r+1)/4*100));
