@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # One-shot installer for the signal agent on a DigitalOcean droplet.
 # Usage (one line, with your values):
-#   TELEGRAM_BOT_TOKEN=123:abc TELEGRAM_CHAT_ID=456 REPO_URL=https://github.com/YOU/YOURREPO.git bash setup-digitalocean.sh
+#   TELEGRAM_BOT_TOKEN=8709225118:AAG4Pr1gEWAkftT1k-JgDD4YufczufcCI_c TELEGRAM_CHAT_ID=5196922172 REPO_URL=https://github.com/YOU/YOURREPO.git bash setup-digitalocean.sh
 set -euo pipefail
 
 : "${TELEGRAM_BOT_TOKEN:?Set TELEGRAM_BOT_TOKEN=... before running}"
