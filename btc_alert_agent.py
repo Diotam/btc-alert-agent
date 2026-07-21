@@ -978,8 +978,9 @@ def check_once():
         if meta.get("cursor", 0) != new_cursor:
             state["_meta"] = {"cursor": new_cursor}
             changed = True
-        if changed or not STATE_FILE.exists():
-            save_state(state)
+        # always save: the state file's mtime doubles as the liveness
+        # heartbeat for the dashboard
+        save_state(state)
         if failures:
             log(f"{failures} asset(s) failed this run - they retry next cycle.")
     finally:
