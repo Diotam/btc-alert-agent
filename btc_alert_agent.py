@@ -968,7 +968,10 @@ def check_once():
                     f"resuming from {assets[stopped_at]['symbol']} next run")
                 break
             try:
+                had_trade = bool((state.get(asset["symbol"]) or {}).get("trade"))
                 changed = check_asset(asset, state) or changed
+                if not had_trade and (state.get(asset["symbol"]) or {}).get("trade"):
+                    save_state(state)      # a trade just opened: persist NOW
             except Exception as e:
                 failures += 1
                 log(f"{asset['symbol']}: check failed: {e}")
