@@ -86,6 +86,9 @@ ALERT_ENTRIES = True
 ALERT_STAGES = False         # pullback-armed alerts (log-only when False)
 ALERT_LIFECYCLE = True       # TP / stop alerts
 
+CTX_TF = "30m"               # context timeframe: the trade thesis lives here
+EXEC_TF = "5m"               # execution timeframe: entries, stops, TPs, exits
+STATE_FILE = Path(__file__).parent / "btc_agent_state.json"
 TIMEZONE = "America/Chicago"
 LOCAL_TZ = ZoneInfo(TIMEZONE)
 
@@ -711,7 +714,7 @@ def seconds_to_next_close(buffer_s=15):
 
 
 def run_loop():
-    log("Heikin Ashi reversal agent started (loop mode). Ctrl+C to stop.")
+    log("3MA + fractal agent started (loop mode). Ctrl+C to stop.")
     check_once()
     while True:
         wait = seconds_to_next_close()
