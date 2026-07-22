@@ -1,26 +1,32 @@
 #!/usr/bin/env python3
 """
-HEIKIN ASHI + STOCHASTIC REVERSAL AGENT - 30m zones, 15m entries & exits
-------------------------------------------------------------------------
-The 30m chart supplies the trade thesis; the 15m chart supplies entries
-and exits. Pattern logic reads HA candles; entries and stops use REAL
-candle prices.
+THREE MOVING AVERAGES + WILLIAMS FRACTAL AGENT (Advent Trading style)
+----------------------------------------------------------------------
+Trend-following pullback entries on a single adjustable timeframe (TF).
 
-30M REVERSAL ZONE (the thesis):
-  %K crosses / pins beyond the exhaustion line (20 / 80) with weakening
-  momentum -> a directional zone opens for up to 8 x 30m candles, and
-  closes early if %K recovers past 50. Max 20 zones at once.
+REGIME (the trend filter):
+  LONG  regime: MA20 > MA50 > MA100, cleanly stacked (held for
+                STACK_STABLE_BARS candles). Entangled / crossing MAs
+                mean NO regime and NO trades.
+  SHORT regime: MA100 > MA50 > MA20, same stability rule.
 
-15M ENTRY SEQUENCE (hunted while the zone is live):
-  green (red) 15m HA doji -> two consecutive green (red) large-body 15m HA
-  candles with wicks on one side only -> volume spike or price-action
-  confirmation on real candles -> enter at the 2nd candle's close.
+LONG ENTRY (mirrored for shorts):
+  1. Price pulls back UNDER MA20 (shallow) or UNDER MA50 (deep)
+  2. A Williams fractal GREEN arrow (bullish swing-low fractal,
+     confirmed FRACTAL_PERIOD candles later) fires inside the pullback
+  3. Enter at the confirming candle close.
+       shallow pullback -> stop just below MA50
+       deep pullback    -> stop just below MA100
+     TP = entry + 1.5 x risk (RR = 1.5)
+  4. If price CLOSES below MA100, the setup is cancelled - no entry on
+     any green arrow until a fresh pullback forms above MA100.
 
-EXITS (all on 15m):
-  Stop beyond the 15m pattern extreme (0.20 x 15m ATR pad, floored at
-  0.20 x 30m ATR). TP1 2R (stop -> breakeven), TP2 3R, and after TP1 a
-  smoothed-HA flip on 15m closes the runner. Closes recorded to
-  trades.log.
+SHORT ENTRY: price pulls back ABOVE MA20 (shallow: stop above MA50) or
+ABOVE MA50 (deep: stop above MA100); red arrow (bearish fractal) enters;
+a close above MA100 cancels. TP = 1.5R.
+
+Exits: single TP at 1.5R or the stop - no partials, no trailing.
+Closes are recorded to trades.log.
 
 Alerts are delivered to Telegram. Config from environment variables
 (GitHub repo Secrets):
@@ -46,6 +52,8 @@ from zoneinfo import ZoneInfo
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
+
+
 # --- Asset universe -------------------------------------------------------
 DISCOVER_ALL = True
 DISCOVER_DEXES = False             # main crypto dex only (no stock venues)
@@ -64,54 +72,31 @@ ASSETS = [                         # used when DISCOVER_ALL = False / discovery 
 ]
 
 # --- Strategy dials -------------------------------------------------------
+TF = "15m"                   # strategy timeframe - one knob: "5m"/"15m"/"30m"
+MA_TYPE = "ema"              # "ema" or "sma"
+MA_LEN1, MA_LEN2, MA_LEN3 = 20, 50, 100
+STACK_STABLE_BARS = 3        # MA ordering must hold this many candles
+                             # (crossing / entangled MAs = no trades)
+FRACTAL_PERIOD = 2           # Williams fractal wing size (confirmed 2 bars later)
+RR = 1.5                     # take-profit at 1.5 x risk
+SL_PAD_ATR = 0.10            # stop sits this far beyond the reference MA
 ENABLE_SHORTS = True
-ALERT_ENTRIES = True         # entry alerts (the signal itself)
-ALERT_STAGES = False         # "DOJI SPOTTED" heads-up messages
-ALERT_LIFECYCLE = True       # TP1 / TP2 / STOPPED OUT trade updates
-STOCH_K = 14                 # stochastic lookback
-STOCH_SMOOTH = 3             # %K smoothing (slow stochastic)
-STOCH_D = 3                  # %D smoothing
-STOCH_OVERSOLD = 20          # the "bottom line"
-STOCH_OVERBOUGHT = 80        # the "top line"
-CROSS_LOOKBACK = 6           # the cross must have happened within this many candles
-CTX_TF = "30m"               # context timeframe: the trade thesis lives here
-EXEC_TF = "5m"               # execution timeframe: entries, stops, TPs, exits
-ZONE_TTL = 8                 # a reversal zone stays live this many context candles
-ZONE_EXIT_K = 50             # zone closes early once 15m %K recovers past this
-DOJI_BODY_FRAC = 0.12        # HA body <= this fraction of range = doji
-BIG_BODY_FRAC = 0.45         # HA body >= this fraction of range = large body
-                             # (HA open starts at the doji midpoint, capping
-                             #  the first confirmation candle near 0.5)
-BODY_MIN_ATR = 0.50          # ...and >= this fraction of ATR (absolute size vs
-                             #  current volatility, not the dead trend's bodies)
-RANGE_MIN_ATR = 0.80         # candle range must be meaningful vs ATR (filters
-                             #  micro flat candles whose ratios look strong)
-WICK_TOL_FRAC = 0.15         # "no wick" tolerance: <= this fraction of range
-WICK_TOL_BODY = 0.20         # ...or <= this fraction of the body (HA-open lag)
-CONFIRM_TTL = 6              # exec-TF candles to complete both confirmations
-STOP_PAD_ATR = 0.20          # stop pad beyond the pattern's real extreme (exec ATR)
-MIN_RISK_ATR_CTX = 0.20      # risk floor vs context ATR so 5m stops aren't microscopic
-REPLAY_EXEC_CANDLES = 3      # exec candles replayed per run (covers any run gap)
-REQUIRE_ENTRY_CONFIRM = True # entry needs a volume spike OR a PA pattern
-VOL_SPIKE_MULT = 1.50        # confirmation-candle volume vs 20-candle average
-BASE_WINDOW = 20             # candles before the doji defining the reversal base
-R_TP1, R_TP2 = 2.0, 3.0
-TP1_CLOSE_FRAC = 0.50        # fraction of the position taken off at TP1 -
-                             # ledger P&L blends TP1 and final-exit legs
-BREAKEVEN_AFTER_TP1 = True
-SHA_EXIT = True              # after TP1, close the runner when smoothed HA flips
-SHA_LEN1 = 5                 # pre-smoothing EMA on OHLC
-SHA_LEN2 = 5                 # post-smoothing EMA on the HA values
-SETUP_REFRESH_MIN = 25       # context scan cadence (~every 30m candle)
+
+ALERT_ENTRIES = True
+ALERT_STAGES = False         # pullback-armed alerts (log-only when False)
+ALERT_LIFECYCLE = True       # TP / stop alerts
 
 TIMEZONE = "America/Chicago"
-STATE_FILE = Path(__file__).parent / "btc_agent_state.json"
-# ===========================================================================
+LOCAL_TZ = ZoneInfo(TIMEZONE)
 
 MS = {"5m": 300_000, "15m": 900_000, "30m": 1_800_000}
 LOOKBACK = {"5m": 300, "15m": 400, "30m": 400}
-LOCAL_TZ = ZoneInfo(TIMEZONE)
 
+REQUEST_TIMEOUT_S = 8              # fail fast: a throttled API must not burn 20s
+RUN_BUDGET_S = 480                 # hard per-run budget; remaining assets resume
+                                   # next run via a rotating cursor
+FETCH_DELAY_S = 0.12
+REPLAY_CANDLES = 3                 # candles replayed per run (covers any run gap)
 
 def fmt_ts(ms, fmt="%Y-%m-%d %I:%M %p %Z"):
     return datetime.fromtimestamp(ms / 1000, tz=LOCAL_TZ).strftime(fmt)
@@ -318,7 +303,6 @@ def active_assets():
     return ASSETS
 
 
-# ------------------------------ indicators --------------------------------
 def sma(values, period):
     out = [None] * len(values)
     s = 0.0
@@ -362,199 +346,6 @@ def ema(values, period):
     return out
 
 
-def smoothed_heikin_ashi(candles, len1=SHA_LEN1, len2=SHA_LEN2):
-    """Doubly-smoothed HA: EMA the OHLC first, HA on the smoothed values,
-    then EMA the HA open/close. Returns [{"t","o","c"} or None] - color only,
-    which is all the runner exit needs."""
-    n = len(candles)
-    eo = ema([c["o"] for c in candles], len1)
-    eh = ema([c["h"] for c in candles], len1)
-    el = ema([c["l"] for c in candles], len1)
-    ec = ema([c["c"] for c in candles], len1)
-    ho_arr, hc_arr = [None] * n, [None] * n
-    prev_o = prev_c = None
-    for i in range(n):
-        if eo[i] is None:
-            continue
-        hc = (eo[i] + eh[i] + el[i] + ec[i]) / 4
-        ho = (eo[i] + ec[i]) / 2 if prev_o is None else (prev_o + prev_c) / 2
-        ho_arr[i], hc_arr[i] = ho, hc
-        prev_o, prev_c = ho, hc
-    # post-smooth over the valid region
-    start = next((i for i in range(n) if ho_arr[i] is not None), n)
-    so = ema(ho_arr[start:], len2)
-    sc = ema(hc_arr[start:], len2)
-    out = [None] * n
-    for i in range(start, n):
-        if so[i - start] is not None:
-            out[i] = {"t": candles[i]["t"], "o": so[i - start],
-                      "c": sc[i - start]}
-    return out
-
-
-def heikin_ashi(candles):
-    """HA candle series. HA prices are averages - never trade them directly."""
-    out = []
-    for i, c in enumerate(candles):
-        hc = (c["o"] + c["h"] + c["l"] + c["c"]) / 4
-        ho = (c["o"] + c["c"]) / 2 if i == 0 else (out[-1]["o"] + out[-1]["c"]) / 2
-        out.append({"t": c["t"], "o": ho, "c": hc,
-                    "h": max(c["h"], ho, hc), "l": min(c["l"], ho, hc)})
-    return out
-
-
-def stochastic(candles, k=STOCH_K, smooth=STOCH_SMOOTH, d=STOCH_D):
-    """Slow stochastic on REAL candles. Returns (%K smoothed, %D)."""
-    n = len(candles)
-    raw = [None] * n
-    for i in range(k - 1, n):
-        hh = max(x["h"] for x in candles[i - k + 1:i + 1])
-        ll = min(x["l"] for x in candles[i - k + 1:i + 1])
-        raw[i] = 100 * (candles[i]["c"] - ll) / (hh - ll) if hh > ll else 50.0
-
-    def smoo(arr, p):
-        out = [None] * n
-        for i in range(n):
-            w = [arr[j] for j in range(max(0, i - p + 1), i + 1)
-                 if arr[j] is not None]
-            if len(w) == p:
-                out[i] = sum(w) / p
-        return out
-
-    kline = smoo(raw, smooth)
-    dline = smoo(kline, d)
-    return kline, dline
-
-
-# --------------------------- HA candle grammar -----------------------------
-def ha_props(ha):
-    body = abs(ha["c"] - ha["o"])
-    rng = ha["h"] - ha["l"]
-    up_w = ha["h"] - max(ha["o"], ha["c"])
-    dn_w = min(ha["o"], ha["c"]) - ha["l"]
-    return body, rng, up_w, dn_w
-
-
-def is_green(ha):
-    return ha["c"] > ha["o"]
-
-
-def is_doji(ha, color_long):
-    """Green doji (for longs) / red doji (for shorts): tiny HA body."""
-    body, rng, _, _ = ha_props(ha)
-    if rng <= 0:
-        return False
-    right_color = is_green(ha) if color_long else not is_green(ha)
-    return right_color and body <= DOJI_BODY_FRAC * rng
-
-
-def is_strong(ha, atr_now, long):
-    """The three entry rules: right color, large body, wick on one side only.
-    LONG: green, big body, no lower wick (top wick allowed).
-    SHORT: red, big body, no upper wick (bottom wick allowed)."""
-    body, rng, up_w, dn_w = ha_props(ha)
-    if rng <= 0 or (atr_now and rng < RANGE_MIN_ATR * atr_now):
-        return False, []
-    color_ok = is_green(ha) if long else not is_green(ha)
-    big = body >= BIG_BODY_FRAC * rng and (not atr_now or body >= BODY_MIN_ATR * atr_now)
-    w = dn_w if long else up_w
-    wick_ok = w <= WICK_TOL_FRAC * rng or w <= WICK_TOL_BODY * body
-    rules = [("Green HA candle" if long else "Red HA candle", color_ok),
-             ("Large body", big),
-             ("No lower wick" if long else "No upper wick", wick_ok)]
-    return color_ok and big and wick_ok, rules
-
-
-def stoch_setup(kline, sha, i, long):
-    """Context-TF zone trigger: %K beyond the exhaustion line (or a recent cross
-    back through it) PLUS fading momentum measured on smoothed HA - the
-    trend-side candle bodies must be shrinking (or already flipped)."""
-    if i < CROSS_LOOKBACK + 1 or kline[i] is None:
-        return False
-    line = STOCH_OVERSOLD if long else STOCH_OVERBOUGHT
-    beyond = kline[i] <= line if long else kline[i] >= line
-    crossed = False
-    for j in range(max(1, i - CROSS_LOOKBACK), i + 1):
-        if kline[j] is None or kline[j - 1] is None:
-            continue
-        if long and kline[j - 1] <= line < kline[j]:
-            crossed = True
-        if not long and kline[j - 1] >= line > kline[j]:
-            crossed = True
-    near = kline[i] <= STOCH_OVERSOLD + 10 if long \
-        else kline[i] >= STOCH_OVERBOUGHT - 10
-    if not (beyond or (crossed and near)):
-        return False
-    # ---- weakening momentum on smoothed HA ---------------------------------
-    if sha[i] is None or sha[i - 1] is None:
-        return False
-    def body(c):
-        return abs(c["c"] - c["o"])
-    if long:
-        turned = sha[i]["c"] >= sha[i]["o"]          # already flipped green
-        fading = (sha[i]["c"] < sha[i]["o"] and
-                  sha[i - 1]["c"] < sha[i - 1]["o"] and
-                  body(sha[i]) < body(sha[i - 1]))   # red bodies shrinking
-    else:
-        turned = sha[i]["c"] <= sha[i]["o"]
-        fading = (sha[i]["c"] > sha[i]["o"] and
-                  sha[i - 1]["c"] > sha[i - 1]["o"] and
-                  body(sha[i]) < body(sha[i - 1]))
-    return fading or turned
-
-
-def entry_confirmations(real, vols_avg, doji_i, c1_i, c2_i, long):
-    """Volume spikes and price-action patterns on REAL candles around the
-    completed sequence. Returns a list of human-readable confirmations."""
-    out = []
-    # volume spike on either confirmation candle
-    best = 0.0
-    for j in (c1_i, c2_i):
-        if vols_avg[j]:
-            best = max(best, real[j]["v"] / vols_avg[j])
-    if best >= VOL_SPIKE_MULT:
-        out.append(f"Volume spike {best:.1f}x average")
-
-    # engulfing on either confirmation candle
-    for j in (c1_i, c2_i):
-        c, p = real[j], real[j - 1]
-        if long and c["c"] > c["o"] and p["c"] < p["o"] \
-                and c["c"] >= p["o"] and c["o"] <= p["c"]:
-            out.append("Bullish engulfing")
-            break
-        if not long and c["c"] < c["o"] and p["c"] > p["o"] \
-                and c["c"] <= p["o"] and c["o"] >= p["c"]:
-            out.append("Bearish engulfing")
-            break
-
-    # liquidity sweep of the pre-doji extreme, then reclaim
-    lo_w = max(0, doji_i - 8)
-    if lo_w < doji_i:
-        if long:
-            prior_low = min(c["l"] for c in real[lo_w:doji_i])
-            swept = min(c["l"] for c in real[doji_i:c2_i + 1]) < prior_low
-            if swept and real[c2_i]["c"] > prior_low:
-                out.append("Liquidity sweep & reclaim")
-        else:
-            prior_high = max(c["h"] for c in real[lo_w:doji_i])
-            swept = max(c["h"] for c in real[doji_i:c2_i + 1]) > prior_high
-            if swept and real[c2_i]["c"] < prior_high:
-                out.append("Liquidity sweep & reclaim")
-
-    # close through the broader reversal base
-    b_w = max(0, doji_i - BASE_WINDOW)
-    if b_w < doji_i:
-        if long:
-            base_high = max(c["h"] for c in real[b_w:doji_i])
-            if real[c2_i]["c"] > base_high:
-                out.append(f"Break above {BASE_WINDOW}-candle base")
-        else:
-            base_low = min(c["l"] for c in real[b_w:doji_i])
-            if real[c2_i]["c"] < base_low:
-                out.append(f"Break below {BASE_WINDOW}-candle base")
-    return out
-
-
 # ----------------------------- telegram ------------------------------------
 DISCLAIMER_TXT = ("Research signal - not financial advice. "
                   "Any single signal can fail; size accordingly.")
@@ -573,81 +364,95 @@ def send_telegram(text):
         raise RuntimeError(f"Telegram send failed: {resp.get('description')}")
 
 
-def doji_message(asset, direction, kval, px, t):
-    sym = asset["symbol"]
-    color = "green" if direction == "LONG" else "red"
-    line = STOCH_OVERSOLD if direction == "LONG" else STOCH_OVERBOUGHT
+# ------------------------------ ma engine ----------------------------------
+def moving_average(values, period):
+    return ema(values, period) if MA_TYPE == "ema" else sma(values, period)
+
+
+def bull_fractal(candles, j, n=FRACTAL_PERIOD):
+    """Williams bullish (green-arrow) fractal at index j: a swing LOW.
+    Needs n candles each side, so it is confirmed at candle j+n."""
+    if j < n or j + n >= len(candles):
+        return False
+    low = candles[j]["l"]
+    return all(low < candles[j + k]["l"] for k in range(1, n + 1)) and \
+        all(low < candles[j - k]["l"] for k in range(1, n + 1))
+
+
+def bear_fractal(candles, j, n=FRACTAL_PERIOD):
+    """Williams bearish (red-arrow) fractal at index j: a swing HIGH."""
+    if j < n or j + n >= len(candles):
+        return False
+    high = candles[j]["h"]
+    return all(high > candles[j + k]["h"] for k in range(1, n + 1)) and \
+        all(high > candles[j - k]["h"] for k in range(1, n + 1))
+
+
+def regime(m1, m2, m3, i):
+    """LONG when MA20 > MA50 > MA100 for STACK_STABLE_BARS candles,
+    SHORT when MA100 > MA50 > MA20 likewise, else None (MAs crossing)."""
+    if i < STACK_STABLE_BARS or m3[i] is None:
+        return None
+    long_ok = short_ok = True
+    for k in range(STACK_STABLE_BARS):
+        a, b, c = m1[i - k], m2[i - k], m3[i - k]
+        if a is None or b is None or c is None:
+            return None
+        if not (a > b > c):
+            long_ok = False
+        if not (c > b > a):
+            short_ok = False
+    if long_ok:
+        return "LONG"
+    if short_ok:
+        return "SHORT"
+    return None
+
+
+# ----------------------------- telegram copy --------------------------------
+def stage_message(asset, direction, depth, px, t):
+    e = "\U0001F7E2" if direction == "LONG" else "\U0001F534"
     return "\n".join([
-        f"\U0001F56F <b>DOJI SPOTTED \u00b7 {esc(sym)}</b> \u2014 possible "
-        f"{direction} reversal",
-        f"<i>{esc(asset['label'])} \u00b7 price <code>${fmt_px(px)}</code> "
-        f"\u00b7 {esc(fmt_ts(t))}</i>",
-        "",
-        f"Stochastic exhausted through {line} (%K {kval:.1f}, momentum fading) "
-        f"and a {color} Heikin Ashi doji just printed.",
-        "",
-        f"\u23F3 Watching for two consecutive {color} large-body HA candles "
-        f"with {'no lower wicks' if direction == 'LONG' else 'no upper wicks'}. "
-        "Entry alert follows only if both confirm.",
+        f"{e} <b>PULLBACK ARMED \u00b7 {esc(asset['symbol'])} {direction}</b>",
+        f"Price pulled {'under' if direction == 'LONG' else 'over'} "
+        f"MA{MA_LEN2 if depth == 'deep' else MA_LEN1} - waiting for the "
+        f"{'green' if direction == 'LONG' else 'red'} fractal arrow",
+        f"<i>{esc(asset['label'])} \u00b7 {TF} \u00b7 {esc(fmt_ts(t))}</i>",
     ])
 
 
-def entry_message(asset, direction, plan, rules1, rules2, confirms,
-                  kval, source, t):
-    sym = asset["symbol"]
-    icon = "\U0001F7E2" if direction == "LONG" else "\U0001F534"
+def entry_message(asset, direction, plan, depth, frac_px, source, t):
+    e = "\U0001F7E2" if direction == "LONG" else "\U0001F534"
+    sl_ma = MA_LEN3 if depth == "deep" else MA_LEN2
     lines = [
-        f"{icon} <b>{direction} REVERSAL ENTRY \u00b7 {esc(sym)}</b> \u2014 "
-        f"<code>${fmt_px(plan['entry'])}</code>",
-        f"<i>{esc(asset['label'])} \u00b7 {CTX_TF} zone \u00b7 {EXEC_TF} sequence \u00b7 {esc(fmt_ts(t))}</i>",
+        f"{e} <b>{direction} ENTRY \u00b7 {esc(asset['symbol'])}</b>",
+        f"<i>{esc(asset['label'])} \u00b7 {TF} zone \u00b7 3MA + fractal \u00b7 {esc(fmt_ts(t))}</i>",
         "",
-        "\U0001F4CB <b>Trade plan (enter at market):</b>",
-        f"<code>Entry  ${fmt_px(plan['entry'])}</code>",
-        f"<code>Stop   ${fmt_px(plan['stop'])}</code>  (beyond pattern "
-        f"{'low' if direction == 'LONG' else 'high'})",
-        f"<code>TP1    ${fmt_px(plan['tp1'])}</code>  ({R_TP1:.0f}R)",
-        f"<code>TP2    ${fmt_px(plan['tp2'])}</code>  ({R_TP2:.0f}R)",
-        f"<code>Risk   ${fmt_px(plan['risk'])}</code>  (1R)",
+        f"\U0001F4CA <b>Setup</b>: MA{MA_LEN1}/{MA_LEN2}/{MA_LEN3} stacked "
+        f"{direction}; {depth} pullback; "
+        f"{'green' if direction == 'LONG' else 'red'} fractal at ${fmt_px(frac_px)}",
         "",
-        f"\U0001F50D <b>Sequence completed</b> (30m %K {kval:.1f} at zone open)",
-        "\u2705 Exhaustion cross + weak momentum",
-        f"\u2705 {'Green' if direction == 'LONG' else 'Red'} HA doji",
-        "<b>Confirmation candle 1</b>",
+        "\U0001F4CB <b>Plan</b>",
+        f"Entry: <code>${fmt_px(plan['entry'])}</code>",
+        f"Stop:  <code>${fmt_px(plan['stop'])}</code>  (beyond MA{sl_ma})",
+        f"TP:    <code>${fmt_px(plan['tp'])}</code>  ({RR}R)",
+        f"<i>data: {esc(source)}</i>",
     ]
-    lines += [f"\u2705 {esc(d)}" for d, _ in rules1]
-    lines += ["<b>Confirmation candle 2</b>"]
-    lines += [f"\u2705 {esc(d)}" for d, _ in rules2]
-    lines += ["<b>Entry confirmation</b>"]
-    lines += ([f"\u2705 {esc(c)}" for c in confirms] if confirms
-              else ["\u26A0 None (unconfirmed entry)"])
-    lines += ["", f"<i>Source: {esc(source)}. \u26A0 {DISCLAIMER_TXT}</i>"]
     return "\n".join(lines)
 
 
 def lifecycle_message(asset, kind, trade, exit_px, event_t, note):
-    sym = asset["symbol"]
-    v = trade["verdict"]
-    pl = pnl_pct(trade, exit_px)
-    pl_s = f"{pl:+.2f}%"
-    meta = {
-        "TP1":  ("\u2705", "TP1 HIT", "First target (2R) reached"),
-        "TP2":  ("\U0001F3C1", "TP2 HIT - trade complete", "Final target (3R) reached"),
-        "STOP": ("\u274C", "STOPPED OUT", "Pattern stop hit"),
-        "RUNNER": ("\U0001F3C1", "RUNNER CLOSED",
-                   "Smoothed HA flipped - remaining position closed"),
+    emoji, title, sub = {
+        "TP": ("\U0001F3C1", "TAKE PROFIT HIT", f"{RR}R target reached"),
+        "STOP": ("\u274C", "STOPPED OUT", "Stop level hit"),
     }[kind]
-    icon, big, sub = meta
+    pnl = pnl_pct(trade, exit_px)
     return "\n".join([
-        f"{icon} <b>{big} \u00b7 {esc(sym)} {v}</b>  <code>{pl_s}</code>",
-        f"<i>{sub}</i>",
-        "",
-        f"<code>Entry  ${fmt_px(trade['entry'])}</code>",
-        f"<code>Exit   ${fmt_px(exit_px)}</code>",
-        f"Opened {esc(fmt_ts(trade['opened_t'], '%b %d %I:%M %p %Z'))}",
-        f"\U0001F552 {esc(fmt_ts(event_t))}",
-        "",
-        f"{esc(note)}",
-        f"<i>\u26A0 {DISCLAIMER_TXT}</i>",
+        f"{emoji} <b>{title} \u00b7 {esc(asset['symbol'])} {trade['verdict']}</b>"
+        f"  <code>{pnl:+.2f}%</code>",
+        f"{sub} at ${fmt_px(exit_px)} (entry ${fmt_px(trade['entry'])})",
+        esc(note) if note else "",
+        f"<i>{esc(asset['label'])} \u00b7 {esc(fmt_ts(event_t))}</i>",
     ])
 
 
@@ -656,25 +461,193 @@ TRADES_LOG = Path(__file__).parent / "trades.log"
 
 
 def record_close(sym, trade, exit_px, kind):
-    """Append a closed trade to the ledger (best-effort). If TP1 was hit,
-    P&L blends the TP1 partial with the final exit so a breakeven stop
-    after TP1 shows the profit actually banked."""
+    """Append a closed trade to the ledger (best-effort)."""
     try:
-        final = pnl_pct(trade, exit_px)
-        if trade.get("tp1_hit"):
-            tp1_leg = pnl_pct(trade, trade["tp1"])
-            pnl = TP1_CLOSE_FRAC * tp1_leg + (1 - TP1_CLOSE_FRAC) * final
-        else:
-            pnl = final
         with open(TRADES_LOG, "a") as f:
             f.write(json.dumps({"t": int(time.time() * 1000), "sym": sym,
                                 "dir": trade["verdict"],
                                 "entry": trade["entry"], "exit": exit_px,
                                 "kind": kind,
-                                "pnl_pct": round(pnl, 3)})
+                                "pnl_pct": round(pnl_pct(trade, exit_px), 3)})
                     + "\n")
     except OSError:
         pass
+
+
+def blank_asset_state():
+    return {"phase": "SCAN", "last_candle_t": 0, "setup": None, "trade": None}
+
+
+# ------------------------------- agent ------------------------------------
+def process_open_trade(asset, trade, candles, last_closed_t):
+    """TP / stop watch on closed candles. Stop is checked first within a
+    candle (conservative). Returns (trade or None, changed)."""
+    sym = asset["symbol"]
+    long = trade["verdict"] == "LONG"
+    tp = trade.get("tp") or trade.get("tp2")     # legacy trades keep working
+    changed = False
+    for c in candles:
+        if c["t"] <= trade["checked_t"] or c["t"] > last_closed_t:
+            continue
+        changed = True
+        trade["checked_t"] = c["t"]
+        stop_hit = c["l"] <= trade["stop"] if long else c["h"] >= trade["stop"]
+        tp_hit = (c["h"] >= tp) if long else (c["l"] <= tp)
+        if stop_hit:
+            if ALERT_LIFECYCLE:
+                send_telegram(lifecycle_message(
+                    asset, "STOP", trade, trade["stop"], c["t"], ""))
+            log(f"{sym}: STOPPED OUT at ${fmt_px(trade['stop'])}")
+            record_close(sym, trade, trade["stop"], "STOP")
+            RUN_ALERTS.append(
+                f"{sym} STOPPED OUT ({pnl_pct(trade, trade['stop']):+.2f}%)")
+            return None, True
+        if tp_hit:
+            if ALERT_LIFECYCLE:
+                send_telegram(lifecycle_message(
+                    asset, "TP", trade, tp, c["t"], ""))
+            log(f"{sym}: TP HIT at ${fmt_px(tp)}")
+            record_close(sym, trade, tp, "TP")
+            RUN_ALERTS.append(f"{sym} TP HIT ({pnl_pct(trade, tp):+.2f}%)")
+            return None, True
+    return trade, changed
+
+
+def process_candle(asset, ast, real, m1, m2, m3, a, i, source):
+    """Walk ONE newly closed candle through the 3MA + fractal engine."""
+    sym = asset["symbol"]
+    reg = regime(m1, m2, m3, i)
+    setup = ast["setup"]
+
+    # no clean stack -> stand down entirely
+    if reg is None:
+        if setup:
+            log(f"{sym}: MAs crossing - setup cancelled")
+        ast["setup"], ast["phase"] = None, "SCAN"
+        return True
+    if setup and setup["direction"] != reg:
+        setup = None
+        ast["setup"] = None
+
+    long = reg == "LONG"
+    c = real[i]
+
+    # trend-break invalidation: close beyond MA100 cancels everything
+    broke = c["c"] < m3[i] if long else c["c"] > m3[i]
+    if broke:
+        if setup:
+            log(f"{sym}: price closed {'below' if long else 'above'} "
+                f"MA{MA_LEN3} - setup cancelled (no fractal entries)")
+        ast["setup"], ast["phase"] = None, "SCAN"
+        return True
+
+    # pullback arming / deepening
+    pulled_shallow = c["l"] <= m1[i] if long else c["h"] >= m1[i]
+    pulled_deep = c["l"] <= m2[i] if long else c["h"] >= m2[i]
+    if pulled_deep or pulled_shallow:
+        depth = "deep" if pulled_deep else "shallow"
+        if setup is None or (setup["depth"] == "shallow" and depth == "deep"):
+            fresh = setup is None
+            setup = {"direction": reg, "depth": depth, "armed_t": c["t"]} \
+                if fresh else {**setup, "depth": depth}
+            ast["setup"] = setup
+            ast["phase"] = "ARMED"
+            if fresh:
+                log(f"{sym}: {reg} pullback armed ({depth}) - waiting for "
+                    f"{'green' if long else 'red'} fractal")
+                if ALERT_STAGES:
+                    send_telegram(stage_message(asset, reg, depth, c["c"], c["t"]))
+            elif depth == "deep":
+                log(f"{sym}: pullback deepened past MA{MA_LEN2} - "
+                    f"stop reference now MA{MA_LEN3}")
+
+    # fractal entry: the arrow confirms FRACTAL_PERIOD candles after its low
+    if ast["setup"]:
+        setup = ast["setup"]
+        j = i - FRACTAL_PERIOD
+        if j >= 0 and real[j]["t"] >= setup["armed_t"] - FRACTAL_PERIOD * (real[1]["t"] - real[0]["t"]):
+            arrow = bull_fractal(real, j) if long else bear_fractal(real, j)
+            if arrow:
+                sl_ref = m3[i] if setup["depth"] == "deep" else m2[i]
+                pad = SL_PAD_ATR * (a[i] or 0)
+                stop = sl_ref - pad if long else sl_ref + pad
+                entry = c["c"]
+                risk = (entry - stop) if long else (stop - entry)
+                if risk <= 0:
+                    log(f"{sym}: fractal fired but entry is beyond the stop "
+                        "reference - skipped")
+                    return True
+                tp = entry + RR * risk if long else entry - RR * risk
+                plan = {"entry": entry, "stop": stop, "tp": tp}
+                frac_px = real[j]["l"] if long else real[j]["h"]
+                if ALERT_ENTRIES:
+                    send_telegram(entry_message(asset, reg, plan,
+                                                setup["depth"], frac_px,
+                                                source, c["t"]))
+                log(f"ALERT SENT -> telegram: {sym} {reg} ENTRY @ "
+                    f"${fmt_px(entry)} ({setup['depth']} pullback, "
+                    f"{TF} fractal)")
+                RUN_ALERTS.append(f"{sym} {reg} entry @ ${fmt_px(entry)}")
+                ast["trade"] = {"verdict": reg, "entry": entry, "stop": stop,
+                                "tp": tp, "opened_t": c["t"],
+                                "checked_t": c["t"]}
+                ast["phase"], ast["setup"] = "IN_TRADE", None
+                return True
+    return True
+
+
+def check_asset(asset, state):
+    sym = asset["symbol"]
+    ast = state.get(sym) or blank_asset_state()
+    for k, v in blank_asset_state().items():
+        ast.setdefault(k, v)
+    changed = False
+
+    # ---- IN_TRADE: watch TP / stop ----------------------------------------
+    if ast["trade"]:
+        source, cs = fetch(asset, TF, 30)
+        if cs:
+            trade, ch = process_open_trade(asset, ast["trade"], cs, cs[-2]["t"])
+            ast["trade"] = trade
+            changed = changed or ch
+            if trade is None:
+                ast["phase"] = "SCAN"
+        RUN_STATUS.append(f"{sym} IN_TRADE" if ast["trade"] else f"{sym} SCAN")
+        state[sym] = ast
+        return changed
+
+    # ---- scan / armed: process each newly closed candle --------------------
+    source, cs = fetch(asset, TF, MA_LEN3 + 40)
+    if not cs:
+        RUN_STATUS.append(f"{sym} feed failed")
+        state[sym] = ast
+        return changed
+
+    closes = [c["c"] for c in cs]
+    m1 = moving_average(closes, MA_LEN1)
+    m2 = moving_average(closes, MA_LEN2)
+    m3 = moving_average(closes, MA_LEN3)
+    a = atr(cs)
+
+    last_closed = len(cs) - 2
+    cutoff = cs[last_closed]["t"] - REPLAY_CANDLES * MS[TF]
+    if ast["last_candle_t"] < cutoff:
+        ast["last_candle_t"] = cutoff
+    for i in range(len(cs)):
+        if i > last_closed or cs[i]["t"] <= ast["last_candle_t"]:
+            continue
+        ch = process_candle(asset, ast, cs, m1, m2, m3, a, i, source)
+        changed = changed or ch
+        ast["last_candle_t"] = cs[i]["t"]
+        if ast["trade"]:
+            break
+
+    stage = ast["phase"]
+    if ast["setup"]:
+        stage = f"ARMED-{ast['setup']['depth'].upper()} ({ast['setup']['direction']})"
+    RUN_STATUS.append(f"{sym} {stage}")
+    state[sym] = ast
+    return changed
 
 
 # ------------------------------- state ------------------------------------
@@ -688,283 +661,6 @@ def load_state():
 
 def save_state(state):
     STATE_FILE.write_text(json.dumps(state, indent=2) + "\n")
-
-
-def blank_asset_state():
-    return {"phase": "SCAN", "last_setup_check": 0, "zone": None, "trade": None}
-
-
-# ------------------------------- agent ------------------------------------
-def process_open_trade(asset, trade, candles, last_closed_t):
-    sym = asset["symbol"]
-    changed = False
-    new_candles = [c for c in candles
-                   if trade["checked_t"] < c["t"] <= last_closed_t]
-    for c in new_candles:
-        long = trade["verdict"] == "LONG"
-        hit_stop = c["l"] <= trade["stop"] if long else c["h"] >= trade["stop"]
-        hit_tp2 = c["h"] >= trade["tp2"] if long else c["l"] <= trade["tp2"]
-        hit_tp1 = (not trade["tp1_hit"]
-                   and (c["h"] >= trade["tp1"] if long else c["l"] <= trade["tp1"]))
-
-        if hit_stop:
-            note = ("Stop moved to breakeven after TP1, so this exit is at entry."
-                    if trade["tp1_hit"] else
-                    "Pattern stop was hit. Wait for the next full sequence.")
-            if ALERT_LIFECYCLE:
-                send_telegram(lifecycle_message(asset, "STOP", trade,
-                                                trade["stop"], c["t"], note))
-            log(f"{sym}: STOPPED OUT at ${fmt_px(trade['stop'])}")
-            record_close(sym, trade, trade["stop"], "STOP")
-            RUN_ALERTS.append(f"{sym} STOPPED OUT ({pnl_pct(trade, trade['stop']):+.2f}%)")
-            return None, True
-
-        if hit_tp2:
-            if ALERT_LIFECYCLE:
-                send_telegram(lifecycle_message(
-                    asset, "TP2", trade, trade["tp2"], c["t"],
-                    "Full 3R target reached. Trade closed."))
-            log(f"{sym}: TP2 HIT at ${fmt_px(trade['tp2'])}")
-            record_close(sym, trade, trade["tp2"], "TP2")
-            RUN_ALERTS.append(f"{sym} TP2 HIT ({pnl_pct(trade, trade['tp2']):+.2f}%)")
-            return None, True
-
-        if hit_tp1:
-            trade["tp1_hit"] = True
-            note = "First target (2R) reached."
-            if BREAKEVEN_AFTER_TP1:
-                trade["stop"] = trade["entry"]
-                note += " Stop moved to breakeven - remaining position is risk-free."
-            if ALERT_LIFECYCLE:
-                send_telegram(lifecycle_message(asset, "TP1", trade,
-                                                trade["tp1"], c["t"], note))
-            log(f"{sym}: TP1 HIT at ${fmt_px(trade['tp1'])}")
-            RUN_ALERTS.append(f"{sym} TP1 HIT ({pnl_pct(trade, trade['tp1']):+.2f}%)")
-            changed = True
-
-        trade["checked_t"] = c["t"]
-
-    if new_candles:
-        trade["checked_t"] = last_closed_t
-        changed = True
-    return trade, changed
-
-
-def process_exec_candle(asset, ast, real, ha, a5, vol_avg, i, source):
-    """Walk ONE newly closed exec-TF candle through the entry sequence
-    while a context-TF reversal zone is active."""
-    sym = asset["symbol"]
-    zone = ast["zone"]
-    direction = zone["direction"]
-    long = direction == "LONG"
-    ha_c = ha[i]
-    seq = zone.get("seq")
-
-    # ---- hunting the 5m doji (for the whole zone lifetime) ------------------
-    if seq is None:
-        if is_doji(ha_c, long):
-            zone["seq"] = {"ttl": CONFIRM_TTL,
-                           "pattern_ext": real[i]["l"] if long else real[i]["h"],
-                           "doji_t": real[i]["t"], "c1_t": None,
-                           "confirms": 0, "rules": []}
-            if ALERT_STAGES:
-                send_telegram(doji_message(asset, direction, zone["kval"],
-                                           real[i]["c"], real[i]["t"]))
-            log(f"{sym}: {EXEC_TF} {'green' if long else 'red'} HA doji in {CTX_TF} zone"
-                f" - watching for 2 strong {EXEC_TF} candles")
-        return True
-
-    # ---- confirming: two consecutive rule-perfect 5m candles ----------------
-    seq["ttl"] -= 1
-    ok, rules = is_strong(ha_c, a5[i], long)
-    if long:
-        seq["pattern_ext"] = min(seq["pattern_ext"], real[i]["l"])
-    else:
-        seq["pattern_ext"] = max(seq["pattern_ext"], real[i]["h"])
-
-    if ok:
-        seq["confirms"] += 1
-        seq["rules"].append(rules)
-        if seq["confirms"] == 1:
-            seq["c1_t"] = real[i]["t"]
-        if seq["confirms"] >= 2:
-            t_index = {c["t"]: idx for idx, c in enumerate(real)}
-            doji_i = t_index.get(seq["doji_t"])
-            c1_i = t_index.get(seq["c1_t"], i)
-            confirms = []
-            if doji_i is not None:
-                confirms = entry_confirmations(real, vol_avg, doji_i,
-                                               c1_i, i, long)
-            if REQUIRE_ENTRY_CONFIRM and not confirms:
-                log(f"{sym}: {EXEC_TF} sequence complete but no volume/PA "
-                    "confirmation - back to doji hunt")
-                zone["seq"] = None
-                return True
-            entry = real[i]["c"]
-            sign = 1 if long else -1
-            stop = seq["pattern_ext"] - sign * STOP_PAD_ATR * (a5[i] or 0)
-            risk = abs(entry - stop)
-            floor = MIN_RISK_ATR_CTX * zone.get("atr_ctx", 0)
-            if floor and risk < floor:
-                stop = entry - sign * floor
-                risk = floor
-            if risk > 0:
-                plan = {"entry": entry, "stop": stop, "risk": risk,
-                        "tp1": entry + sign * R_TP1 * risk,
-                        "tp2": entry + sign * R_TP2 * risk}
-                if ALERT_ENTRIES:
-                    send_telegram(entry_message(
-                        asset, direction, plan,
-                        seq["rules"][0], seq["rules"][1],
-                        confirms, zone["kval"], source, real[i]["t"]))
-                log(f"ALERT SENT -> telegram: {sym} {direction} "
-                    f"REVERSAL ENTRY @ ${fmt_px(entry)} ({EXEC_TF} sequence)")
-                RUN_ALERTS.append(f"{sym} {direction} reversal entry "
-                                  f"@ ${fmt_px(entry)}")
-                ast["trade"] = {"verdict": direction, "entry": entry,
-                                "stop": stop, "tp1": plan["tp1"],
-                                "tp2": plan["tp2"], "tp1_hit": False,
-                                "opened_t": real[i]["t"],
-                                "checked_t": real[i]["t"]}
-                ast["phase"] = "IN_TRADE"
-                ast["zone"] = None
-            else:
-                zone["seq"] = None
-        return True
-
-    if is_doji(ha_c, long):
-        seq["confirms"], seq["rules"] = 0, []
-        seq["doji_t"] = real[i]["t"]
-        if long:
-            seq["pattern_ext"] = min(seq["pattern_ext"], real[i]["l"])
-        else:
-            seq["pattern_ext"] = max(seq["pattern_ext"], real[i]["h"])
-        seq["ttl"] = CONFIRM_TTL
-        return True
-
-    if seq["ttl"] <= 0 or seq["confirms"] > 0:
-        zone["seq"] = None
-        log(f"{sym}: {EXEC_TF} confirmation broken - hunting the next doji")
-    return True
-
-
-def check_asset(asset, state):
-    sym = asset["symbol"]
-    now_ms = int(time.time() * 1000)
-    ast = state.get(sym) or blank_asset_state()
-    for k, v in blank_asset_state().items():
-        ast.setdefault(k, v)
-    changed = False
-
-    # ---- IN_TRADE: 5m monitoring + smoothed-HA runner exit on 5m -----------
-    if ast["trade"]:
-        source, c5 = fetch(asset, EXEC_TF, 30)
-        if c5:
-            trade, ch = process_open_trade(asset, ast["trade"], c5, c5[-2]["t"])
-            ast["trade"] = trade
-            changed = changed or ch
-            if trade is None:
-                ast["phase"] = "SCAN"
-            # runner exit reuses the SAME 5m fetch - no extra API call
-            if ast["trade"] and ast["trade"].get("tp1_hit") and SHA_EXIT:
-                trade = ast["trade"]
-                sha = smoothed_heikin_ashi(c5)
-                long = trade["verdict"] == "LONG"
-                seen = trade.get("sha_checked_t", trade["opened_t"])
-                for i in range(len(c5) - 1):
-                    if c5[i]["t"] <= seen or sha[i] is None:
-                        continue
-                    flipped = (sha[i]["c"] < sha[i]["o"] if long
-                               else sha[i]["c"] > sha[i]["o"])
-                    if flipped:
-                        exit_px = c5[i]["c"]
-                        if ALERT_LIFECYCLE:
-                            send_telegram(lifecycle_message(
-                                asset, "RUNNER", trade, exit_px, c5[i]["t"],
-                                f"Smoothed HA flipped against the trade - "
-                                f"runner closed at the {EXEC_TF} close."))
-                        log(f"{sym}: RUNNER CLOSED at ${fmt_px(exit_px)} "
-                            "(smoothed HA flip)")
-                        record_close(sym, trade, exit_px, "RUNNER")
-                        RUN_ALERTS.append(
-                            f"{sym} runner closed ({pnl_pct(trade, exit_px):+.2f}%)")
-                        ast["trade"], ast["phase"] = None, "SCAN"
-                        break
-                    trade["sha_checked_t"] = c5[i]["t"]
-                changed = True
-        RUN_STATUS.append(f"{sym} IN_TRADE" if ast["trade"] else f"{sym} SCAN")
-        state[sym] = ast
-        return changed
-
-    # stagger each asset's context cadence
-    if ast["last_setup_check"] == 0:
-        ast["last_setup_check"] = now_ms - (
-            zlib.crc32(sym.encode()) % (SETUP_REFRESH_MIN * 60_000))
-        changed = True
-
-    # ---- 15m context on its cadence: open / close the reversal zone --------
-    if now_ms - ast["last_setup_check"] >= SETUP_REFRESH_MIN * 60_000:
-        ast["last_setup_check"] = now_ms
-        changed = True
-        source15, c15 = fetch(asset, CTX_TF, 60)
-        if c15:
-            kline, _ = stochastic(c15)
-            sha15 = smoothed_heikin_ashi(c15)
-            a15 = atr(c15)
-            i = len(c15) - 2
-            if ast["zone"]:
-                long = ast["zone"]["direction"] == "LONG"
-                recovered = (kline[i] is not None and
-                             (kline[i] > ZONE_EXIT_K if long
-                              else kline[i] < ZONE_EXIT_K))
-                if now_ms > ast["zone"]["expires_t"] or recovered:
-                    why = "expired" if now_ms > ast["zone"]["expires_t"] \
-                        else f"%K recovered past {ZONE_EXIT_K}"
-                    log(f"{sym}: {CTX_TF} zone {ast['zone']['direction']} closed - {why}")
-                    ast["zone"], ast["phase"] = None, "SCAN"
-            open_zones = sum(1 for v in state.values()
-                             if isinstance(v, dict) and v.get("zone"))
-            if not ast["zone"] and open_zones < MAX_ZONES:
-                for direction in (["LONG"] + (["SHORT"] if ENABLE_SHORTS else [])):
-                    if stoch_setup(kline, sha15, i, direction == "LONG"):
-                        ast["zone"] = {"direction": direction,
-                                       "kval": kline[i],
-                                       "atr_ctx": a15[i] or 0,
-                                       "expires_t": now_ms + ZONE_TTL * MS[CTX_TF],
-                                       "seq": None, "last_exec_t": 0}
-                        ast["phase"] = "ZONE"
-                        log(f"{sym}: {CTX_TF} reversal zone {direction} open "
-                            f"(%K {kline[i]:.1f}) - hunting {EXEC_TF} sequences")
-                        break
-
-    # ---- zone active: walk new 5m candles through the sequence -------------
-    if ast["zone"]:
-        source, c5 = fetch(asset, EXEC_TF, 40)
-        if c5:
-            last_closed = len(c5) - 2
-            cutoff = c5[last_closed]["t"] - REPLAY_EXEC_CANDLES * MS[EXEC_TF]
-            if ast["zone"]["last_exec_t"] < cutoff:
-                ast["zone"]["last_exec_t"] = cutoff
-            ha = heikin_ashi(c5)
-            a5 = atr(c5)
-            vol_avg = sma([c["v"] for c in c5], 20)
-            for i in range(len(c5)):
-                if i > last_closed or c5[i]["t"] <= ast["zone"]["last_exec_t"]:
-                    continue
-                ch = process_exec_candle(asset, ast, c5, ha, a5, vol_avg, i, source)
-                changed = changed or ch
-                if ast["zone"]:
-                    ast["zone"]["last_exec_t"] = c5[i]["t"]
-                if ast["trade"]:
-                    break
-
-    stage = ast["phase"]
-    if ast["zone"]:
-        stage = "ZONE-CONFIRM" if ast["zone"].get("seq") else "ZONE"
-        stage += f" ({ast['zone']['direction']})"
-    RUN_STATUS.append(f"{sym} {stage}")
-    state[sym] = ast
-    return changed
 
 
 def check_once():
@@ -1010,7 +706,7 @@ def check_once():
 
 
 def seconds_to_next_close(buffer_s=15):
-    period = MS["5m"] // 1000
+    period = MS[TF] // 1000
     return period - (time.time() % period) + buffer_s
 
 
