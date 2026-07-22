@@ -72,7 +72,7 @@ ASSETS = [                         # used when DISCOVER_ALL = False / discovery 
 ]
 
 # --- Strategy dials -------------------------------------------------------
-TF = "15m"                   # strategy timeframe - one knob: "5m"/"15m"/"30m"
+TF = "5m"                   # strategy timeframe - one knob: "5m"/"15m"/"30m"
 MA_TYPE = "ema"              # "ema" or "sma"
 MA_LEN1, MA_LEN2, MA_LEN3 = 20, 50, 100
 STACK_STABLE_BARS = 3        # MA ordering must hold this many candles
