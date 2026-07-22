@@ -214,7 +214,8 @@ function render(d){
   document.getElementById('trades').innerHTML=d.trades.length?d.trades.map(t=>{
    const cls=t.dir==='LONG'?'long':'short';
    const RRT=1.5;
-   const rp=t.r==null?0:t.r>=0?Math.min(100,t.r/RRT*100):Math.min(100,-t.r*100);
+   // one scale: stop = 0%, entry = 40%, TP = 100% - the fill IS closeness to TP
+   const rp=t.r==null?0:Math.max(0,Math.min(100,(t.r+1)/(1+RRT)*100));
    const rc=t.r==null?'#8b949e':t.r>=0?'#3fb950':'#f85149';
    const rlbl=t.r==null?'':t.r>=0
      ?`${t.r.toFixed(2)}R · ${Math.round(Math.min(100,t.r/RRT*100))}% of the way to TP`
