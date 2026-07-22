@@ -1,32 +1,27 @@
 #!/usr/bin/env python3
 """
-THREE MOVING AVERAGES + WILLIAMS FRACTAL AGENT (Advent Trading style)
-----------------------------------------------------------------------
-Trend-following pullback entries on a single adjustable timeframe (TF).
+BREAK & RETEST AGENT
+---------------------
+Continuation entries at broken structure levels, on one adjustable
+timeframe (TF).
 
-REGIME (the trend filter):
-  LONG  regime: MA20 > MA50 > MA100, cleanly stacked (held for
-                STACK_STABLE_BARS candles). Entangled / crossing MAs
-                mean NO regime and NO trades.
-  SHORT regime: MA100 > MA50 > MA20, same stability rule.
+LEVELS: swing pivots (a high/low with PIVOT_WING lower highs / higher
+lows on each side) from the last LEVEL_LOOKBACK candles.
 
-LONG ENTRY (mirrored for shorts):
-  1. Price pulls back UNDER MA20 (shallow) or UNDER MA50 (deep)
-  2. A Williams fractal GREEN arrow (bullish swing-low fractal,
-     confirmed FRACTAL_PERIOD candles later) fires inside the pullback
-  3. Enter at the confirming candle close.
-       shallow pullback -> stop just below MA50
-       deep pullback    -> stop just below MA100
-     TP = entry + 1.5 x risk (RR = 1.5)
-  4. If price CLOSES below MA100, the setup is cancelled - no entry on
-     any green arrow until a fresh pullback forms above MA100.
+LONG (mirrored for shorts):
+  1. BREAK    a candle CLOSES above a pivot high by BREAK_MIN_ATR x ATR
+              -> the level arms and is watched for RETEST_TTL candles
+  2. RETEST   price trades back down into the level zone
+              (level + RETEST_TOL_ATR x ATR)
+  3. REJECT   the retest candle closes back ABOVE the level
+              -> enter at that close
+              stop  = level - STOP_PAD_ATR x ATR (old resistance failed)
+              TP    = entry + RR x risk (RR = 1.5)
+  FAIL: a close back below the level by FAIL_CLOSE_ATR x ATR cancels the
+  setup (failed break). Expiry after RETEST_TTL candles also cancels.
 
-SHORT ENTRY: price pulls back ABOVE MA20 (shallow: stop above MA50) or
-ABOVE MA50 (deep: stop above MA100); red arrow (bearish fractal) enters;
-a close above MA100 cancels. TP = 1.5R.
-
-Exits: single TP at 1.5R or the stop - no partials, no trailing.
-Closes are recorded to trades.log.
+Exits: single TP at 1.5R or the stop, with intrabar detection on the
+live candle. Closes are recorded to trades.log.
 
 Alerts are delivered to Telegram. Config from environment variables
 (GitHub repo Secrets):
@@ -73,13 +68,14 @@ ASSETS = [                         # used when DISCOVER_ALL = False / discovery 
 
 # --- Strategy dials -------------------------------------------------------
 TF = "30m"                   # strategy timeframe - one knob: "5m"/"15m"/"30m"
-MA_TYPE = "ema"              # "ema" or "sma"
-MA_LEN1, MA_LEN2, MA_LEN3 = 20, 50, 100
-STACK_STABLE_BARS = 3        # MA ordering must hold this many candles
-                             # (crossing / entangled MAs = no trades)
-FRACTAL_PERIOD = 2           # Williams fractal wing size (confirmed 2 bars later)
+PIVOT_WING = 5               # candles each side that define a swing pivot
+LEVEL_LOOKBACK = 120         # candles scanned for pivot levels
+BREAK_MIN_ATR = 0.10         # close must clear the level by this x ATR
+RETEST_TOL_ATR = 0.15        # retest zone extends this x ATR beyond the level
+RETEST_TTL = 24              # candles the broken level stays armed
+FAIL_CLOSE_ATR = 0.10        # close back through the level by this = failed break
+STOP_PAD_ATR = 0.25          # stop sits this far beyond the broken level
 RR = 1.5                     # take-profit at 1.5 x risk
-SL_PAD_ATR = 0.10            # stop sits this far beyond the reference MA
 ENABLE_SHORTS = True
 
 ALERT_ENTRIES = True
@@ -365,77 +361,57 @@ def send_telegram(text):
         raise RuntimeError(f"Telegram send failed: {resp.get('description')}")
 
 
-# ------------------------------ ma engine ----------------------------------
-def moving_average(values, period):
-    return ema(values, period) if MA_TYPE == "ema" else sma(values, period)
-
-
-def bull_fractal(candles, j, n=FRACTAL_PERIOD):
-    """Williams bullish (green-arrow) fractal at index j: a swing LOW.
-    Needs n candles each side, so it is confirmed at candle j+n."""
-    if j < n or j + n >= len(candles):
+# --------------------------- break & retest engine --------------------------
+def pivot_high(candles, j, wing=PIVOT_WING):
+    if j < wing or j + wing >= len(candles):
         return False
-    low = candles[j]["l"]
-    return all(low < candles[j + k]["l"] for k in range(1, n + 1)) and \
-        all(low < candles[j - k]["l"] for k in range(1, n + 1))
+    h = candles[j]["h"]
+    return all(h > candles[j + k]["h"] for k in range(1, wing + 1)) and \
+        all(h > candles[j - k]["h"] for k in range(1, wing + 1))
 
 
-def bear_fractal(candles, j, n=FRACTAL_PERIOD):
-    """Williams bearish (red-arrow) fractal at index j: a swing HIGH."""
-    if j < n or j + n >= len(candles):
+def pivot_low(candles, j, wing=PIVOT_WING):
+    if j < wing or j + wing >= len(candles):
         return False
-    high = candles[j]["h"]
-    return all(high > candles[j + k]["h"] for k in range(1, n + 1)) and \
-        all(high > candles[j - k]["h"] for k in range(1, n + 1))
+    l = candles[j]["l"]
+    return all(l < candles[j + k]["l"] for k in range(1, wing + 1)) and \
+        all(l < candles[j - k]["l"] for k in range(1, wing + 1))
 
 
-def regime(m1, m2, m3, i):
-    """LONG when MA20 > MA50 > MA100 for STACK_STABLE_BARS candles,
-    SHORT when MA100 > MA50 > MA20 likewise, else None (MAs crossing)."""
-    if i < STACK_STABLE_BARS or m3[i] is None:
-        return None
-    long_ok = short_ok = True
-    for k in range(STACK_STABLE_BARS):
-        a, b, c = m1[i - k], m2[i - k], m3[i - k]
-        if a is None or b is None or c is None:
-            return None
-        if not (a > b > c):
-            long_ok = False
-        if not (c > b > a):
-            short_ok = False
-    if long_ok:
-        return "LONG"
-    if short_ok:
-        return "SHORT"
-    return None
+def pivot_levels(candles, upto_i):
+    """Confirmed pivot highs/lows strictly before candle upto_i."""
+    highs, lows = [], []
+    start = max(PIVOT_WING, upto_i - LEVEL_LOOKBACK)
+    for j in range(start, upto_i - PIVOT_WING):
+        if pivot_high(candles, j):
+            highs.append(candles[j]["h"])
+        if pivot_low(candles, j):
+            lows.append(candles[j]["l"])
+    return highs, lows
 
 
-# ----------------------------- telegram copy --------------------------------
-def stage_message(asset, direction, depth, px, t):
+def stage_message(asset, direction, level, px, t):
     e = "\U0001F7E2" if direction == "LONG" else "\U0001F534"
     return "\n".join([
-        f"{e} <b>PULLBACK ARMED \u00b7 {esc(asset['symbol'])} {direction}</b>",
-        f"Price pulled {'under' if direction == 'LONG' else 'over'} "
-        f"MA{MA_LEN2 if depth == 'deep' else MA_LEN1} - waiting for the "
-        f"{'green' if direction == 'LONG' else 'red'} fractal arrow",
+        f"{e} <b>LEVEL BROKEN \u00b7 {esc(asset['symbol'])} {direction}</b>",
+        f"Closed {'above' if direction == 'LONG' else 'below'} "
+        f"${fmt_px(level)} - watching for the retest",
         f"<i>{esc(asset['label'])} \u00b7 {TF} \u00b7 {esc(fmt_ts(t))}</i>",
     ])
 
 
-def entry_message(asset, direction, plan, depth, frac_px, source, t):
+def entry_message(asset, direction, plan, level, source, t):
     e = "\U0001F7E2" if direction == "LONG" else "\U0001F534"
-    sl_ma = MA_LEN3 if depth == "deep" else MA_LEN2
     lines = [
         f"{e} <b>{direction} ENTRY \u00b7 {esc(asset['symbol'])}</b>",
-        f"<i>{esc(asset['label'])} \u00b7 {TF} zone \u00b7 3MA + fractal \u00b7 {esc(fmt_ts(t))}</i>",
+        f"<i>{esc(asset['label'])} \u00b7 {TF} \u00b7 break &amp; retest \u00b7 {esc(fmt_ts(t))}</i>",
         "",
-        f"\U0001F4CA <b>Setup</b>: MA{MA_LEN1}/{MA_LEN2}/{MA_LEN3} stacked "
-        f"{direction}; {depth} pullback; "
-        f"{'green' if direction == 'LONG' else 'red'} fractal at ${fmt_px(frac_px)}",
+        f"\U0001F4CA <b>Setup</b>: broke ${fmt_px(level)}, retested it as "
+        f"{'support' if direction == 'LONG' else 'resistance'}, and rejected",
         "",
         "\U0001F4CB <b>Plan</b>",
         f"Entry: <code>${fmt_px(plan['entry'])}</code>",
-        f"Stop:  <code>${fmt_px(plan['stop'])}</code>  (beyond MA{sl_ma})",
+        f"Stop:  <code>${fmt_px(plan['stop'])}</code>  (beyond the level)",
         f"TP:    <code>${fmt_px(plan['tp'])}</code>  ({RR}R)",
         f"<i>data: {esc(source)}</i>",
     ]
@@ -541,87 +517,86 @@ def process_open_trade(asset, trade, candles, last_closed_t):
     return trade, changed
 
 
-def process_candle(asset, ast, real, m1, m2, m3, a, i, source):
-    """Walk ONE newly closed candle through the 3MA + fractal engine."""
+def process_candle(asset, ast, real, a, i, source):
+    """Walk ONE newly closed candle through the break & retest engine."""
     sym = asset["symbol"]
-    reg = regime(m1, m2, m3, i)
+    c = real[i]
+    atr_i = a[i] or 0
     setup = ast["setup"]
 
-    # no clean stack -> stand down entirely
-    if reg is None:
-        if setup:
-            log(f"{sym}: MAs crossing - setup cancelled")
-        ast["setup"], ast["phase"] = None, "SCAN"
-        return True
-    if setup and setup["direction"] != reg:
-        setup = None
-        ast["setup"] = None
-
-    long = reg == "LONG"
-    c = real[i]
-
-    # trend-break invalidation: close beyond MA100 cancels everything
-    broke = c["c"] < m3[i] if long else c["c"] > m3[i]
-    if broke:
-        if setup:
-            log(f"{sym}: price closed {'below' if long else 'above'} "
-                f"MA{MA_LEN3} - setup cancelled (no fractal entries)")
-        ast["setup"], ast["phase"] = None, "SCAN"
-        return True
-
-    # pullback arming / deepening
-    pulled_shallow = c["l"] <= m1[i] if long else c["h"] >= m1[i]
-    pulled_deep = c["l"] <= m2[i] if long else c["h"] >= m2[i]
-    if pulled_deep or pulled_shallow:
-        depth = "deep" if pulled_deep else "shallow"
-        if setup is None or (setup["depth"] == "shallow" and depth == "deep"):
-            fresh = setup is None
-            setup = {"direction": reg, "depth": depth, "armed_t": c["t"]} \
-                if fresh else {**setup, "depth": depth}
-            ast["setup"] = setup
-            ast["phase"] = "ARMED"
-            if fresh:
-                log(f"{sym}: {reg} pullback armed ({depth}) - waiting for "
-                    f"{'green' if long else 'red'} fractal")
-                if ALERT_STAGES:
-                    send_telegram(stage_message(asset, reg, depth, c["c"], c["t"]))
-            elif depth == "deep":
-                log(f"{sym}: pullback deepened past MA{MA_LEN2} - "
-                    f"stop reference now MA{MA_LEN3}")
-
-    # fractal entry: the arrow confirms FRACTAL_PERIOD candles after its low
-    if ast["setup"]:
-        setup = ast["setup"]
-        j = i - FRACTAL_PERIOD
-        if j >= 0 and real[j]["t"] >= setup["armed_t"] - FRACTAL_PERIOD * (real[1]["t"] - real[0]["t"]):
-            arrow = bull_fractal(real, j) if long else bear_fractal(real, j)
-            if arrow:
-                sl_ref = m3[i] if setup["depth"] == "deep" else m2[i]
-                pad = SL_PAD_ATR * (a[i] or 0)
-                stop = sl_ref - pad if long else sl_ref + pad
+    # ---- active broken level: expire / fail / retest / enter ---------------
+    if setup:
+        long = setup["direction"] == "LONG"
+        lvl = setup["level"]
+        if c["t"] > setup["expires_t"]:
+            log(f"{sym}: broken level ${fmt_px(lvl)} expired without a retest")
+            ast["setup"], ast["phase"], setup = None, "SCAN", None
+        elif (c["c"] < lvl - FAIL_CLOSE_ATR * atr_i if long
+              else c["c"] > lvl + FAIL_CLOSE_ATR * atr_i):
+            log(f"{sym}: failed break - closed back through ${fmt_px(lvl)}")
+            ast["setup"], ast["phase"], setup = None, "SCAN", None
+        else:
+            zone = lvl + RETEST_TOL_ATR * atr_i if long \
+                else lvl - RETEST_TOL_ATR * atr_i
+            touched = c["l"] <= zone if long else c["h"] >= zone
+            rejected = touched and (c["c"] > lvl if long else c["c"] < lvl)
+            if rejected:
+                stop = lvl - STOP_PAD_ATR * atr_i if long \
+                    else lvl + STOP_PAD_ATR * atr_i
                 entry = c["c"]
                 risk = (entry - stop) if long else (stop - entry)
-                if risk <= 0:
-                    log(f"{sym}: fractal fired but entry is beyond the stop "
-                        "reference - skipped")
+                if risk > 0:
+                    tp = entry + RR * risk if long else entry - RR * risk
+                    plan = {"entry": entry, "stop": stop, "tp": tp}
+                    if ALERT_ENTRIES:
+                        send_telegram(entry_message(
+                            asset, setup["direction"], plan, lvl, source, c["t"]))
+                    log(f"ALERT SENT -> telegram: {sym} {setup['direction']} "
+                        f"ENTRY @ ${fmt_px(entry)} (retest of ${fmt_px(lvl)})")
+                    RUN_ALERTS.append(
+                        f"{sym} {setup['direction']} entry @ ${fmt_px(entry)}")
+                    ast["trade"] = {"verdict": setup["direction"],
+                                    "entry": entry, "stop": stop, "tp": tp,
+                                    "opened_t": c["t"], "checked_t": c["t"]}
+                    ast["phase"], ast["setup"] = "IN_TRADE", None
                     return True
-                tp = entry + RR * risk if long else entry - RR * risk
-                plan = {"entry": entry, "stop": stop, "tp": tp}
-                frac_px = real[j]["l"] if long else real[j]["h"]
-                if ALERT_ENTRIES:
-                    send_telegram(entry_message(asset, reg, plan,
-                                                setup["depth"], frac_px,
-                                                source, c["t"]))
-                log(f"ALERT SENT -> telegram: {sym} {reg} ENTRY @ "
-                    f"${fmt_px(entry)} ({setup['depth']} pullback, "
-                    f"{TF} fractal)")
-                RUN_ALERTS.append(f"{sym} {reg} entry @ ${fmt_px(entry)}")
-                ast["trade"] = {"verdict": reg, "entry": entry, "stop": stop,
-                                "tp": tp, "opened_t": c["t"],
-                                "checked_t": c["t"]}
-                ast["phase"], ast["setup"] = "IN_TRADE", None
-                return True
-    return True
+                ast["setup"], setup = None, None
+            elif touched and not setup.get("touched"):
+                setup["touched"] = True
+                log(f"{sym}: retesting ${fmt_px(lvl)}")
+        if ast["setup"] or ast["trade"]:
+            return True
+
+    # ---- hunt a fresh break of a pivot level -------------------------------
+    if i < 1:
+        return False
+    highs, lows = pivot_levels(real, i)
+    prev_close = real[i - 1]["c"]
+    if ENABLE_SHORTS or True:
+        pass
+    broken_high = [p for p in highs
+                   if prev_close <= p and c["c"] > p + BREAK_MIN_ATR * atr_i]
+    broken_low = [p for p in lows
+                  if prev_close >= p and c["c"] < p - BREAK_MIN_ATR * atr_i]
+    if broken_high:
+        lvl = max(broken_high)
+        ast["setup"] = {"direction": "LONG", "level": lvl, "touched": False,
+                        "expires_t": c["t"] + RETEST_TTL * MS[TF]}
+        ast["phase"] = "ARMED"
+        log(f"{sym}: LONG level broken at ${fmt_px(lvl)} - watching for retest")
+        if ALERT_STAGES:
+            send_telegram(stage_message(asset, "LONG", lvl, c["c"], c["t"]))
+        return True
+    if broken_low and ENABLE_SHORTS:
+        lvl = min(broken_low)
+        ast["setup"] = {"direction": "SHORT", "level": lvl, "touched": False,
+                        "expires_t": c["t"] + RETEST_TTL * MS[TF]}
+        ast["phase"] = "ARMED"
+        log(f"{sym}: SHORT level broken at ${fmt_px(lvl)} - watching for retest")
+        if ALERT_STAGES:
+            send_telegram(stage_message(asset, "SHORT", lvl, c["c"], c["t"]))
+        return True
+    return False
 
 
 def check_asset(asset, state):
@@ -645,16 +620,12 @@ def check_asset(asset, state):
         return changed
 
     # ---- scan / armed: process each newly closed candle --------------------
-    source, cs = fetch(asset, TF, MA_LEN3 + 40)
+    source, cs = fetch(asset, TF, LEVEL_LOOKBACK + 2 * PIVOT_WING + 20)
     if not cs:
         RUN_STATUS.append(f"{sym} feed failed")
         state[sym] = ast
         return changed
 
-    closes = [c["c"] for c in cs]
-    m1 = moving_average(closes, MA_LEN1)
-    m2 = moving_average(closes, MA_LEN2)
-    m3 = moving_average(closes, MA_LEN3)
     a = atr(cs)
 
     last_closed = len(cs) - 2
@@ -664,7 +635,7 @@ def check_asset(asset, state):
     for i in range(len(cs)):
         if i > last_closed or cs[i]["t"] <= ast["last_candle_t"]:
             continue
-        ch = process_candle(asset, ast, cs, m1, m2, m3, a, i, source)
+        ch = process_candle(asset, ast, cs, a, i, source)
         changed = changed or ch
         ast["last_candle_t"] = cs[i]["t"]
         if ast["trade"]:
@@ -672,7 +643,7 @@ def check_asset(asset, state):
 
     stage = ast["phase"]
     if ast["setup"]:
-        stage = f"ARMED-{ast['setup']['depth'].upper()} ({ast['setup']['direction']})"
+        stage = f"ARMED ({ast['setup']['direction']} ${fmt_px(ast['setup']['level'])})"
     RUN_STATUS.append(f"{sym} {stage}")
     state[sym] = ast
     return changed
@@ -765,10 +736,9 @@ if __name__ == "__main__":
             watched = ", ".join(a["symbol"] for a in ASSETS)
         send_telegram("\u2705 <b>Signal alert agent - test message</b>\n"
                       f"Your alert pipeline works. Watching: {esc(watched)}.\n"
-                      f"Strategy: 3 moving averages "
-                      f"({MA_LEN1}/{MA_LEN2}/{MA_LEN3} {MA_TYPE.upper()}, {TF}) - "
-                      "trend-stack regime, pullback + Williams fractal entry, "
-                      f"stop beyond the reference MA, TP {RR}R.")
+                      f"Strategy: break &amp; retest ({TF}) - pivot level "
+                      "breaks, retest-and-reject entries, stop beyond the "
+                      f"level, TP {RR}R, intrabar exit detection.")
         print("Test message sent to Telegram.")
     elif "--loop" in sys.argv:
         run_loop()
