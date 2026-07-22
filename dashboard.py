@@ -56,9 +56,9 @@ def journal_events(n=400, keep=25):
         return []
     events = []
     for line in out.splitlines():
-        if any(k in line for k in ("ALERT SENT", "zone", "doji", "TP1 HIT",
-                                   "TP2 HIT", "STOPPED OUT", "RUNNER",
-                                   "SUMMARY")):
+        if any(k in line for k in ("ALERT SENT", "ENTRY", "pullback",
+                                   "fractal", "TP HIT", "STOPPED OUT",
+                                   "cancelled", "crossing", "SUMMARY")):
             events.append(line.strip())
     return events[-keep:][::-1]
 
