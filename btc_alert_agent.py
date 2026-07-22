@@ -72,7 +72,7 @@ ASSETS = [                         # used when DISCOVER_ALL = False / discovery 
 ]
 
 # --- Strategy dials -------------------------------------------------------
-TF = "5m"                   # strategy timeframe - one knob: "5m"/"15m"/"30m"
+TF = "30m"                   # strategy timeframe - one knob: "5m"/"15m"/"30m"
 MA_TYPE = "ema"              # "ema" or "sma"
 MA_LEN1, MA_LEN2, MA_LEN3 = 20, 50, 100
 STACK_STABLE_BARS = 3        # MA ordering must hold this many candles
@@ -86,8 +86,6 @@ ALERT_ENTRIES = True
 ALERT_STAGES = False         # pullback-armed alerts (log-only when False)
 ALERT_LIFECYCLE = True       # TP / stop alerts
 
-CTX_TF = "30m"               # context timeframe: the trade thesis lives here
-EXEC_TF = "5m"               # execution timeframe: entries, stops, TPs, exits
 STATE_FILE = Path(__file__).parent / "btc_agent_state.json"
 TIMEZONE = "America/Chicago"
 LOCAL_TZ = ZoneInfo(TIMEZONE)
@@ -513,6 +511,33 @@ def process_open_trade(asset, trade, candles, last_closed_t):
             record_close(sym, trade, tp, "TP")
             RUN_ALERTS.append(f"{sym} TP HIT ({pnl_pct(trade, tp):+.2f}%)")
             return None, True
+
+    # ---- intrabar check on the LIVE (still forming) candle ------------------
+    # A fast move can blow through the stop mid-candle; don't wait for the
+    # close to say so. checked_t is NOT advanced for the live candle.
+    live = candles[-1]
+    if live["t"] > last_closed_t:
+        stop_hit = live["l"] <= trade["stop"] if long else live["h"] >= trade["stop"]
+        tp_hit = (live["h"] >= tp) if long else (live["l"] <= tp)
+        if stop_hit:
+            if ALERT_LIFECYCLE:
+                send_telegram(lifecycle_message(
+                    asset, "STOP", trade, trade["stop"], live["t"],
+                    "Intrabar - stop level traded before the candle closed."))
+            log(f"{sym}: STOPPED OUT at ${fmt_px(trade['stop'])} (intrabar)")
+            record_close(sym, trade, trade["stop"], "STOP")
+            RUN_ALERTS.append(
+                f"{sym} STOPPED OUT ({pnl_pct(trade, trade['stop']):+.2f}%)")
+            return None, True
+        if tp_hit:
+            if ALERT_LIFECYCLE:
+                send_telegram(lifecycle_message(
+                    asset, "TP", trade, tp, live["t"],
+                    "Intrabar - target traded before the candle closed."))
+            log(f"{sym}: TP HIT at ${fmt_px(tp)} (intrabar)")
+            record_close(sym, trade, tp, "TP")
+            RUN_ALERTS.append(f"{sym} TP HIT ({pnl_pct(trade, tp):+.2f}%)")
+            return None, True
     return trade, changed
 
 
@@ -740,10 +765,10 @@ if __name__ == "__main__":
             watched = ", ".join(a["symbol"] for a in ASSETS)
         send_telegram("\u2705 <b>Signal alert agent - test message</b>\n"
                       f"Your alert pipeline works. Watching: {esc(watched)}.\n"
-                      f"Strategy: {CTX_TF} stochastic reversal zones \u2192 {EXEC_TF} HA "
-                      "sequence (doji + two strong candles + volume/PA "
-                      "confirmation) \u2192 entry; exits on 5m: 2R/3R targets, "
-                      "breakeven after TP1, smoothed-HA runner exit.")
+                      f"Strategy: 3 moving averages "
+                      f"({MA_LEN1}/{MA_LEN2}/{MA_LEN3} {MA_TYPE.upper()}, {TF}) - "
+                      "trend-stack regime, pullback + Williams fractal entry, "
+                      f"stop beyond the reference MA, TP {RR}R.")
         print("Test message sent to Telegram.")
     elif "--loop" in sys.argv:
         run_loop()
