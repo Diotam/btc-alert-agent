@@ -75,7 +75,7 @@ STOCH_OVERSOLD = 20          # the "bottom line"
 STOCH_OVERBOUGHT = 80        # the "top line"
 CROSS_LOOKBACK = 6           # the cross must have happened within this many candles
 CTX_TF = "30m"               # context timeframe: the trade thesis lives here
-EXEC_TF = "15m"              # execution timeframe: entries, stops, TPs, exits
+EXEC_TF = "5m"               # execution timeframe: entries, stops, TPs, exits
 ZONE_TTL = 8                 # a reversal zone stays live this many context candles
 ZONE_EXIT_K = 50             # zone closes early once 15m %K recovers past this
 DOJI_BODY_FRAC = 0.12        # HA body <= this fraction of range = doji
