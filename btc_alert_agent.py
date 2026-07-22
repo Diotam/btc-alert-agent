@@ -53,8 +53,8 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 DISCOVER_ALL = True
 DISCOVER_DEXES = False             # main crypto dex only (no stock venues)
 DEXES = [""]                       # "" = main crypto dex
-ONLY = ["BTC"]                     # trade ONLY these symbols ([] = whole universe)
-MIN_DAY_VOLUME_USD = 1_000_000     # skip markets below $1M 24h notional
+ONLY = []                          # trade ONLY these symbols ([] = whole universe)
+MIN_DAY_VOLUME_USD = 100_000_000   # skip markets below $100M 24h notional
 MAX_ASSETS = 70
 FETCH_DELAY_S = 0.12
 REQUEST_TIMEOUT_S = 8              # fail fast: a throttled API must not burn 20s
