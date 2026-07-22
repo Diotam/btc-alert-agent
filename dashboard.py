@@ -25,7 +25,7 @@ _price_cache = {"t": 0.0, "mids": {}}
 
 
 def prices():
-    if time.time() - _price_cache["t"] < 2:
+    if time.time() - _price_cache["t"] < 0.8:
         return _price_cache["mids"]
     try:
         req = urllib.request.Request(
@@ -312,7 +312,7 @@ class Handler(BaseHTTPRequestHandler):
                     payload = json.dumps(build_data())
                     self.wfile.write(f"data: {payload}\n\n".encode())
                     self.wfile.flush()
-                    time.sleep(2)
+                    time.sleep(1)
             except (BrokenPipeError, ConnectionResetError, OSError):
                 return
         elif url.path == "/":
