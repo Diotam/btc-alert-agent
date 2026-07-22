@@ -1,409 +1,444 @@
 {
   "BTC": {
     "phase": "SCAN",
-    "last_setup_check": 1784719844594,
+    "last_setup_check": 1784725566567,
     "zone": null,
     "trade": null
   },
   "ETH": {
     "phase": "SCAN",
-    "last_setup_check": 1784719844876,
+    "last_setup_check": 1784725566832,
     "zone": null,
     "trade": null
   },
   "HYPE": {
     "phase": "ZONE",
-    "last_setup_check": 1784719845373,
+    "last_setup_check": 1784725567190,
     "zone": {
       "direction": "LONG",
       "kval": 25.139475338054325,
       "atr_ctx": 0.4445802777068824,
       "expires_t": 1784727738480,
       "seq": null,
-      "last_exec_t": 1784719500000
+      "last_exec_t": 1784725200000
     },
     "trade": null
   },
   "SOL": {
     "phase": "SCAN",
-    "last_setup_check": 1784719845846,
+    "last_setup_check": 1784725567805,
     "zone": null,
     "trade": null
   },
   "ZEC": {
     "phase": "ZONE",
-    "last_setup_check": 1784719846221,
+    "last_setup_check": 1784725568277,
     "zone": {
       "direction": "LONG",
       "kval": 21.958239981780167,
       "atr_ctx": 4.246772109941924,
       "expires_t": 1784727739871,
-      "seq": {
-        "ttl": 3,
-        "pattern_ext": 513.99,
-        "doji_t": 1784712900000,
-        "c1_t": null,
-        "confirms": 0,
-        "rules": []
-      },
-      "last_exec_t": 1784719500000
+      "seq": null,
+      "last_exec_t": 1784725200000
     },
     "trade": null
   },
   "XRP": {
     "phase": "SCAN",
-    "last_setup_check": 1784719846784,
+    "last_setup_check": 1784725568905,
     "zone": null,
     "trade": null
   },
   "PUMP": {
     "phase": "ZONE",
-    "last_setup_check": 1784719847063,
+    "last_setup_check": 1784725569300,
     "zone": {
       "direction": "LONG",
       "kval": 22.57715402876703,
       "atr_ctx": 2.6283305181124826e-05,
       "expires_t": 1784727740812,
-      "seq": {
-        "ttl": 4,
-        "pattern_ext": 0.001973,
-        "doji_t": 1784718900000,
-        "c1_t": null,
-        "confirms": 0,
-        "rules": []
-      },
-      "last_exec_t": 1784719500000
+      "seq": null,
+      "last_exec_t": 1784725200000
     },
     "trade": null
   },
   "CASHCAT": {
-    "phase": "ZONE",
-    "last_setup_check": 1784719850572,
-    "zone": {
-      "direction": "SHORT",
-      "kval": 85.66743183551529,
-      "atr_ctx": 0.002631528916068174,
-      "expires_t": 1784727744040,
-      "seq": null,
-      "last_exec_t": 1784719500000
-    },
+    "phase": "SCAN",
+    "last_setup_check": 1784725571561,
+    "zone": null,
     "trade": null
   },
   "kBONK": {
-    "phase": "SCAN",
-    "last_setup_check": 1784719858399,
-    "zone": null,
+    "phase": "ZONE",
+    "last_setup_check": 1784725581000,
+    "zone": {
+      "direction": "SHORT",
+      "kval": 71.69811320754701,
+      "atr_ctx": 3.083841033351375e-05,
+      "expires_t": 1784739981000,
+      "seq": null,
+      "last_exec_t": 1784725200000
+    },
     "trade": null
   },
   "ONDO": {
     "phase": "SCAN",
-    "last_setup_check": 1784719848147,
+    "last_setup_check": 1784725570050,
     "zone": null,
     "trade": null
   },
   "NEAR": {
     "phase": "ZONE",
-    "last_setup_check": 1784719848425,
+    "last_setup_check": 1784725570305,
     "zone": {
       "direction": "LONG",
       "kval": 19.55935170950546,
       "atr_ctx": 0.01366855639356595,
       "expires_t": 1784727742216,
       "seq": null,
-      "last_exec_t": 1784719500000
+      "last_exec_t": 1784725200000
     },
     "trade": null
   },
   "LIT": {
     "phase": "SCAN",
-    "last_setup_check": 1784719847631,
+    "last_setup_check": 1784725569697,
     "zone": null,
     "trade": null
   },
   "FARTCOIN": {
     "phase": "SCAN",
-    "last_setup_check": 1784719853089,
+    "last_setup_check": 1784725574053,
     "zone": null,
     "trade": null
   },
   "DOGE": {
     "phase": "ZONE",
-    "last_setup_check": 1784719849986,
+    "last_setup_check": 1784725574414,
     "zone": {
       "direction": "LONG",
       "kval": 23.140219931298162,
       "atr_ctx": 0.00027141114356160113,
       "expires_t": 1784727743354,
       "seq": null,
-      "last_exec_t": 1784719500000
+      "last_exec_t": 1784725200000
     },
     "trade": null
   },
   "AAVE": {
-    "phase": "ZONE",
-    "last_setup_check": 1784719849089,
-    "zone": {
-      "direction": "LONG",
-      "kval": 26.070822731128178,
-      "atr_ctx": 0.8482738186817366,
-      "expires_t": 1784727742748,
-      "seq": null,
-      "last_exec_t": 1784719500000
-    },
+    "phase": "SCAN",
+    "last_setup_check": 1784725570798,
+    "zone": null,
     "trade": null
   },
   "ENA": {
-    "phase": "SCAN",
-    "last_setup_check": 1784719851905,
-    "zone": null,
+    "phase": "ZONE",
+    "last_setup_check": 1784725572041,
+    "zone": {
+      "direction": "SHORT",
+      "kval": 81.08672936259153,
+      "atr_ctx": 0.0007476494420503976,
+      "expires_t": 1784739972041,
+      "seq": null,
+      "last_exec_t": 1784725200000
+    },
     "trade": null
   },
   "ADA": {
     "phase": "SCAN",
-    "last_setup_check": 1784719856557,
+    "last_setup_check": 1784725578170,
     "zone": null,
     "trade": null
   },
   "ACE": {
     "phase": "SCAN",
-    "last_setup_check": 1784719863027,
+    "last_setup_check": 1784725586628,
     "zone": null,
     "trade": null
   },
   "WLD": {
     "phase": "SCAN",
-    "last_setup_check": 1784719856034,
+    "last_setup_check": 1784725575816,
     "zone": null,
     "trade": null
   },
   "SUI": {
     "phase": "SCAN",
-    "last_setup_check": 1784719851640,
+    "last_setup_check": 1784725573577,
     "zone": null,
     "trade": null
   },
   "TAO": {
     "phase": "ZONE",
-    "last_setup_check": 1784719854185,
+    "last_setup_check": 1784725576595,
     "zone": {
       "direction": "LONG",
       "kval": 19.223880597014624,
       "atr_ctx": 1.1679849858491111,
       "expires_t": 1784727747520,
       "seq": null,
-      "last_exec_t": 1784719500000
+      "last_exec_t": 1784725200000
     },
     "trade": null
   },
   "VVV": {
     "phase": "SCAN",
-    "last_setup_check": 1784719853360,
+    "last_setup_check": 1784725577808,
     "zone": null,
     "trade": null
   },
   "kPEPE": {
     "phase": "SCAN",
-    "last_setup_check": 1784719861758,
+    "last_setup_check": 1784725584804,
     "zone": null,
     "trade": null
   },
   "VIRTUAL": {
-    "phase": "SCAN",
-    "last_setup_check": 1784719855111,
-    "zone": null,
+    "phase": "ZONE",
+    "last_setup_check": 1784725576082,
+    "zone": {
+      "direction": "SHORT",
+      "kval": 76.35591584636175,
+      "atr_ctx": 0.004216413499713062,
+      "expires_t": 1784739976082,
+      "seq": {
+        "ttl": 5,
+        "pattern_ext": 0.65675,
+        "doji_t": 1784724900000,
+        "c1_t": null,
+        "confirms": 0,
+        "rules": []
+      },
+      "last_exec_t": 1784725200000
+    },
     "trade": null
   },
   "KAITO": {
     "phase": "SCAN",
-    "last_setup_check": 1784719852817,
+    "last_setup_check": 1784725575558,
     "zone": null,
     "trade": null
   },
   "MON": {
     "phase": "ZONE",
-    "last_setup_check": 1784719860801,
+    "last_setup_check": 1784725582557,
     "zone": {
       "direction": "SHORT",
       "kval": 76.91862148856069,
       "atr_ctx": 0.00023320907673739992,
       "expires_t": 1784734260801,
-      "seq": null,
-      "last_exec_t": 1784719500000
+      "seq": {
+        "ttl": 5,
+        "pattern_ext": 0.023581,
+        "doji_t": 1784724900000,
+        "c1_t": null,
+        "confirms": 0,
+        "rules": []
+      },
+      "last_exec_t": 1784725200000
     },
     "trade": null
   },
   "BCH": {
     "phase": "ZONE",
-    "last_setup_check": 1784719853646,
+    "last_setup_check": 1784725575027,
     "zone": {
       "direction": "LONG",
       "kval": 16.02564102564088,
       "atr_ctx": 0.9841563969979286,
       "expires_t": 1784727748830,
       "seq": null,
-      "last_exec_t": 1784719500000
+      "last_exec_t": 1784725200000
     },
     "trade": null
   },
   "AVAX": {
     "phase": "SCAN",
-    "last_setup_check": 1784719858022,
+    "last_setup_check": 1784725580744,
     "zone": null,
     "trade": null
   },
   "UNI": {
-    "phase": "SCAN",
-    "last_setup_check": 1784719857749,
-    "zone": null,
+    "phase": "ZONE",
+    "last_setup_check": 1784725578834,
+    "zone": {
+      "direction": "SHORT",
+      "kval": 81.76923076923089,
+      "atr_ctx": 0.028314797871205055,
+      "expires_t": 1784739978834,
+      "seq": {
+        "ttl": 6,
+        "pattern_ext": 3.7806,
+        "doji_t": 1784725200000,
+        "c1_t": null,
+        "confirms": 0,
+        "rules": []
+      },
+      "last_exec_t": 1784725200000
+    },
     "trade": null
   },
   "HEMI": {
     "phase": "SCAN",
-    "last_setup_check": 1784719862630,
+    "last_setup_check": 1784725586164,
     "zone": null,
     "trade": null
   },
   "XPL": {
     "phase": "ZONE",
-    "last_setup_check": 1784719855488,
+    "last_setup_check": 1784725577303,
     "zone": {
       "direction": "SHORT",
       "kval": 86.74764384732806,
       "atr_ctx": 0.0006828305397499335,
       "expires_t": 1784734255488,
       "seq": null,
-      "last_exec_t": 1784719500000
+      "last_exec_t": 1784725200000
     },
     "trade": null
   },
   "XMR": {
     "phase": "SCAN",
-    "last_setup_check": 1784719852191,
+    "last_setup_check": 1784725573060,
     "zone": null,
     "trade": null
   },
   "LINK": {
     "phase": "ZONE",
-    "last_setup_check": 1784719856927,
+    "last_setup_check": 1784725579469,
     "zone": {
       "direction": "LONG",
       "kval": 21.440922190201846,
       "atr_ctx": 0.03352803912268507,
       "expires_t": 1784727750776,
       "seq": null,
-      "last_exec_t": 1784719500000
+      "last_exec_t": 1784725200000
     },
     "trade": null
   },
   "PAXG": {
     "phase": "SCAN",
-    "last_setup_check": 1784719851068,
+    "last_setup_check": 1784725572430,
     "zone": null,
     "trade": null
   },
   "SPX": {
     "phase": "ZONE",
-    "last_setup_check": 1784719859184,
+    "last_setup_check": 1784725581547,
     "zone": {
       "direction": "LONG",
       "kval": 18.258749317466833,
       "atr_ctx": 0.004097608623531105,
       "expires_t": 1784727752852,
       "seq": null,
-      "last_exec_t": 1784719500000
+      "last_exec_t": 1784725200000
     },
     "trade": null
   },
   "BNB": {
     "phase": "SCAN",
-    "last_setup_check": 1784719860269,
+    "last_setup_check": 1784725585314,
     "zone": null,
     "trade": null
   },
   "LTC": {
     "phase": "SCAN",
-    "last_setup_check": 1784719851348,
+    "last_setup_check": 1784725572698,
     "zone": null,
     "trade": null
   },
   "ZRO": {
-    "phase": "SCAN",
-    "last_setup_check": 1784719860533,
-    "zone": null,
+    "phase": "ZONE",
+    "last_setup_check": 1784725584208,
+    "zone": {
+      "direction": "SHORT",
+      "kval": 77.21695129664785,
+      "atr_ctx": 0.00705583813977507,
+      "expires_t": 1784739984208,
+      "seq": null,
+      "last_exec_t": 1784725200000
+    },
     "trade": null
   },
   "JTO": {
     "phase": "SCAN",
-    "last_setup_check": 1784719854843,
+    "last_setup_check": 1784725580458,
     "zone": null,
     "trade": null
   },
   "INJ": {
     "phase": "ZONE",
-    "last_setup_check": 1784719863859,
+    "last_setup_check": 1784725586884,
     "zone": {
       "direction": "LONG",
       "kval": 27.702789561640184,
       "atr_ctx": 0.03521873347813522,
       "expires_t": 1784727758582,
-      "seq": {
-        "ttl": 2,
-        "pattern_ext": 5.2221,
-        "doji_t": 1784712600000,
-        "c1_t": null,
-        "confirms": 0,
-        "rules": []
-      },
-      "last_exec_t": 1784719500000
+      "seq": null,
+      "last_exec_t": 1784725200000
     },
     "trade": null
   },
   "CRV": {
     "phase": "SCAN",
-    "last_setup_check": 1784719863341,
+    "last_setup_check": 1784725587537,
     "zone": null,
     "trade": null
   },
   "PENDLE": {
     "phase": "SCAN",
-    "last_setup_check": 1784719859986,
+    "last_setup_check": 1784725581938,
     "zone": null,
     "trade": null
   },
   "ARB": {
     "phase": "SCAN",
-    "last_setup_check": 1784719862022,
+    "last_setup_check": 1784725585801,
     "zone": null,
     "trade": null
   },
   "GRAM": {
     "phase": "ZONE",
-    "last_setup_check": 1784719849552,
+    "last_setup_check": 1784725571052,
     "zone": {
       "direction": "LONG",
       "kval": 10.83333333333327,
       "atr_ctx": 0.013632595087733141,
       "expires_t": 1784734249552,
-      "seq": null,
-      "last_exec_t": 1784719200000
+      "seq": {
+        "ttl": 5,
+        "pattern_ext": 1.5075,
+        "doji_t": 1784724900000,
+        "c1_t": null,
+        "confirms": 0,
+        "rules": []
+      },
+      "last_exec_t": 1784725200000
     },
     "trade": null
   },
   "TRUMP": {
     "phase": "SCAN",
-    "last_setup_check": 1784719861229,
+    "last_setup_check": 1784725583072,
     "zone": null,
     "trade": null
   },
   "ETHFI": {
-    "phase": "SCAN",
-    "last_setup_check": 1784719861492,
-    "zone": null,
+    "phase": "ZONE",
+    "last_setup_check": 1784725583610,
+    "zone": {
+      "direction": "SHORT",
+      "kval": 91.5463370641598,
+      "atr_ctx": 0.004406286054301675,
+      "expires_t": 1784739983610,
+      "seq": null,
+      "last_exec_t": 1784725200000
+    },
     "trade": null
   },
   "AERO": {
     "phase": "SCAN",
-    "last_setup_check": 1784719864287,
+    "last_setup_check": 1784725588013,
     "zone": null,
     "trade": null
   },
@@ -415,7 +450,7 @@
   },
   "LDO": {
     "phase": "SCAN",
-    "last_setup_check": 1784719864838,
+    "last_setup_check": 1784725589360,
     "zone": null,
     "trade": null
   },
@@ -445,20 +480,20 @@
   },
   "JUP": {
     "phase": "ZONE",
-    "last_setup_check": 1784713360605,
+    "last_setup_check": 1784725588764,
     "zone": {
       "direction": "LONG",
       "kval": 19.000317207661155,
       "atr_ctx": 0.0012256268920523006,
       "expires_t": 1784727760605,
       "seq": null,
-      "last_exec_t": 1784712900000
+      "last_exec_t": 1784725200000
     },
     "trade": null
   },
   "ASTER": {
     "phase": "SCAN",
-    "last_setup_check": 1784719864569,
+    "last_setup_check": 1784725588290,
     "zone": null,
     "trade": null
   },
@@ -470,31 +505,31 @@
   },
   "XLM": {
     "phase": "SCAN",
-    "last_setup_check": 1784719858892,
+    "last_setup_check": 1784725585058,
     "zone": null,
     "trade": null
   },
   "TRX": {
     "phase": "SCAN",
-    "last_setup_check": 1784719857451,
+    "last_setup_check": 1784725579967,
     "zone": null,
     "trade": null
   },
   "HBAR": {
     "phase": "SCAN",
-    "last_setup_check": 1784719859723,
+    "last_setup_check": 1784725582196,
     "zone": null,
     "trade": null
   },
   "SAGA": {
     "phase": "SCAN",
-    "last_setup_check": 1784719865479,
+    "last_setup_check": 1784725589895,
     "zone": null,
     "trade": null
   },
   "MORPHO": {
     "phase": "SCAN",
-    "last_setup_check": 1784719865215,
+    "last_setup_check": 1784725589614,
     "zone": null,
     "trade": null
   }
