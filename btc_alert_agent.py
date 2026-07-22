@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-HEIKIN ASHI + STOCHASTIC REVERSAL AGENT - 30m zones, 5m entries & exits
+HEIKIN ASHI + STOCHASTIC REVERSAL AGENT - 30m zones, 15m entries & exits
 ------------------------------------------------------------------------
-The 30m chart supplies the trade thesis; the 5m chart supplies entries
+The 30m chart supplies the trade thesis; the 15m chart supplies entries
 and exits. Pattern logic reads HA candles; entries and stops use REAL
 candle prices.
 
@@ -11,15 +11,15 @@ candle prices.
   momentum -> a directional zone opens for up to 8 x 30m candles, and
   closes early if %K recovers past 50. Max 20 zones at once.
 
-5M ENTRY SEQUENCE (hunted while the zone is live):
-  green (red) 5m HA doji -> two consecutive green (red) large-body 5m HA
+15M ENTRY SEQUENCE (hunted while the zone is live):
+  green (red) 15m HA doji -> two consecutive green (red) large-body 15m HA
   candles with wicks on one side only -> volume spike or price-action
   confirmation on real candles -> enter at the 2nd candle's close.
 
-EXITS (all on 5m):
-  Stop beyond the 5m pattern extreme (0.20 x 5m ATR pad, floored at
+EXITS (all on 15m):
+  Stop beyond the 15m pattern extreme (0.20 x 15m ATR pad, floored at
   0.20 x 30m ATR). TP1 2R (stop -> breakeven), TP2 3R, and after TP1 a
-  smoothed-HA flip on 5m closes the runner. Closes recorded to
+  smoothed-HA flip on 15m closes the runner. Closes recorded to
   trades.log.
 
 Alerts are delivered to Telegram. Config from environment variables
@@ -75,6 +75,7 @@ STOCH_OVERSOLD = 20          # the "bottom line"
 STOCH_OVERBOUGHT = 80        # the "top line"
 CROSS_LOOKBACK = 6           # the cross must have happened within this many candles
 CTX_TF = "30m"               # context timeframe: the trade thesis lives here
+EXEC_TF = "15m"              # execution timeframe: entries, stops, TPs, exits
 ZONE_TTL = 8                 # a reversal zone stays live this many context candles
 ZONE_EXIT_K = 50             # zone closes early once 15m %K recovers past this
 DOJI_BODY_FRAC = 0.12        # HA body <= this fraction of range = doji
@@ -87,10 +88,10 @@ RANGE_MIN_ATR = 0.80         # candle range must be meaningful vs ATR (filters
                              #  micro flat candles whose ratios look strong)
 WICK_TOL_FRAC = 0.15         # "no wick" tolerance: <= this fraction of range
 WICK_TOL_BODY = 0.20         # ...or <= this fraction of the body (HA-open lag)
-CONFIRM_TTL = 6              # 5m candles to complete both confirmations
-STOP_PAD_ATR = 0.20          # stop pad beyond the pattern's real extreme (5m ATR)
+CONFIRM_TTL = 6              # exec-TF candles to complete both confirmations
+STOP_PAD_ATR = 0.20          # stop pad beyond the pattern's real extreme (exec ATR)
 MIN_RISK_ATR_CTX = 0.20      # risk floor vs context ATR so 5m stops aren't microscopic
-REPLAY_5M_CANDLES = 6        # 5m candles replayed per run (covers cron jitter)
+REPLAY_EXEC_CANDLES = 3      # exec candles replayed per run (covers any run gap)
 REQUIRE_ENTRY_CONFIRM = True # entry needs a volume spike OR a PA pattern
 VOL_SPIKE_MULT = 1.50        # confirmation-candle volume vs 20-candle average
 BASE_WINDOW = 20             # candles before the doji defining the reversal base
@@ -598,7 +599,7 @@ def entry_message(asset, direction, plan, rules1, rules2, confirms,
     lines = [
         f"{icon} <b>{direction} REVERSAL ENTRY \u00b7 {esc(sym)}</b> \u2014 "
         f"<code>${fmt_px(plan['entry'])}</code>",
-        f"<i>{esc(asset['label'])} \u00b7 30m zone \u00b7 5m sequence \u00b7 {esc(fmt_ts(t))}</i>",
+        f"<i>{esc(asset['label'])} \u00b7 {CTX_TF} zone \u00b7 {EXEC_TF} sequence \u00b7 {esc(fmt_ts(t))}</i>",
         "",
         "\U0001F4CB <b>Trade plan (enter at market):</b>",
         f"<code>Entry  ${fmt_px(plan['entry'])}</code>",
@@ -749,9 +750,9 @@ def process_open_trade(asset, trade, candles, last_closed_t):
     return trade, changed
 
 
-def process_5m_candle(asset, ast, real, ha, a5, vol_avg, i, source):
-    """Walk ONE newly closed 5m candle through the entry sequence while a
-    15m reversal zone is active."""
+def process_exec_candle(asset, ast, real, ha, a5, vol_avg, i, source):
+    """Walk ONE newly closed exec-TF candle through the entry sequence
+    while a context-TF reversal zone is active."""
     sym = asset["symbol"]
     zone = ast["zone"]
     direction = zone["direction"]
@@ -769,8 +770,8 @@ def process_5m_candle(asset, ast, real, ha, a5, vol_avg, i, source):
             if ALERT_STAGES:
                 send_telegram(doji_message(asset, direction, zone["kval"],
                                            real[i]["c"], real[i]["t"]))
-            log(f"{sym}: 5m {'green' if long else 'red'} HA doji in {CTX_TF} zone - "
-                "watching for 2 strong 5m candles")
+            log(f"{sym}: {EXEC_TF} {'green' if long else 'red'} HA doji in {CTX_TF} zone"
+                f" - watching for 2 strong {EXEC_TF} candles")
         return True
 
     # ---- confirming: two consecutive rule-perfect 5m candles ----------------
@@ -795,7 +796,7 @@ def process_5m_candle(asset, ast, real, ha, a5, vol_avg, i, source):
                 confirms = entry_confirmations(real, vol_avg, doji_i,
                                                c1_i, i, long)
             if REQUIRE_ENTRY_CONFIRM and not confirms:
-                log(f"{sym}: 5m sequence complete but no volume/PA "
+                log(f"{sym}: {EXEC_TF} sequence complete but no volume/PA "
                     "confirmation - back to doji hunt")
                 zone["seq"] = None
                 return True
@@ -817,7 +818,7 @@ def process_5m_candle(asset, ast, real, ha, a5, vol_avg, i, source):
                         seq["rules"][0], seq["rules"][1],
                         confirms, zone["kval"], source, real[i]["t"]))
                 log(f"ALERT SENT -> telegram: {sym} {direction} "
-                    f"REVERSAL ENTRY @ ${fmt_px(entry)} (5m sequence)")
+                    f"REVERSAL ENTRY @ ${fmt_px(entry)} ({EXEC_TF} sequence)")
                 RUN_ALERTS.append(f"{sym} {direction} reversal entry "
                                   f"@ ${fmt_px(entry)}")
                 ast["trade"] = {"verdict": direction, "entry": entry,
@@ -843,7 +844,7 @@ def process_5m_candle(asset, ast, real, ha, a5, vol_avg, i, source):
 
     if seq["ttl"] <= 0 or seq["confirms"] > 0:
         zone["seq"] = None
-        log(f"{sym}: 5m confirmation broken - hunting the next doji")
+        log(f"{sym}: {EXEC_TF} confirmation broken - hunting the next doji")
     return True
 
 
@@ -857,7 +858,7 @@ def check_asset(asset, state):
 
     # ---- IN_TRADE: 5m monitoring + smoothed-HA runner exit on 5m -----------
     if ast["trade"]:
-        source, c5 = fetch(asset, "5m", 30)
+        source, c5 = fetch(asset, EXEC_TF, 30)
         if c5:
             trade, ch = process_open_trade(asset, ast["trade"], c5, c5[-2]["t"])
             ast["trade"] = trade
@@ -880,8 +881,8 @@ def check_asset(asset, state):
                         if ALERT_LIFECYCLE:
                             send_telegram(lifecycle_message(
                                 asset, "RUNNER", trade, exit_px, c5[i]["t"],
-                                "Smoothed HA flipped against the trade - "
-                                "runner closed at the 5m close."))
+                                f"Smoothed HA flipped against the trade - "
+                                f"runner closed at the {EXEC_TF} close."))
                         log(f"{sym}: RUNNER CLOSED at ${fmt_px(exit_px)} "
                             "(smoothed HA flip)")
                         record_close(sym, trade, exit_px, "RUNNER")
@@ -930,30 +931,30 @@ def check_asset(asset, state):
                                        "kval": kline[i],
                                        "atr_ctx": a15[i] or 0,
                                        "expires_t": now_ms + ZONE_TTL * MS[CTX_TF],
-                                       "seq": None, "last_5m_t": 0}
+                                       "seq": None, "last_exec_t": 0}
                         ast["phase"] = "ZONE"
                         log(f"{sym}: {CTX_TF} reversal zone {direction} open "
-                            f"(%K {kline[i]:.1f}) - hunting 5m sequences")
+                            f"(%K {kline[i]:.1f}) - hunting {EXEC_TF} sequences")
                         break
 
     # ---- zone active: walk new 5m candles through the sequence -------------
     if ast["zone"]:
-        source, c5 = fetch(asset, "5m", 40)
+        source, c5 = fetch(asset, EXEC_TF, 40)
         if c5:
             last_closed = len(c5) - 2
-            cutoff = c5[last_closed]["t"] - REPLAY_5M_CANDLES * MS["5m"]
-            if ast["zone"]["last_5m_t"] < cutoff:
-                ast["zone"]["last_5m_t"] = cutoff
+            cutoff = c5[last_closed]["t"] - REPLAY_EXEC_CANDLES * MS[EXEC_TF]
+            if ast["zone"]["last_exec_t"] < cutoff:
+                ast["zone"]["last_exec_t"] = cutoff
             ha = heikin_ashi(c5)
             a5 = atr(c5)
             vol_avg = sma([c["v"] for c in c5], 20)
             for i in range(len(c5)):
-                if i > last_closed or c5[i]["t"] <= ast["zone"]["last_5m_t"]:
+                if i > last_closed or c5[i]["t"] <= ast["zone"]["last_exec_t"]:
                     continue
-                ch = process_5m_candle(asset, ast, c5, ha, a5, vol_avg, i, source)
+                ch = process_exec_candle(asset, ast, c5, ha, a5, vol_avg, i, source)
                 changed = changed or ch
                 if ast["zone"]:
-                    ast["zone"]["last_5m_t"] = c5[i]["t"]
+                    ast["zone"]["last_exec_t"] = c5[i]["t"]
                 if ast["trade"]:
                     break
 
@@ -1040,7 +1041,7 @@ if __name__ == "__main__":
             watched = ", ".join(a["symbol"] for a in ASSETS)
         send_telegram("\u2705 <b>Signal alert agent - test message</b>\n"
                       f"Your alert pipeline works. Watching: {esc(watched)}.\n"
-                      "Strategy: 30m stochastic reversal zones \u2192 5m HA "
+                      f"Strategy: {CTX_TF} stochastic reversal zones \u2192 {EXEC_TF} HA "
                       "sequence (doji + two strong candles + volume/PA "
                       "confirmation) \u2192 entry; exits on 5m: 2R/3R targets, "
                       "breakeven after TP1, smoothed-HA runner exit.")
