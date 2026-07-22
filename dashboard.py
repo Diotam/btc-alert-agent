@@ -160,6 +160,10 @@ h1{font-size:17px;margin:4px 0 12px}
 .tab.active{color:#e6edf3;background:#21262d}
 .total{font-size:30px;font-weight:800;font-family:Menlo,monospace;
        text-align:center;margin:8px 0 10px}
+.shead{cursor:pointer;-webkit-user-select:none;user-select:none}
+.chev{display:inline-block;width:13px}
+.cnt{color:#e6edf3;background:#21262d;border-radius:8px;padding:0 7px;
+     margin-left:6px;font-size:11px}
 </style></head><body>
 <h1>Signal Agent <span id=status class=badge></span>
 <span id=meta class=muted style="font-weight:400;font-size:12px"></span></h1>
@@ -172,13 +176,22 @@ h1{font-size:17px;margin:4px 0 12px}
     <div class=tab data-p=m onclick="setP('m')">MONTH</div>
   </div>
 </div>
-<div class=section>Open trades</div><div id=trades></div>
-<div class=section>Active zones</div><div id=zones></div>
-<div class=section>Closed trades <span id=csub class=muted style="float:right;text-transform:none;letter-spacing:0"></span></div><div id=closed></div>
-<div class=section>Recent events</div><div id=events></div>
+<div class="section shead" onclick="toggle('trades')"><span class=chev id=c-trades>\u25be</span>Open trades<span class=cnt id=n-trades>0</span></div><div id=trades></div>
+<div class="section shead" onclick="toggle('zones')"><span class=chev id=c-zones>\u25be</span>Active zones<span class=cnt id=n-zones>0</span></div><div id=zones></div>
+<div class="section shead" onclick="toggle('closed')"><span class=chev id=c-closed>\u25be</span>Closed trades<span class=cnt id=n-closed>0</span> <span id=csub class=muted style="float:right;text-transform:none;letter-spacing:0"></span></div><div id=closed></div>
+<div class="section shead" onclick="toggle('events')"><span class=chev id=c-events>\u25be</span>Recent events<span class=cnt id=n-events>0</span></div><div id=events></div>
 <script>
 const KEY=new URLSearchParams(location.search).get('key')||'';
 let PERIOD='d', LAST=null;
+let COLLAPSED={};
+try{COLLAPSED=JSON.parse(localStorage.getItem('dashCollapsed')||'{}')}catch(e){}
+function applyCollapse(){['trades','zones','closed','events'].forEach(id=>{
+ const el=document.getElementById(id), ch=document.getElementById('c-'+id);
+ if(el)el.style.display=COLLAPSED[id]?'none':'';
+ if(ch)ch.textContent=COLLAPSED[id]?'\u25b8':'\u25be'})}
+function toggle(id){COLLAPSED[id]=!COLLAPSED[id];
+ try{localStorage.setItem('dashCollapsed',JSON.stringify(COLLAPSED))}catch(e){}
+ applyCollapse()}
 const DAYS={d:1,w:7,m:30}, LABEL={d:'last 24h',w:'last 7 days',m:'last 30 days'};
 function setP(p){PERIOD=p;
  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.dataset.p===p));
@@ -242,6 +255,11 @@ function render(d){
   }).join(''):'<div class="card muted">none in this period</div>';
   document.getElementById('events').innerHTML=
    d.events.map(e=>`<div class=event>${e.replace(/</g,'&lt;')}</div>`).join('')||'<div class="card muted">none</div>';
+  document.getElementById('n-trades').textContent=d.trades.length;
+  document.getElementById('n-zones').textContent=d.zones.length;
+  document.getElementById('n-closed').textContent=shown.length;
+  document.getElementById('n-events').textContent=d.events.length;
+  applyCollapse();
 }
 function offline(){document.getElementById('status').textContent='OFFLINE';
  document.getElementById('status').className='badge warn'}
