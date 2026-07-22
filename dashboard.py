@@ -98,30 +98,25 @@ def build_data():
         tr = ast.get("trade")
         if tr:
             sign = 1 if tr["verdict"] == "LONG" else -1
-            r1 = abs(tr["tp1"] - tr["entry"]) / 2 or 1
+            tp = tr.get("tp") or tr.get("tp2")
+            risk = abs(tr["entry"] - tr["stop"]) or 1
             pnl = r_now = None
             if mid:
                 pnl = sign * (mid - tr["entry"]) / tr["entry"] * 100
-                r_now = sign * (mid - tr["entry"]) / r1
+                r_now = sign * (mid - tr["entry"]) / risk
             trades.append({"sym": sym, "dir": tr["verdict"],
                            "entry": tr["entry"], "stop": tr["stop"],
-                           "tp1": tr["tp1"], "tp2": tr["tp2"],
-                           "tp1_hit": tr.get("tp1_hit", False),
-                           "mid": mid, "pnl": pnl, "r": r_now,
+                           "tp": tp, "mid": mid, "pnl": pnl, "r": r_now,
                            "opened_t": tr.get("opened_t", 0)})
-        z = ast.get("zone")
+        z = ast.get("setup")
         if z:
-            seq = z.get("seq")
-            stage = "hunting doji"
-            if seq:
-                stage = f"confirming ({seq.get('confirms', 0)}/2)"
+            arrow = "green" if z["direction"] == "LONG" else "red"
             zones.append({"sym": sym, "dir": z["direction"],
-                          "k": z.get("kval"), "stage": stage,
-                          "mid": mid,
-                          "mins_left": max(0, int((z.get("expires_t", 0)
-                                          - time.time() * 1000) / 60000))})
+                          "stage": f"{z.get('depth', '?')} pullback \u00b7 "
+                                   f"waiting for the {arrow} arrow",
+                          "mid": mid})
     trades.sort(key=lambda t: t["sym"])
-    zones.sort(key=lambda z: z["mins_left"])
+    zones.sort(key=lambda z: z["sym"])
     closed, pnl = closed_trades()
     return {"now": time.time(),
             "state_age_s": int(time.time() - mtime) if mtime else None,
@@ -177,7 +172,7 @@ h1{font-size:17px;margin:4px 0 12px}
   </div>
 </div>
 <div class="section shead" onclick="toggle('trades')"><span class=chev id=c-trades>\u25be</span>Open trades<span class=cnt id=n-trades>0</span></div><div id=trades></div>
-<div class="section shead" onclick="toggle('zones')"><span class=chev id=c-zones>\u25be</span>Active zones<span class=cnt id=n-zones>0</span></div><div id=zones></div>
+<div class="section shead" onclick="toggle('zones')"><span class=chev id=c-zones>\u25be</span>Armed setups<span class=cnt id=n-zones>0</span></div><div id=zones></div>
 <div class="section shead" onclick="toggle('closed')"><span class=chev id=c-closed>\u25be</span>Closed trades<span class=cnt id=n-closed>0</span> <span id=csub class=muted style="float:right;text-transform:none;letter-spacing:0"></span></div><div id=closed></div>
 <div class="section shead" onclick="toggle('events')"><span class=chev id=c-events>\u25be</span>Recent events<span class=cnt id=n-events>0</span></div><div id=events></div>
 <script>
@@ -218,31 +213,30 @@ function render(d){
   document.getElementById('meta').textContent=d.scanned+' markets'+age;
   document.getElementById('trades').innerHTML=d.trades.length?d.trades.map(t=>{
    const cls=t.dir==='LONG'?'long':'short';
-   const rp=t.r==null?0:Math.max(0,Math.min(100,(t.r+1)/4*100));
+   const rp=t.r==null?0:Math.max(0,Math.min(100,(t.r+1)/2.5*100));
    const rc=t.r==null?'#8b949e':t.r>=0?'#3fb950':'#f85149';
    return `<div class=card>
     <div class=row><span class=sym>${t.sym} <span class=${cls}>${t.dir}</span>
-    ${t.tp1_hit?'<span class="badge ok">runner</span>':''}</span>
+    </span>
     <span class="num ${t.pnl>=0?'pnl-pos':'pnl-neg'}">${t.pnl==null?'-':(t.pnl>=0?'+':'')+t.pnl.toFixed(2)+'%'}</span></div>
     <div class=row><span class=muted>entry <span class=num>$${px(t.entry)}</span></span>
     <span class=muted>now <span class=num>$${px(t.mid)}</span></span></div>
     <div class=row><span class=muted>stop <span class=num>$${px(t.stop)}</span></span>
-    <span class=muted>TP1 <span class=num>$${px(t.tp1)}</span> · TP2 <span class=num>$${px(t.tp2)}</span></span></div>
+    <span class=muted>TP <span class=num>$${px(t.tp)}</span></span></div>
     <div class=bar><div class=fill style="width:${rp}%;background:${rc}"></div></div>
-    <div class=muted>${t.r==null?'':t.r.toFixed(2)+'R'} (stop -1R → TP2 +3R)</div></div>`
+    <div class=muted>${t.r==null?'':t.r.toFixed(2)+'R'} (stop -1R → TP +1.5R)</div></div>`
   }).join(''):'<div class="card muted">none</div>';
   document.getElementById('zones').innerHTML=d.zones.length?d.zones.map(z=>{
    const cls=z.dir==='LONG'?'long':'short';
    return `<div class=card><div class=row>
     <span class=sym>${z.sym} <span class=${cls}>${z.dir}</span></span>
-    <span class=muted>${z.mins_left}m left</span></div>
-    <div class=row><span class=muted>${z.stage}</span>
-    <span class=muted>%K ${z.k==null?'-':z.k.toFixed(1)} · now <span class=num>$${px(z.mid)}</span></span></div></div>`
+    <span class=muted>now <span class=num>$${px(z.mid)}</span></span></div>
+    <div class=row><span class=muted>${z.stage}</span></div></div>`
   }).join(''):'<div class="card muted">none</div>';
   document.getElementById('csub').textContent=LABEL[PERIOD];
   const cut=Date.now()-DAYS[PERIOD]*86400000;
   const shown=d.closed.filter(c=>c.t>=cut).slice(0,20);
-  const icons={TP2:'🏁',STOP:'❌',RUNNER:'🏃'};
+  const icons={TP:'🏁',TP2:'🏁',STOP:'❌',RUNNER:'🏃'};
   document.getElementById('closed').innerHTML=shown.length?shown.map(c=>{
    const cls=c.dir==='LONG'?'long':'short';
    const when=new Date(c.t).toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
