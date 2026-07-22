@@ -213,8 +213,12 @@ function render(d){
   document.getElementById('meta').textContent=d.scanned+' markets'+age;
   document.getElementById('trades').innerHTML=d.trades.length?d.trades.map(t=>{
    const cls=t.dir==='LONG'?'long':'short';
-   const rp=t.r==null?0:Math.max(0,Math.min(100,(t.r+1)/2.5*100));
+   const RRT=1.5;
+   const rp=t.r==null?0:t.r>=0?Math.min(100,t.r/RRT*100):Math.min(100,-t.r*100);
    const rc=t.r==null?'#8b949e':t.r>=0?'#3fb950':'#f85149';
+   const rlbl=t.r==null?'':t.r>=0
+     ?`${t.r.toFixed(2)}R · ${Math.round(Math.min(100,t.r/RRT*100))}% of the way to TP`
+     :`${t.r.toFixed(2)}R · ${Math.round(Math.min(100,-t.r*100))}% of the way to stop`;
    return `<div class=card>
     <div class=row><span class=sym>${t.sym} <span class=${cls}>${t.dir}</span>
     </span>
@@ -224,7 +228,7 @@ function render(d){
     <div class=row><span class=muted>stop <span class=num>$${px(t.stop)}</span></span>
     <span class=muted>TP <span class=num>$${px(t.tp)}</span></span></div>
     <div class=bar><div class=fill style="width:${rp}%;background:${rc}"></div></div>
-    <div class=muted>${t.r==null?'':t.r.toFixed(2)+'R'} (stop -1R → TP +1.5R)</div></div>`
+    <div class=muted>${rlbl}</div></div>`
   }).join(''):'<div class="card muted">none</div>';
   document.getElementById('zones').innerHTML=d.zones.length?d.zones.map(z=>{
    const cls=z.dir==='LONG'?'long':'short';
