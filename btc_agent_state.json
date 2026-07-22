@@ -1,31 +1,17 @@
 {
   "BTC": {
-    "phase": "IN_TRADE",
+    "phase": "SCAN",
     "last_setup_check": 1784725566567,
     "zone": null,
-    "trade": {
-      "verdict": "SHORT",
-      "entry": 65659.0,
-      "stop": 65977.76523303617,
-      "tp": 65180.85215044574,
-      "opened_t": 1784730600000,
-      "checked_t": 1784730600000
-    },
+    "trade": null,
     "last_candle_t": 1784730600000,
     "setup": null
   },
   "ETH": {
-    "phase": "IN_TRADE",
+    "phase": "SCAN",
     "last_setup_check": 1784725566832,
     "zone": null,
-    "trade": {
-      "verdict": "LONG",
-      "entry": 1933.0,
-      "stop": 1923.9037068189848,
-      "tp": 1946.6444397715227,
-      "opened_t": 1784731500000,
-      "checked_t": 1784731500000
-    },
+    "trade": null,
     "last_candle_t": 1784731500000,
     "setup": null
   },
@@ -46,23 +32,16 @@
       "stop": 59.159890036413536,
       "tp": 57.247664945379704,
       "opened_t": 1784730600000,
-      "checked_t": 1784730600000
+      "checked_t": 1784736000000
     },
     "last_candle_t": 1784730600000,
     "setup": null
   },
   "SOL": {
-    "phase": "IN_TRADE",
+    "phase": "SCAN",
     "last_setup_check": 1784725567805,
     "zone": null,
-    "trade": {
-      "verdict": "SHORT",
-      "entry": 77.689,
-      "stop": 77.72216866961448,
-      "tp": 77.63924699557828,
-      "opened_t": 1784730600000,
-      "checked_t": 1784730600000
-    },
+    "trade": null,
     "last_candle_t": 1784730600000,
     "setup": null
   },
@@ -83,7 +62,7 @@
       "stop": 519.1160046341538,
       "tp": 500.5759930487693,
       "opened_t": 1784730600000,
-      "checked_t": 1784730600000
+      "checked_t": 1784736000000
     },
     "last_candle_t": 1784730600000,
     "setup": null
@@ -93,11 +72,11 @@
     "last_setup_check": 1784725568905,
     "zone": null,
     "trade": null,
-    "last_candle_t": 1784731500000,
+    "last_candle_t": 1784736000000,
     "setup": null
   },
   "PUMP": {
-    "phase": "ZONE",
+    "phase": "SCAN",
     "last_setup_check": 1784725569300,
     "zone": {
       "direction": "LONG",
@@ -108,19 +87,23 @@
       "last_exec_t": 1784725200000
     },
     "trade": null,
-    "last_candle_t": 1784731500000,
+    "last_candle_t": 1784736000000,
     "setup": null
   },
   "CASHCAT": {
-    "phase": "SCAN",
+    "phase": "ARMED",
     "last_setup_check": 1784725571561,
     "zone": null,
     "trade": null,
-    "last_candle_t": 1784731500000,
-    "setup": null
+    "last_candle_t": 1784736000000,
+    "setup": {
+      "direction": "SHORT",
+      "depth": "shallow",
+      "armed_t": 1784734200000
+    }
   },
   "kBONK": {
-    "phase": "ARMED",
+    "phase": "IN_TRADE",
     "last_setup_check": 1784725581000,
     "zone": {
       "direction": "SHORT",
@@ -130,13 +113,16 @@
       "seq": null,
       "last_exec_t": 1784725200000
     },
-    "trade": null,
-    "last_candle_t": 1784731500000,
-    "setup": {
-      "direction": "LONG",
-      "depth": "deep",
-      "armed_t": 1784729700000
-    }
+    "trade": {
+      "verdict": "LONG",
+      "entry": 0.003119,
+      "stop": 0.003041917098548518,
+      "tp": 0.0032346243521772225,
+      "opened_t": 1784734200000,
+      "checked_t": 1784734200000
+    },
+    "last_candle_t": 1784734200000,
+    "setup": null
   },
   "ONDO": {
     "phase": "IN_TRADE",
@@ -148,13 +134,13 @@
       "stop": 0.4061942748010647,
       "tp": 0.42240858779840296,
       "opened_t": 1784731500000,
-      "checked_t": 1784731500000
+      "checked_t": 1784736000000
     },
     "last_candle_t": 1784731500000,
     "setup": null
   },
   "NEAR": {
-    "phase": "IN_TRADE",
+    "phase": "SCAN",
     "last_setup_check": 1784725570305,
     "zone": {
       "direction": "LONG",
@@ -164,14 +150,7 @@
       "seq": null,
       "last_exec_t": 1784725200000
     },
-    "trade": {
-      "verdict": "SHORT",
-      "entry": 1.8786,
-      "stop": 1.8974192464612654,
-      "tp": 1.850371130308102,
-      "opened_t": 1784730600000,
-      "checked_t": 1784730600000
-    },
+    "trade": null,
     "last_candle_t": 1784730600000,
     "setup": null
   },
@@ -180,7 +159,7 @@
     "last_setup_check": 1784725569697,
     "zone": null,
     "trade": null,
-    "last_candle_t": 1784731500000,
+    "last_candle_t": 1784736000000,
     "setup": null
   },
   "FARTCOIN": {
@@ -193,13 +172,13 @@
       "stop": 0.13781328249115063,
       "tp": 0.1338300762632741,
       "opened_t": 1784730600000,
-      "checked_t": 1784730600000
+      "checked_t": 1784736000000
     },
     "last_candle_t": 1784730600000,
     "setup": null
   },
   "DOGE": {
-    "phase": "IN_TRADE",
+    "phase": "SCAN",
     "last_setup_check": 1784725574414,
     "zone": {
       "direction": "LONG",
@@ -209,14 +188,7 @@
       "seq": null,
       "last_exec_t": 1784725200000
     },
-    "trade": {
-      "verdict": "SHORT",
-      "entry": 0.072753,
-      "stop": 0.07288588733500387,
-      "tp": 0.07255366899749419,
-      "opened_t": 1784730600000,
-      "checked_t": 1784730600000
-    },
+    "trade": null,
     "last_candle_t": 1784730600000,
     "setup": null
   },
@@ -230,13 +202,13 @@
       "stop": 95.54079422001317,
       "tp": 99.84130866998024,
       "opened_t": 1784731500000,
-      "checked_t": 1784731500000
+      "checked_t": 1784736000000
     },
     "last_candle_t": 1784731500000,
     "setup": null
   },
   "ENA": {
-    "phase": "ARMED",
+    "phase": "IN_TRADE",
     "last_setup_check": 1784725572041,
     "zone": {
       "direction": "SHORT",
@@ -246,20 +218,23 @@
       "seq": null,
       "last_exec_t": 1784725200000
     },
-    "trade": null,
-    "last_candle_t": 1784731500000,
-    "setup": {
-      "direction": "LONG",
-      "depth": "deep",
-      "armed_t": 1784729700000
-    }
+    "trade": {
+      "verdict": "LONG",
+      "entry": 0.089312,
+      "stop": 0.08577615262356088,
+      "tp": 0.09461577106465868,
+      "opened_t": 1784734200000,
+      "checked_t": 1784734200000
+    },
+    "last_candle_t": 1784734200000,
+    "setup": null
   },
   "ADA": {
     "phase": "SCAN",
     "last_setup_check": 1784725578170,
     "zone": null,
     "trade": null,
-    "last_candle_t": 1784731500000,
+    "last_candle_t": 1784736000000,
     "setup": null
   },
   "ACE": {
@@ -272,29 +247,32 @@
       "stop": 0.09382345401431882,
       "tp": 0.08826481897852176,
       "opened_t": 1784730600000,
-      "checked_t": 1784730600000
+      "checked_t": 1784736000000
     },
     "last_candle_t": 1784730600000,
     "setup": null
   },
   "WLD": {
-    "phase": "ARMED",
+    "phase": "IN_TRADE",
     "last_setup_check": 1784725575816,
     "zone": null,
-    "trade": null,
-    "last_candle_t": 1784731500000,
-    "setup": {
-      "direction": "LONG",
-      "depth": "deep",
-      "armed_t": 1784729700000
-    }
+    "trade": {
+      "verdict": "LONG",
+      "entry": 0.38118,
+      "stop": 0.37862378805937974,
+      "tp": 0.38501431791093044,
+      "opened_t": 1784734200000,
+      "checked_t": 1784734200000
+    },
+    "last_candle_t": 1784734200000,
+    "setup": null
   },
   "SUI": {
     "phase": "SCAN",
     "last_setup_check": 1784725573577,
     "zone": null,
     "trade": null,
-    "last_candle_t": 1784731500000,
+    "last_candle_t": 1784736000000,
     "setup": null
   },
   "TAO": {
@@ -309,29 +287,26 @@
       "last_exec_t": 1784725200000
     },
     "trade": null,
-    "last_candle_t": 1784731500000,
+    "last_candle_t": 1784736000000,
     "setup": null
   },
   "VVV": {
-    "phase": "SCAN",
+    "phase": "ARMED",
     "last_setup_check": 1784725577808,
     "zone": null,
     "trade": null,
-    "last_candle_t": 1784731500000,
-    "setup": null
+    "last_candle_t": 1784736000000,
+    "setup": {
+      "direction": "LONG",
+      "depth": "deep",
+      "armed_t": 1784736000000
+    }
   },
   "kPEPE": {
-    "phase": "IN_TRADE",
+    "phase": "SCAN",
     "last_setup_check": 1784725584804,
     "zone": null,
-    "trade": {
-      "verdict": "SHORT",
-      "entry": 0.002851,
-      "stop": 0.0028691647291166945,
-      "tp": 0.0028237529063249575,
-      "opened_t": 1784730600000,
-      "checked_t": 1784730600000
-    },
+    "trade": null,
     "last_candle_t": 1784730600000,
     "setup": null
   },
@@ -354,7 +329,7 @@
       "last_exec_t": 1784725200000
     },
     "trade": null,
-    "last_candle_t": 1784731500000,
+    "last_candle_t": 1784736000000,
     "setup": null
   },
   "KAITO": {
@@ -362,11 +337,11 @@
     "last_setup_check": 1784725575558,
     "zone": null,
     "trade": null,
-    "last_candle_t": 1784731500000,
+    "last_candle_t": 1784736000000,
     "setup": null
   },
   "MON": {
-    "phase": "ARMED",
+    "phase": "IN_TRADE",
     "last_setup_check": 1784725582557,
     "zone": {
       "direction": "SHORT",
@@ -383,16 +358,19 @@
       },
       "last_exec_t": 1784725200000
     },
-    "trade": null,
-    "last_candle_t": 1784731500000,
-    "setup": {
-      "direction": "LONG",
-      "depth": "deep",
-      "armed_t": 1784729700000
-    }
+    "trade": {
+      "verdict": "LONG",
+      "entry": 0.023836,
+      "stop": 0.02295497385345477,
+      "tp": 0.025157539219817844,
+      "opened_t": 1784734200000,
+      "checked_t": 1784734200000
+    },
+    "last_candle_t": 1784734200000,
+    "setup": null
   },
   "BCH": {
-    "phase": "ZONE",
+    "phase": "SCAN",
     "last_setup_check": 1784725575027,
     "zone": {
       "direction": "LONG",
@@ -403,7 +381,7 @@
       "last_exec_t": 1784725200000
     },
     "trade": null,
-    "last_candle_t": 1784731500000,
+    "last_candle_t": 1784736000000,
     "setup": null
   },
   "AVAX": {
@@ -411,11 +389,11 @@
     "last_setup_check": 1784725580744,
     "zone": null,
     "trade": null,
-    "last_candle_t": 1784731500000,
+    "last_candle_t": 1784736000000,
     "setup": null
   },
   "UNI": {
-    "phase": "IN_TRADE",
+    "phase": "SCAN",
     "last_setup_check": 1784725578834,
     "zone": {
       "direction": "SHORT",
@@ -432,14 +410,7 @@
       },
       "last_exec_t": 1784725200000
     },
-    "trade": {
-      "verdict": "LONG",
-      "entry": 3.7506,
-      "stop": 3.7139620656332855,
-      "tp": 3.8055569015500716,
-      "opened_t": 1784731500000,
-      "checked_t": 1784731500000
-    },
+    "trade": null,
     "last_candle_t": 1784731500000,
     "setup": null
   },
@@ -448,11 +419,11 @@
     "last_setup_check": 1784725586164,
     "zone": null,
     "trade": null,
-    "last_candle_t": 1784731500000,
+    "last_candle_t": 1784736000000,
     "setup": null
   },
   "XPL": {
-    "phase": "SCAN",
+    "phase": "ARMED",
     "last_setup_check": 1784725577303,
     "zone": {
       "direction": "SHORT",
@@ -463,15 +434,26 @@
       "last_exec_t": 1784725200000
     },
     "trade": null,
-    "last_candle_t": 1784731500000,
-    "setup": null
+    "last_candle_t": 1784736000000,
+    "setup": {
+      "direction": "LONG",
+      "depth": "deep",
+      "armed_t": 1784736000000
+    }
   },
   "XMR": {
-    "phase": "SCAN",
+    "phase": "IN_TRADE",
     "last_setup_check": 1784725573060,
     "zone": null,
-    "trade": null,
-    "last_candle_t": 1784731500000,
+    "trade": {
+      "verdict": "LONG",
+      "entry": 350.04,
+      "stop": 346.7211115969771,
+      "tp": 355.0183326045344,
+      "opened_t": 1784734200000,
+      "checked_t": 1784734200000
+    },
+    "last_candle_t": 1784734200000,
     "setup": null
   },
   "LINK": {
@@ -486,7 +468,7 @@
       "last_exec_t": 1784725200000
     },
     "trade": null,
-    "last_candle_t": 1784731500000,
+    "last_candle_t": 1784736000000,
     "setup": null
   },
   "PAXG": {
@@ -494,7 +476,7 @@
     "last_setup_check": 1784725572430,
     "zone": null,
     "trade": null,
-    "last_candle_t": 1784731500000,
+    "last_candle_t": 1784736000000,
     "setup": null
   },
   "SPX": {
@@ -509,41 +491,27 @@
       "last_exec_t": 1784725200000
     },
     "trade": null,
-    "last_candle_t": 1784731500000,
+    "last_candle_t": 1784736000000,
     "setup": null
   },
   "BNB": {
-    "phase": "IN_TRADE",
+    "phase": "SCAN",
     "last_setup_check": 1784725585314,
     "zone": null,
-    "trade": {
-      "verdict": "SHORT",
-      "entry": 570.85,
-      "stop": 571.7372671076273,
-      "tp": 569.519099338559,
-      "opened_t": 1784730600000,
-      "checked_t": 1784730600000
-    },
+    "trade": null,
     "last_candle_t": 1784730600000,
     "setup": null
   },
   "LTC": {
-    "phase": "IN_TRADE",
+    "phase": "SCAN",
     "last_setup_check": 1784725572698,
     "zone": null,
-    "trade": {
-      "verdict": "SHORT",
-      "entry": 46.756,
-      "stop": 46.81555780940779,
-      "tp": 46.66666328588831,
-      "opened_t": 1784730600000,
-      "checked_t": 1784730600000
-    },
+    "trade": null,
     "last_candle_t": 1784730600000,
     "setup": null
   },
   "ZRO": {
-    "phase": "ZONE",
+    "phase": "ARMED",
     "last_setup_check": 1784725584208,
     "zone": {
       "direction": "SHORT",
@@ -554,23 +522,27 @@
       "last_exec_t": 1784725200000
     },
     "trade": null,
-    "last_candle_t": 1784731500000,
-    "setup": null
+    "last_candle_t": 1784736000000,
+    "setup": {
+      "direction": "LONG",
+      "depth": "shallow",
+      "armed_t": 1784736000000
+    }
   },
   "JTO": {
     "phase": "ARMED",
     "last_setup_check": 1784725580458,
     "zone": null,
     "trade": null,
-    "last_candle_t": 1784731500000,
+    "last_candle_t": 1784736000000,
     "setup": {
       "direction": "LONG",
-      "depth": "shallow",
+      "depth": "deep",
       "armed_t": 1784731500000
     }
   },
   "INJ": {
-    "phase": "IN_TRADE",
+    "phase": "SCAN",
     "last_setup_check": 1784725586884,
     "zone": {
       "direction": "LONG",
@@ -580,44 +552,23 @@
       "seq": null,
       "last_exec_t": 1784725200000
     },
-    "trade": {
-      "verdict": "SHORT",
-      "entry": 5.2168,
-      "stop": 5.254921658916389,
-      "tp": 5.159617511625417,
-      "opened_t": 1784730600000,
-      "checked_t": 1784730600000
-    },
+    "trade": null,
     "last_candle_t": 1784730600000,
     "setup": null
   },
   "CRV": {
-    "phase": "IN_TRADE",
+    "phase": "SCAN",
     "last_setup_check": 1784725587537,
     "zone": null,
-    "trade": {
-      "verdict": "LONG",
-      "entry": 0.21515,
-      "stop": 0.2147690254281443,
-      "tp": 0.21572146185778357,
-      "opened_t": 1784731500000,
-      "checked_t": 1784731500000
-    },
+    "trade": null,
     "last_candle_t": 1784731500000,
     "setup": null
   },
   "PENDLE": {
-    "phase": "IN_TRADE",
+    "phase": "SCAN",
     "last_setup_check": 1784725581938,
     "zone": null,
-    "trade": {
-      "verdict": "SHORT",
-      "entry": 1.598,
-      "stop": 1.6068009803451435,
-      "tp": 1.5847985294822848,
-      "opened_t": 1784730600000,
-      "checked_t": 1784730600000
-    },
+    "trade": null,
     "last_candle_t": 1784730600000,
     "setup": null
   },
@@ -626,11 +577,11 @@
     "last_setup_check": 1784725585801,
     "zone": null,
     "trade": null,
-    "last_candle_t": 1784731500000,
+    "last_candle_t": 1784736000000,
     "setup": null
   },
   "GRAM": {
-    "phase": "SCAN",
+    "phase": "ARMED",
     "last_setup_check": 1784725571052,
     "zone": {
       "direction": "LONG",
@@ -648,20 +599,20 @@
       "last_exec_t": 1784725200000
     },
     "trade": null,
-    "last_candle_t": 1784731500000,
-    "setup": null
-  },
-  "TRUMP": {
-    "phase": "ARMED",
-    "last_setup_check": 1784725583072,
-    "zone": null,
-    "trade": null,
-    "last_candle_t": 1784731500000,
+    "last_candle_t": 1784736000000,
     "setup": {
       "direction": "LONG",
       "depth": "deep",
-      "armed_t": 1784730600000
+      "armed_t": 1784732400000
     }
+  },
+  "TRUMP": {
+    "phase": "SCAN",
+    "last_setup_check": 1784725583072,
+    "zone": null,
+    "trade": null,
+    "last_candle_t": 1784736000000,
+    "setup": null
   },
   "ETHFI": {
     "phase": "ARMED",
@@ -675,10 +626,10 @@
       "last_exec_t": 1784725200000
     },
     "trade": null,
-    "last_candle_t": 1784731500000,
+    "last_candle_t": 1784736000000,
     "setup": {
       "direction": "LONG",
-      "depth": "shallow",
+      "depth": "deep",
       "armed_t": 1784729700000
     }
   },
@@ -687,7 +638,7 @@
     "last_setup_check": 1784725588013,
     "zone": null,
     "trade": null,
-    "last_candle_t": 1784731500000,
+    "last_candle_t": 1784736000000,
     "setup": null
   },
   "MET": {
@@ -697,17 +648,10 @@
     "trade": null
   },
   "LDO": {
-    "phase": "IN_TRADE",
+    "phase": "SCAN",
     "last_setup_check": 1784725589360,
     "zone": null,
-    "trade": {
-      "verdict": "LONG",
-      "entry": 0.39797,
-      "stop": 0.39372657607506834,
-      "tp": 0.40433513588739745,
-      "opened_t": 1784731500000,
-      "checked_t": 1784731500000
-    },
+    "trade": null,
     "last_candle_t": 1784731500000,
     "setup": null
   },
@@ -747,7 +691,7 @@
       "last_exec_t": 1784725200000
     },
     "trade": null,
-    "last_candle_t": 1784731500000,
+    "last_candle_t": 1784736000000,
     "setup": null
   },
   "ASTER": {
@@ -763,26 +707,26 @@
     "trade": null
   },
   "XLM": {
-    "phase": "IN_TRADE",
+    "phase": "SCAN",
     "last_setup_check": 1784725585058,
     "zone": null,
-    "trade": {
-      "verdict": "SHORT",
-      "entry": 0.18927,
-      "stop": 0.19056430036312905,
-      "tp": 0.18732854945530641,
-      "opened_t": 1784730600000,
-      "checked_t": 1784730600000
-    },
+    "trade": null,
     "last_candle_t": 1784730600000,
     "setup": null
   },
   "TRX": {
-    "phase": "SCAN",
+    "phase": "IN_TRADE",
     "last_setup_check": 1784725579967,
     "zone": null,
-    "trade": null,
-    "last_candle_t": 1784731500000,
+    "trade": {
+      "verdict": "LONG",
+      "entry": 0.32829,
+      "stop": 0.3280361626961736,
+      "tp": 0.3286707559557397,
+      "opened_t": 1784734200000,
+      "checked_t": 1784734200000
+    },
+    "last_candle_t": 1784734200000,
     "setup": null
   },
   "HBAR": {
@@ -790,7 +734,7 @@
     "last_setup_check": 1784725582196,
     "zone": null,
     "trade": null,
-    "last_candle_t": 1784731500000,
+    "last_candle_t": 1784736000000,
     "setup": null
   },
   "SAGA": {
@@ -802,18 +746,24 @@
     "setup": null
   },
   "MORPHO": {
-    "phase": "IN_TRADE",
+    "phase": "SCAN",
     "last_setup_check": 1784725589614,
     "zone": null,
-    "trade": {
-      "verdict": "SHORT",
-      "entry": 1.9707,
-      "stop": 2.019612592534931,
-      "tp": 1.8973311111976034,
-      "opened_t": 1784730600000,
-      "checked_t": 1784730600000
-    },
+    "trade": null,
     "last_candle_t": 1784730600000,
     "setup": null
+  },
+  "WLFI": {
+    "phase": "IN_TRADE",
+    "last_candle_t": 1784732400000,
+    "setup": null,
+    "trade": {
+      "verdict": "SHORT",
+      "entry": 0.05661,
+      "stop": 0.056724730729214336,
+      "tp": 0.0564379039061785,
+      "opened_t": 1784732400000,
+      "checked_t": 1784732400000
+    }
   }
 }
