@@ -470,10 +470,11 @@ def process_open_trade(asset, trade, candles, last_closed_t):
         trade["checked_t"] = c["t"]
         stop_hit = c["l"] <= trade["stop"] if long else c["h"] >= trade["stop"]
         tp_hit = (c["h"] >= tp) if long else (c["l"] <= tp)
+        c_close_t = c["t"] + MS[TF]              # label events with the close
         if stop_hit:
             if ALERT_LIFECYCLE:
                 send_telegram(lifecycle_message(
-                    asset, "STOP", trade, trade["stop"], c["t"], ""))
+                    asset, "STOP", trade, trade["stop"], c_close_t, ""))
             log(f"{sym}: STOPPED OUT at ${fmt_px(trade['stop'])}")
             record_close(sym, trade, trade["stop"], "STOP")
             RUN_ALERTS.append(
@@ -482,7 +483,7 @@ def process_open_trade(asset, trade, candles, last_closed_t):
         if tp_hit:
             if ALERT_LIFECYCLE:
                 send_telegram(lifecycle_message(
-                    asset, "TP", trade, tp, c["t"], ""))
+                    asset, "TP", trade, tp, c_close_t, ""))
             log(f"{sym}: TP HIT at ${fmt_px(tp)}")
             record_close(sym, trade, tp, "TP")
             RUN_ALERTS.append(f"{sym} TP HIT ({pnl_pct(trade, tp):+.2f}%)")
@@ -498,7 +499,7 @@ def process_open_trade(asset, trade, candles, last_closed_t):
         if stop_hit:
             if ALERT_LIFECYCLE:
                 send_telegram(lifecycle_message(
-                    asset, "STOP", trade, trade["stop"], live["t"],
+                    asset, "STOP", trade, trade["stop"], int(time.time() * 1000),
                     "Intrabar - stop level traded before the candle closed."))
             log(f"{sym}: STOPPED OUT at ${fmt_px(trade['stop'])} (intrabar)")
             record_close(sym, trade, trade["stop"], "STOP")
@@ -508,7 +509,7 @@ def process_open_trade(asset, trade, candles, last_closed_t):
         if tp_hit:
             if ALERT_LIFECYCLE:
                 send_telegram(lifecycle_message(
-                    asset, "TP", trade, tp, live["t"],
+                    asset, "TP", trade, tp, int(time.time() * 1000),
                     "Intrabar - target traded before the candle closed."))
             log(f"{sym}: TP HIT at ${fmt_px(tp)} (intrabar)")
             record_close(sym, trade, tp, "TP")
@@ -550,7 +551,8 @@ def process_candle(asset, ast, real, a, i, source):
                     plan = {"entry": entry, "stop": stop, "tp": tp}
                     if ALERT_ENTRIES:
                         send_telegram(entry_message(
-                            asset, setup["direction"], plan, lvl, source, c["t"]))
+                            asset, setup["direction"], plan, lvl, source,
+                            c["t"] + MS[TF]))
                     log(f"ALERT SENT -> telegram: {sym} {setup['direction']} "
                         f"ENTRY @ ${fmt_px(entry)} (retest of ${fmt_px(lvl)})")
                     RUN_ALERTS.append(
