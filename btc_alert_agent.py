@@ -54,7 +54,7 @@ DISCOVER_ALL = True
 DISCOVER_DEXES = False             # main crypto dex only (no stock venues)
 DEXES = [""]                       # "" = main crypto dex
 ONLY = []                          # trade ONLY these symbols ([] = whole universe)
-MIN_DAY_VOLUME_USD = 100_000_000   # skip markets below $100M 24h notional
+MIN_DAY_VOLUME_USD = 25_000_000    # skip markets below $25M 24h notional
 MAX_ASSETS = 70
 FETCH_DELAY_S = 0.12
 REQUEST_TIMEOUT_S = 8              # fail fast: a throttled API must not burn 20s
