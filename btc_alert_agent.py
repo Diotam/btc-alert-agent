@@ -450,11 +450,13 @@ def lifecycle_message(asset, kind, trade, exit_px, event_t, note):
 TRADES_LOG = Path(__file__).parent / "trades.log"
 
 
-def record_close(sym, trade, exit_px, kind):
-    """Append a closed trade to the ledger (best-effort)."""
+def record_close(sym, trade, exit_px, kind, t_event=None):
+    """Append a closed trade to the ledger (best-effort). t_event = the
+    actual market time of the exit, so late reconciliations book to the
+    day they truly happened."""
     try:
         with open(TRADES_LOG, "a") as f:
-            f.write(json.dumps({"t": int(time.time() * 1000), "sym": sym,
+            f.write(json.dumps({"t": int(t_event or time.time() * 1000), "sym": sym,
                                 "dir": trade["verdict"],
                                 "entry": trade["entry"], "exit": exit_px,
                                 "kind": kind,
@@ -489,7 +491,7 @@ def process_open_trade(asset, trade, candles, last_closed_t):
                 send_telegram(lifecycle_message(
                     asset, "STOP", trade, trade["stop"], c_close_t, ""))
             log(f"{sym}: STOPPED OUT at ${fmt_px(trade['stop'])}")
-            record_close(sym, trade, trade["stop"], "STOP")
+            record_close(sym, trade, trade["stop"], "STOP", c_close_t)
             RUN_ALERTS.append(
                 f"{sym} STOPPED OUT ({pnl_pct(trade, trade['stop']):+.2f}%)")
             return None, True
@@ -498,7 +500,7 @@ def process_open_trade(asset, trade, candles, last_closed_t):
                 send_telegram(lifecycle_message(
                     asset, "TP", trade, tp, c_close_t, ""))
             log(f"{sym}: TP HIT at ${fmt_px(tp)}")
-            record_close(sym, trade, tp, "TP")
+            record_close(sym, trade, tp, "TP", c_close_t)
             RUN_ALERTS.append(f"{sym} TP HIT ({pnl_pct(trade, tp):+.2f}%)")
             return None, True
 
