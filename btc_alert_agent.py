@@ -82,6 +82,9 @@ FAIL_CLOSE_ATR = 0.10        # close back through the level by this = failed bre
 STOP_MIN_ATR = 0.25          # stop sits 0.25-0.50 ATR beyond the level,
 STOP_MAX_ATR = 0.50          # behind the retest swing
 RR = 2.0                     # minimum reward-to-risk 2:1
+TP_MAX_RR = 3.0              # structure targets are capped at this many R
+FAILED_BREAK_REVERSAL = True # trade the squeeze when a break fails
+REV_STOP_PAD_ATR = 0.15      # reversal stop pad beyond the failed excursion
 ENABLE_SHORTS = True
 
 ALERT_ENTRIES = True
@@ -408,14 +411,15 @@ def stage_message(asset, direction, level, px, t):
     ])
 
 
-def entry_message(asset, direction, plan, level, source, t):
+def entry_message(asset, direction, plan, level, source, t, note=None):
     e = "\U0001F7E2" if direction == "LONG" else "\U0001F534"
     lines = [
         f"{e} <b>{direction} ENTRY \u00b7 {esc(asset['symbol'])}</b>",
         f"<i>{esc(asset['label'])} \u00b7 {TF} \u00b7 break &amp; retest \u00b7 {esc(fmt_ts(t))}</i>",
         "",
-        f"\U0001F4CA <b>Setup</b>: broke ${fmt_px(level)}, retested it as "
-        f"{'support' if direction == 'LONG' else 'resistance'}, and rejected",
+        f"\U0001F4CA <b>Setup</b>: " + (esc(note) if note else
+        f"broke ${fmt_px(level)}, retested it as "
+        f"{'support' if direction == 'LONG' else 'resistance'}, and rejected"),
         "",
         "\U0001F4CB <b>Plan</b>",
         f"Entry: <code>${fmt_px(plan['entry'])}</code>",
@@ -526,6 +530,28 @@ def process_open_trade(asset, trade, candles, last_closed_t):
     return trade, changed
 
 
+def structure_target(entry, risk, direction, highs, lows):
+    """TP at the nearest prior opposite pivot if it offers RR >= RR,
+    capped at TP_MAX_RR. No structure -> plain RR target.
+    Returns (tp, rr) or (None, rr) when structure is too close."""
+    if direction == "LONG":
+        cands = [p for p in highs if p > entry]
+        struct = min(cands) if cands else None
+    else:
+        cands = [p for p in lows if p < entry]
+        struct = max(cands) if cands else None
+    if struct is None:
+        return entry + RR * risk if direction == "LONG" \
+            else entry - RR * risk, RR
+    rr = abs(struct - entry) / risk
+    if rr < RR:
+        return None, rr                      # target too close - skip
+    if rr > TP_MAX_RR:
+        return (entry + TP_MAX_RR * risk if direction == "LONG"
+                else entry - TP_MAX_RR * risk), TP_MAX_RR
+    return struct, rr
+
+
 def trend_agrees(asset, direction):
     """1h trend filter: EMA20 vs EMA50 on the higher timeframe must point
     the same way as the trade. Feed failure = no trade (conservative)."""
@@ -555,17 +581,56 @@ def process_candle(asset, ast, real, vols_avg, a, i, source):
     if setup:
         long = setup["direction"] == "LONG"
         lvl = setup["level"]
-        # track the retest swing extreme (post-break candles only)
-        if setup.get("swing") is None:
-            setup["swing"] = c["l"] if long else c["h"]
+        # track BOTH post-break extremes (retest side + excursion side)
+        if setup.get("lo") is None:
+            setup["lo"], setup["hi"] = c["l"], c["h"]
         else:
-            setup["swing"] = min(setup["swing"], c["l"]) if long \
-                else max(setup["swing"], c["h"])
+            setup["lo"] = min(setup["lo"], c["l"])
+            setup["hi"] = max(setup["hi"], c["h"])
+        setup["swing"] = setup["lo"] if long else setup["hi"]
         if c["t"] > setup["expires_t"]:
             log(f"{sym}: no retest within {RETEST_TTL} candles - setup expired")
             ast["setup"], ast["phase"], setup = None, "SCAN", None
         elif (c["c"] < lvl if long else c["c"] > lvl):
             log(f"{sym}: failed break - closed back through ${fmt_px(lvl)}")
+            if FAILED_BREAK_REVERSAL and setup.get("lo") is not None:
+                rev = "SHORT" if long else "LONG"
+                rlong = rev == "LONG"
+                stop = (setup["lo"] - REV_STOP_PAD_ATR * atr_i) if not rlong \
+                    else 0  # placeholder, set below
+                if rlong:
+                    stop = setup["lo"] - REV_STOP_PAD_ATR * atr_i
+                else:
+                    stop = setup["hi"] + REV_STOP_PAD_ATR * atr_i
+                entry = c["c"]
+                risk = (entry - stop) if rlong else (stop - entry)
+                if risk > 0:
+                    highs, lows = pivot_levels(real, i)
+                    tp, rr = structure_target(entry, risk, rev, highs, lows)
+                    if tp is None:
+                        log(f"{sym}: reversal skipped - structure target "
+                            f"only {rr:.1f}R away")
+                    else:
+                        plan = {"entry": entry, "stop": stop, "tp": tp}
+                        if ALERT_ENTRIES:
+                            send_telegram(entry_message(
+                                asset, rev, plan, lvl, source,
+                                c["t"] + MS[TF],
+                                note=f"FAILED BREAK reversal - the "
+                                     f"{'breakdown' if rlong else 'breakout'} "
+                                     f"was reclaimed; squeeze entry "
+                                     f"({rr:.1f}R target)"))
+                        log(f"ALERT SENT -> telegram: {sym} {rev} REVERSAL "
+                            f"ENTRY @ ${fmt_px(entry)} (failed break of "
+                            f"${fmt_px(lvl)})")
+                        RUN_ALERTS.append(
+                            f"{sym} {rev} failed-break entry @ ${fmt_px(entry)}")
+                        ast["trade"] = {"verdict": rev, "entry": entry,
+                                        "stop": stop, "tp": tp,
+                                        "opened_t": c["t"],
+                                        "checked_t": c["t"]}
+                        ast["phase"], ast["setup"] = "IN_TRADE", None
+                        return True
             ast["setup"], ast["phase"], setup = None, "SCAN", None
         else:
             touched = c["l"] <= lvl + RETEST_TOL_ATR * atr_i if long \
@@ -606,7 +671,15 @@ def process_candle(asset, ast, real, vols_avg, a, i, source):
                 if risk <= 0:
                     ast["setup"], ast["phase"] = None, "SCAN"
                     return True
-                tp = entry + RR * risk if long else entry - RR * risk
+                highs_l, lows_l = pivot_levels(real, i)
+                tp, rr_used = structure_target(entry, risk,
+                                               setup["direction"],
+                                               highs_l, lows_l)
+                if tp is None:
+                    log(f"{sym}: entry skipped - structure target only "
+                        f"{rr_used:.1f}R away (min {RR}R)")
+                    ast["setup"], ast["phase"] = None, "SCAN"
+                    return True
                 plan = {"entry": entry, "stop": stop, "tp": tp}
                 if ALERT_ENTRIES:
                     send_telegram(entry_message(
