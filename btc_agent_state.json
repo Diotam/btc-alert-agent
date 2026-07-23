@@ -1,31 +1,22 @@
 {
   "BTC": {
-    "phase": "ARMED",
+    "phase": "SCAN",
     "last_setup_check": 1784725566567,
     "zone": null,
     "trade": null,
-    "last_candle_t": 1784817000000,
-    "setup": {
-      "direction": "SHORT",
-      "level": 65323.0,
-      "touched": false,
-      "break_vol": 1711.80809,
-      "swing": 65194.0,
-      "expires_t": 1784817000000,
-      "lo": 64807.0,
-      "hi": 65194.0
-    }
+    "last_candle_t": 1784824200000,
+    "setup": null
   },
   "ETH": {
     "phase": "SCAN",
     "last_setup_check": 1784725566832,
     "zone": null,
     "trade": null,
-    "last_candle_t": 1784817000000,
+    "last_candle_t": 1784824200000,
     "setup": null
   },
   "HYPE": {
-    "phase": "SCAN",
+    "phase": "ARMED",
     "last_setup_check": 1784725567190,
     "zone": {
       "direction": "LONG",
@@ -36,21 +27,21 @@
       "last_exec_t": 1784725200000
     },
     "trade": null,
-    "last_candle_t": 1784817000000,
-    "setup": null
+    "last_candle_t": 1784824200000,
+    "setup": {
+      "direction": "SHORT",
+      "level": 58.723,
+      "touched": false,
+      "break_vol": 157888.38,
+      "swing": null,
+      "expires_t": 1784827800000
+    }
   },
   "SOL": {
-    "phase": "IN_TRADE",
+    "phase": "SCAN",
     "last_setup_check": 1784725567805,
     "zone": null,
-    "trade": {
-      "verdict": "SHORT",
-      "entry": 76.66,
-      "stop": 77.05070875309319,
-      "tp": 75.87858249381361,
-      "opened_t": 1784813400000,
-      "checked_t": 1784813400000
-    },
+    "trade": null,
     "last_candle_t": 1784813400000,
     "setup": null
   },
@@ -66,35 +57,28 @@
       "last_exec_t": 1784725200000
     },
     "trade": null,
-    "last_candle_t": 1784817000000,
+    "last_candle_t": 1784824200000,
     "setup": {
       "direction": "SHORT",
       "level": 516.93,
       "touched": false,
       "break_vol": 9395.41,
-      "swing": null,
-      "expires_t": 1784824200000
+      "swing": 516.33,
+      "expires_t": 1784824200000,
+      "lo": 512.3,
+      "hi": 516.33
     }
   },
   "XRP": {
-    "phase": "ARMED",
+    "phase": "SCAN",
     "last_setup_check": 1784725568905,
     "zone": null,
     "trade": null,
-    "last_candle_t": 1784817000000,
-    "setup": {
-      "direction": "SHORT",
-      "level": 1.1282,
-      "touched": false,
-      "break_vol": 1875096.0,
-      "swing": 1.1164,
-      "expires_t": 1784817000000,
-      "lo": 1.1076,
-      "hi": 1.1164
-    }
+    "last_candle_t": 1784824200000,
+    "setup": null
   },
   "PUMP": {
-    "phase": "IN_TRADE",
+    "phase": "SCAN",
     "last_setup_check": 1784725569300,
     "zone": {
       "direction": "LONG",
@@ -104,14 +88,7 @@
       "seq": null,
       "last_exec_t": 1784725200000
     },
-    "trade": {
-      "verdict": "LONG",
-      "entry": 0.001947,
-      "stop": 0.0019270527594819006,
-      "tp": 0.0020068417215542977,
-      "opened_t": 1784815200000,
-      "checked_t": 1784815200000
-    },
+    "trade": null,
     "last_candle_t": 1784815200000,
     "setup": null
   },
@@ -120,7 +97,7 @@
     "last_setup_check": 1784725571561,
     "zone": null,
     "trade": null,
-    "last_candle_t": 1784817000000,
+    "last_candle_t": 1784824200000,
     "setup": null
   },
   "kBONK": {
@@ -166,7 +143,7 @@
     "last_setup_check": 1784725569697,
     "zone": null,
     "trade": null,
-    "last_candle_t": 1784817000000,
+    "last_candle_t": 1784824200000,
     "setup": null
   },
   "FARTCOIN": {
@@ -178,7 +155,7 @@
     "setup": null
   },
   "DOGE": {
-    "phase": "ARMED",
+    "phase": "SCAN",
     "last_setup_check": 1784725574414,
     "zone": {
       "direction": "LONG",
@@ -189,17 +166,8 @@
       "last_exec_t": 1784725200000
     },
     "trade": null,
-    "last_candle_t": 1784817000000,
-    "setup": {
-      "direction": "SHORT",
-      "level": 0.072075,
-      "touched": false,
-      "break_vol": 16694815.0,
-      "swing": 0.070654,
-      "expires_t": 1784817000000,
-      "lo": 0.069984,
-      "hi": 0.070654
-    }
+    "last_candle_t": 1784824200000,
+    "setup": null
   },
   "AAVE": {
     "phase": "SCAN",
@@ -226,7 +194,7 @@
       "stop": 0.08577615262356088,
       "tp": 0.09461577106465868,
       "opened_t": 1784734200000,
-      "checked_t": 1784817000000
+      "checked_t": 1784824200000
     },
     "last_candle_t": 1784734200000,
     "setup": null
@@ -774,7 +742,7 @@
   },
   "WLFI": {
     "phase": "SCAN",
-    "last_candle_t": 1784817000000,
+    "last_candle_t": 1784824200000,
     "setup": null,
     "trade": null
   }
