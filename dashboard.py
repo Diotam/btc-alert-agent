@@ -215,7 +215,10 @@ function render(d){
   document.getElementById('meta').textContent=d.scanned+' markets'+age;
   document.getElementById('trades').innerHTML=d.trades.length?d.trades.map(t=>{
    const cls=t.dir==='LONG'?'long':'short';
-   const RRT=1.5, sgn=t.dir==='LONG'?1:-1;
+   const sgn=t.dir==='LONG'?1:-1;
+   // each trade's true RR from its own prices (targets vary: 2R..3R/structure)
+   const RRT=(t.tp!=null&&t.entry!=null&&t.entry!==t.stop)
+     ?Math.abs((t.tp-t.entry)/(t.entry-t.stop)):2;
    // freeze the card once TP or stop has traded - the agent confirms the
    // close on its next scan (<=5 min) and the card moves to Closed trades
    const tpDone=t.r!=null&&t.r>=RRT, slDone=t.r!=null&&t.r<=-1;
