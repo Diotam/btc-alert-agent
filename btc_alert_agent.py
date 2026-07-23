@@ -54,7 +54,7 @@ DISCOVER_ALL = True
 DISCOVER_DEXES = False             # main crypto dex only (no stock venues)
 DEXES = [""]                       # "" = main crypto dex
 ONLY = []                          # trade ONLY these symbols ([] = whole universe)
-MIN_DAY_VOLUME_USD = 5_000_000    # skip markets below $5M 24h notional
+MIN_DAY_VOLUME_USD =  5_000_000    # skip markets below $5M 24h notional
 MAX_ASSETS = 70
 FETCH_DELAY_S = 0.12
 REQUEST_TIMEOUT_S = 8              # fail fast: a throttled API must not burn 20s
@@ -424,7 +424,8 @@ def entry_message(asset, direction, plan, level, source, t, note=None):
         "\U0001F4CB <b>Plan</b>",
         f"Entry: <code>${fmt_px(plan['entry'])}</code>",
         f"Stop:  <code>${fmt_px(plan['stop'])}</code>  (beyond the level)",
-        f"TP:    <code>${fmt_px(plan['tp'])}</code>  ({RR}R)",
+        f"TP:    <code>${fmt_px(plan['tp'])}</code>  "
+        f"({abs(plan['tp'] - plan['entry']) / max(abs(plan['entry'] - plan['stop']), 1e-12):.1f}R)",
         f"<i>data: {esc(source)}</i>",
     ]
     return "\n".join(lines)
@@ -834,6 +835,20 @@ def check_once():
                 log(f"{asset['symbol']}: check failed: {e}")
                 RUN_STATUS.append(f"{asset['symbol']} error")
             time.sleep(FETCH_DELAY_S)
+        # zombie sweep: open trades on symbols no longer in the universe
+        # still get monitored - a trade must never go unwatched
+        scanned_syms = {a["symbol"] for a in assets}
+        for sym, ast in list(state.items()):
+            if sym.startswith("_") or not isinstance(ast, dict):
+                continue
+            if ast.get("trade") and sym not in scanned_syms:
+                ghost = {"symbol": sym, "hl_coin": sym,
+                         "label": f"{sym}-PERP", "fallbacks": []}
+                try:
+                    changed = check_asset(ghost, state) or changed
+                    log(f"{sym}: monitored outside the universe (open trade)")
+                except Exception as e:
+                    log(f"{sym}: zombie-trade check failed: {e}")
         new_cursor = stopped_at if stopped_at is not None else 0
         if meta.get("cursor", 0) != new_cursor:
             state["_meta"] = {"cursor": new_cursor}
