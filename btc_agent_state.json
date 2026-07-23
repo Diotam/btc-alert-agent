@@ -4,7 +4,7 @@
     "last_setup_check": 1784725566567,
     "zone": null,
     "trade": null,
-    "last_candle_t": 1784779200000,
+    "last_candle_t": 1784788200000,
     "setup": null
   },
   "ETH": {
@@ -12,7 +12,7 @@
     "last_setup_check": 1784725566832,
     "zone": null,
     "trade": null,
-    "last_candle_t": 1784779200000,
+    "last_candle_t": 1784788200000,
     "setup": null
   },
   "HYPE": {
@@ -27,7 +27,7 @@
       "last_exec_t": 1784725200000
     },
     "trade": null,
-    "last_candle_t": 1784779200000,
+    "last_candle_t": 1784788200000,
     "setup": null
   },
   "SOL": {
@@ -35,7 +35,7 @@
     "last_setup_check": 1784725567805,
     "zone": null,
     "trade": null,
-    "last_candle_t": 1784779200000,
+    "last_candle_t": 1784788200000,
     "setup": null
   },
   "ZEC": {
@@ -50,7 +50,7 @@
       "last_exec_t": 1784725200000
     },
     "trade": null,
-    "last_candle_t": 1784730600000,
+    "last_candle_t": 1784788200000,
     "setup": null
   },
   "XRP": {
