@@ -4,7 +4,7 @@
     "last_setup_check": 1784725566567,
     "zone": null,
     "trade": null,
-    "last_candle_t": 1784835000000,
+    "last_candle_t": 1784838600000,
     "setup": null
   },
   "ETH": {
@@ -12,7 +12,7 @@
     "last_setup_check": 1784725566832,
     "zone": null,
     "trade": null,
-    "last_candle_t": 1784835000000,
+    "last_candle_t": 1784838600000,
     "setup": null
   },
   "HYPE": {
@@ -27,7 +27,7 @@
       "last_exec_t": 1784725200000
     },
     "trade": null,
-    "last_candle_t": 1784835000000,
+    "last_candle_t": 1784838600000,
     "setup": null
   },
   "SOL": {
@@ -35,7 +35,7 @@
     "last_setup_check": 1784725567805,
     "zone": null,
     "trade": null,
-    "last_candle_t": 1784835000000,
+    "last_candle_t": 1784838600000,
     "setup": null
   },
   "ZEC": {
@@ -50,7 +50,7 @@
       "last_exec_t": 1784725200000
     },
     "trade": null,
-    "last_candle_t": 1784835000000,
+    "last_candle_t": 1784838600000,
     "setup": null
   },
   "XRP": {
@@ -63,7 +63,7 @@
       "stop": 1.1012979745563065,
       "tp": 1.1133060763310807,
       "opened_t": 1784834100000,
-      "checked_t": 1784834100000
+      "checked_t": 1784838600000
     },
     "last_candle_t": 1784834100000,
     "setup": null
@@ -80,21 +80,14 @@
       "last_exec_t": 1784725200000
     },
     "trade": null,
-    "last_candle_t": 1784835000000,
+    "last_candle_t": 1784838600000,
     "setup": null
   },
   "CASHCAT": {
-    "phase": "IN_TRADE",
+    "phase": "SCAN",
     "last_setup_check": 1784725571561,
     "zone": null,
-    "trade": {
-      "verdict": "SHORT",
-      "entry": 0.042799,
-      "stop": 0.04368,
-      "tp": 0.041037,
-      "opened_t": 1784834100000,
-      "checked_t": 1784834100000
-    },
+    "trade": null,
     "last_candle_t": 1784834100000,
     "setup": null
   },
@@ -141,7 +134,7 @@
     "last_setup_check": 1784725569697,
     "zone": null,
     "trade": null,
-    "last_candle_t": 1784835000000,
+    "last_candle_t": 1784838600000,
     "setup": null
   },
   "FARTCOIN": {
@@ -164,7 +157,7 @@
       "last_exec_t": 1784725200000
     },
     "trade": null,
-    "last_candle_t": 1784835000000,
+    "last_candle_t": 1784838600000,
     "setup": null
   },
   "AAVE": {
@@ -192,7 +185,7 @@
       "stop": 0.08577615262356088,
       "tp": 0.09461577106465868,
       "opened_t": 1784734200000,
-      "checked_t": 1784835000000
+      "checked_t": 1784838600000
     },
     "last_candle_t": 1784734200000,
     "setup": null
@@ -740,7 +733,7 @@
   },
   "WLFI": {
     "phase": "SCAN",
-    "last_candle_t": 1784835000000,
+    "last_candle_t": 1784838600000,
     "setup": null,
     "trade": null
   }
