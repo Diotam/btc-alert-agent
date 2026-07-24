@@ -68,7 +68,7 @@ ASSETS = [                         # used when DISCOVER_ALL = False / discovery 
 ]
 
 # --- Strategy dials -------------------------------------------------------
-TF = "15m"                   # strategy timeframe - one knob: "5m"/"15m"/"30m"
+TF = "30min"                   # strategy timeframe - one knob: "5m"/"15m"/"30m"
 PIVOT_WING = 5               # candles each side that define a swing pivot
 LEVEL_LOOKBACK = 120         # candles scanned for pivot levels
 BREAK_MIN_ATR = 0.10         # close must clear the level by this x ATR
@@ -450,6 +450,26 @@ def lifecycle_message(asset, kind, trade, exit_px, event_t, note):
 TRADES_LOG = Path(__file__).parent / "trades.log"
 
 
+def already_closed(sym, trade, exit_px, kind):
+    """True if an identical close (sym+dir+entry+exit+kind) is already in
+    the ledger - makes duplicate close alerts structurally impossible."""
+    try:
+        lines = TRADES_LOG.read_text().splitlines()[-200:]
+    except OSError:
+        return False
+    for ln in lines:
+        try:
+            r = json.loads(ln)
+        except json.JSONDecodeError:
+            continue
+        if (r.get("sym") == sym and r.get("dir") == trade["verdict"]
+                and r.get("kind") == kind
+                and abs(r.get("entry", 0) - trade["entry"]) < 1e-12
+                and abs(r.get("exit", 0) - exit_px) < 1e-12):
+            return True
+    return False
+
+
 def record_close(sym, trade, exit_px, kind, t_event=None):
     """Append a closed trade to the ledger (best-effort). t_event = the
     actual market time of the exit, so late reconciliations book to the
@@ -487,6 +507,9 @@ def process_open_trade(asset, trade, candles, last_closed_t):
         tp_hit = (c["h"] >= tp) if long else (c["l"] <= tp)
         c_close_t = c["t"] + MS[TF]              # label events with the close
         if stop_hit:
+            if already_closed(sym, trade, trade["stop"], "STOP"):
+                log(f"{sym}: duplicate STOP close suppressed")
+                return None, True
             if ALERT_LIFECYCLE:
                 send_telegram(lifecycle_message(
                     asset, "STOP", trade, trade["stop"], c_close_t, ""))
@@ -496,6 +519,9 @@ def process_open_trade(asset, trade, candles, last_closed_t):
                 f"{sym} STOPPED OUT ({pnl_pct(trade, trade['stop']):+.2f}%)")
             return None, True
         if tp_hit:
+            if already_closed(sym, trade, tp, "TP"):
+                log(f"{sym}: duplicate TP close suppressed")
+                return None, True
             if ALERT_LIFECYCLE:
                 send_telegram(lifecycle_message(
                     asset, "TP", trade, tp, c_close_t, ""))
@@ -512,6 +538,9 @@ def process_open_trade(asset, trade, candles, last_closed_t):
         stop_hit = live["l"] <= trade["stop"] if long else live["h"] >= trade["stop"]
         tp_hit = (live["h"] >= tp) if long else (live["l"] <= tp)
         if stop_hit:
+            if already_closed(sym, trade, trade["stop"], "STOP"):
+                log(f"{sym}: duplicate STOP close suppressed")
+                return None, True
             if ALERT_LIFECYCLE:
                 send_telegram(lifecycle_message(
                     asset, "STOP", trade, trade["stop"], int(time.time() * 1000),
@@ -522,6 +551,9 @@ def process_open_trade(asset, trade, candles, last_closed_t):
                 f"{sym} STOPPED OUT ({pnl_pct(trade, trade['stop']):+.2f}%)")
             return None, True
         if tp_hit:
+            if already_closed(sym, trade, tp, "TP"):
+                log(f"{sym}: duplicate TP close suppressed")
+                return None, True
             if ALERT_LIFECYCLE:
                 send_telegram(lifecycle_message(
                     asset, "TP", trade, tp, int(time.time() * 1000),
@@ -830,8 +862,10 @@ def check_once():
             try:
                 had_trade = bool((state.get(asset["symbol"]) or {}).get("trade"))
                 changed = check_asset(asset, state) or changed
-                if not had_trade and (state.get(asset["symbol"]) or {}).get("trade"):
-                    save_state(state)      # a trade just opened: persist NOW
+                has_trade = bool((state.get(asset["symbol"]) or {}).get("trade"))
+                if had_trade != has_trade:
+                    save_state(state)      # trade opened OR closed: persist NOW
+                                           # (a restart must never resurrect it)
             except Exception as e:
                 failures += 1
                 log(f"{asset['symbol']}: check failed: {e}")
@@ -848,6 +882,8 @@ def check_once():
                          "label": f"{sym}-PERP", "fallbacks": []}
                 try:
                     changed = check_asset(ghost, state) or changed
+                    if not (state.get(sym) or {}).get("trade"):
+                        save_state(state)          # closed: persist NOW
                     log(f"{sym}: monitored outside the universe (open trade)")
                 except Exception as e:
                     log(f"{sym}: zombie-trade check failed: {e}")
