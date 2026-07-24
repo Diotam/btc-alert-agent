@@ -68,7 +68,7 @@ ASSETS = [                         # used when DISCOVER_ALL = False / discovery 
 ]
 
 # --- Strategy dials -------------------------------------------------------
-TF = "30min"                 # strategy timeframe - one knob: "5m"/"15m"/"30m"
+TF = "30m"                   # strategy timeframe - one knob: "5m"/"15m"/"30m"
 PIVOT_WING = 5               # candles each side that define a swing pivot
 LEVEL_LOOKBACK = 120         # candles scanned for pivot levels
 BREAK_MIN_ATR = 0.10         # close must clear the level by this x ATR
