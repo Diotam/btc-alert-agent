@@ -51,10 +51,15 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 # --- Asset universe -------------------------------------------------------
 DISCOVER_ALL = True
-DISCOVER_DEXES = False             # main crypto dex only (no stock venues)
-DEXES = [""]                       # "" = main crypto dex
+DISCOVER_DEXES = True              # scan HIP-3 builder dexes too - but only
+                                   # commodity markets are admitted from them
+DEXES = [""]                       # fallback when dex discovery fails
+COMMODITY_TICKERS = ("XAU", "GOLD", "XAG", "SILVER", "XPT", "PLAT",
+                     "XPD", "PALLAD", "CL", "OIL", "WTI", "BRENT",
+                     "NG", "NATGAS", "HG", "COPPER")
+COMMODITY_MIN_VOLUME_USD = 1_000_000   # commodities trade thinner - lower floor
 ONLY = []                          # trade ONLY these symbols ([] = whole universe)
-MIN_DAY_VOLUME_USD = 5_000_000     # skip markets below $5M 24h notional
+MIN_DAY_VOLUME_USD = 10_000_000    # skip markets below $10M 24h notional
 MAX_ASSETS = 70
 FETCH_DELAY_S = 0.12
 REQUEST_TIMEOUT_S = 8              # fail fast: a throttled API must not burn 20s
@@ -72,8 +77,7 @@ TF = "5m"                    # execution timeframe (the spec is 5m closes)
 RANGE_TZ = "America/New_York"
 RANGE_HOURS = 4              # first N hours of the NY day define the range
 RR = 2.0                     # TP = 2 x the stop distance
-MIN_RANGE_CANDLES = 40       # 5m candles required inside 00:00-04:00 to
-                             # trust the range (48 = perfect coverage)
+MIN_RANGE_CANDLES = 40       # min 5m candles needed to trust the range
 ENABLE_SHORTS = True
 
 ALERT_ENTRIES = True
@@ -259,6 +263,11 @@ def list_dexes():
     return DEXES
 
 
+def is_commodity(name):
+    base = name.upper().lstrip("K")        # kGOLD-style multipliers
+    return any(base.startswith(t) for t in COMMODITY_TICKERS)
+
+
 def discover_assets():
     found = []
     dexes = list_dexes()
@@ -281,9 +290,15 @@ def discover_assets():
                 vol = float(ctx.get("dayNtlVlm") or 0)
             except (TypeError, ValueError):
                 vol = 0.0
-            if vol < MIN_DAY_VOLUME_USD:
-                continue
             name = u["name"]
+            if dex:
+                # builder venues: commodities only (stocks stay excluded)
+                if not is_commodity(name):
+                    continue
+                if vol < COMMODITY_MIN_VOLUME_USD:
+                    continue
+            elif vol < MIN_DAY_VOLUME_USD:
+                continue
             coin = f"{dex}:{name}" if dex else name
             found.append({"symbol": coin, "hl_coin": coin, "vol": vol,
                           "label": f"{name}-PERP" + (f" ({dex})" if dex else ""),
