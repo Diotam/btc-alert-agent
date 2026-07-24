@@ -4,21 +4,14 @@
     "last_setup_check": 1784725566567,
     "zone": null,
     "trade": null,
-    "last_candle_t": 1784865600000,
+    "last_candle_t": 1784874600000,
     "setup": null
   },
   "ETH": {
-    "phase": "IN_TRADE",
+    "phase": "SCAN",
     "last_setup_check": 1784725566832,
     "zone": null,
-    "trade": {
-      "verdict": "LONG",
-      "entry": 1870.5,
-      "stop": 1864.1434781023288,
-      "tp": 1883.7,
-      "opened_t": 1784853900000,
-      "checked_t": 1784865600000
-    },
+    "trade": null,
     "last_candle_t": 1784853900000,
     "setup": null
   },
@@ -34,7 +27,7 @@
       "last_exec_t": 1784725200000
     },
     "trade": null,
-    "last_candle_t": 1784865600000,
+    "last_candle_t": 1784874600000,
     "setup": null
   },
   "SOL": {
@@ -42,7 +35,7 @@
     "last_setup_check": 1784725567805,
     "zone": null,
     "trade": null,
-    "last_candle_t": 1784865600000,
+    "last_candle_t": 1784874600000,
     "setup": null
   },
   "ZEC": {
@@ -57,7 +50,7 @@
       "last_exec_t": 1784725200000
     },
     "trade": null,
-    "last_candle_t": 1784865600000,
+    "last_candle_t": 1784874600000,
     "setup": null
   },
   "XRP": {
@@ -65,7 +58,7 @@
     "last_setup_check": 1784725568905,
     "zone": null,
     "trade": null,
-    "last_candle_t": 1784865600000,
+    "last_candle_t": 1784874600000,
     "setup": null
   },
   "PUMP": {
@@ -80,7 +73,7 @@
       "last_exec_t": 1784725200000
     },
     "trade": null,
-    "last_candle_t": 1784865600000,
+    "last_candle_t": 1784874600000,
     "setup": null
   },
   "CASHCAT": {
@@ -88,7 +81,7 @@
     "last_setup_check": 1784725571561,
     "zone": null,
     "trade": null,
-    "last_candle_t": 1784865600000,
+    "last_candle_t": 1784874600000,
     "setup": null
   },
   "kBONK": {
@@ -134,7 +127,7 @@
     "last_setup_check": 1784725569697,
     "zone": null,
     "trade": null,
-    "last_candle_t": 1784865600000,
+    "last_candle_t": 1784874600000,
     "setup": null
   },
   "FARTCOIN": {
@@ -157,7 +150,7 @@
       "last_exec_t": 1784725200000
     },
     "trade": null,
-    "last_candle_t": 1784865600000,
+    "last_candle_t": 1784874600000,
     "setup": null
   },
   "AAVE": {
@@ -185,7 +178,7 @@
       "stop": 0.08577615262356088,
       "tp": 0.09461577106465868,
       "opened_t": 1784734200000,
-      "checked_t": 1784865600000
+      "checked_t": 1784874600000
     },
     "last_candle_t": 1784734200000,
     "setup": null
