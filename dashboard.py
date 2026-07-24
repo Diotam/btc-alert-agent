@@ -56,9 +56,10 @@ def journal_events(n=400, keep=25):
         return []
     events = []
     for line in out.splitlines():
-        if any(k in line for k in ("ALERT SENT", "ENTRY", "broken",
-                                   "retest", "TP HIT", "STOPPED OUT",
-                                   "failed", "expired", "SUMMARY")):
+        if any(k in line for k in ("ALERT SENT", "ENTRY", "range",
+                                   "reentry", "TP HIT", "STOPPED OUT",
+                                   "rolled over", "ABOVE", "BELOW",
+                                   "SUMMARY")):
             events.append(line.strip())
     return events[-keep:][::-1]
 
@@ -113,9 +114,10 @@ def build_data():
             lvl = z.get("level")
             lvl_s = f"{lvl:,.6f}".rstrip("0").rstrip(".") if lvl and lvl < 1 \
                 else (f"{lvl:,.2f}" if lvl else "?")
-            phase = "retesting" if z.get("touched") else "waiting for retest"
+            phase = z.get("note") or ("retesting" if z.get("touched")
+                                      else "waiting for retest")
             zones.append({"sym": sym, "dir": z["direction"],
-                          "stage": f"broke ${lvl_s} \u00b7 {phase}",
+                          "stage": f"${lvl_s} \u00b7 {phase}",
                           "mid": mid})
     trades.sort(key=lambda t: t["sym"])
     zones.sort(key=lambda z: z["sym"])
