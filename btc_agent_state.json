@@ -4,37 +4,33 @@
     "last_setup_check": 1784725566567,
     "zone": null,
     "trade": null,
-    "last_candle_t": 1784901600000,
+    "last_candle_t": 1784914800000,
     "setup": {
-      "direction": "SHORT",
-      "level": 64637.0,
-      "touched": false,
-      "break_vol": 2596.67086,
-      "swing": 64426.0,
-      "expires_t": 1784905200000,
-      "lo": 63730.0,
-      "hi": 64426.0
-    }
+      "side": "LOW",
+      "direction": "LONG",
+      "level": 65216.0,
+      "ext": 64075.0,
+      "note": "closed below 4h-range low - a close back inside triggers the LONG"
+    },
+    "day": "2026-07-24"
   },
   "ETH": {
     "phase": "ARMED",
     "last_setup_check": 1784725566832,
     "zone": null,
     "trade": null,
-    "last_candle_t": 1784901600000,
+    "last_candle_t": 1784914800000,
     "setup": {
-      "direction": "SHORT",
-      "level": 1868.1,
-      "touched": true,
-      "break_vol": 27402.6656,
-      "swing": 1867.7,
-      "expires_t": 1784905200000,
-      "lo": 1847.0,
-      "hi": 1867.7
-    }
+      "side": "LOW",
+      "direction": "LONG",
+      "level": 1872.9,
+      "ext": 1861.7,
+      "note": "closed below 4h-range low - a close back inside triggers the LONG"
+    },
+    "day": "2026-07-24"
   },
   "HYPE": {
-    "phase": "SCAN",
+    "phase": "IN_TRADE",
     "last_setup_check": 1784725567190,
     "zone": {
       "direction": "LONG",
@@ -44,17 +40,32 @@
       "seq": null,
       "last_exec_t": 1784725200000
     },
-    "trade": null,
-    "last_candle_t": 1784901600000,
-    "setup": null
+    "trade": {
+      "verdict": "SHORT",
+      "entry": 58.879,
+      "stop": 59.006,
+      "tp": 58.62499999999999,
+      "opened_t": 1784914500000,
+      "checked_t": 1784914500000
+    },
+    "last_candle_t": 1784914500000,
+    "setup": null,
+    "day": "2026-07-24"
   },
   "SOL": {
     "phase": "SCAN",
     "last_setup_check": 1784725567805,
     "zone": null,
     "trade": null,
-    "last_candle_t": 1784894400000,
-    "setup": null
+    "last_candle_t": 1784914800000,
+    "setup": {
+      "side": "LOW",
+      "direction": "LONG",
+      "level": 75.559,
+      "ext": 74.011,
+      "note": "closed below 4h-range low - a close back inside triggers the LONG"
+    },
+    "day": "2026-07-24"
   },
   "ZEC": {
     "phase": "SCAN",
@@ -68,16 +79,30 @@
       "last_exec_t": 1784725200000
     },
     "trade": null,
-    "last_candle_t": 1784901600000,
-    "setup": null
+    "last_candle_t": 1784914800000,
+    "setup": {
+      "side": "LOW",
+      "direction": "LONG",
+      "level": 506.12,
+      "ext": 491.4,
+      "note": "closed below 4h-range low - a close back inside triggers the LONG"
+    },
+    "day": "2026-07-24"
   },
   "XRP": {
     "phase": "SCAN",
     "last_setup_check": 1784725568905,
     "zone": null,
     "trade": null,
-    "last_candle_t": 1784901600000,
-    "setup": null
+    "last_candle_t": 1784914800000,
+    "setup": {
+      "side": "LOW",
+      "direction": "LONG",
+      "level": 1.1057,
+      "ext": 1.0885,
+      "note": "closed below 4h-range low - a close back inside triggers the LONG"
+    },
+    "day": "2026-07-24"
   },
   "PUMP": {
     "phase": "SCAN",
@@ -91,16 +116,24 @@
       "last_exec_t": 1784725200000
     },
     "trade": null,
-    "last_candle_t": 1784901600000,
-    "setup": null
+    "last_candle_t": 1784914800000,
+    "setup": null,
+    "day": "2026-07-24"
   },
   "CASHCAT": {
     "phase": "SCAN",
     "last_setup_check": 1784725571561,
     "zone": null,
     "trade": null,
-    "last_candle_t": 1784885400000,
-    "setup": null
+    "last_candle_t": 1784914800000,
+    "setup": {
+      "side": "LOW",
+      "direction": "LONG",
+      "level": 0.050342,
+      "ext": 0.047173,
+      "note": "closed below 4h-range low - a close back inside triggers the LONG"
+    },
+    "day": "2026-07-24"
   },
   "kBONK": {
     "phase": "SCAN",
@@ -122,8 +155,15 @@
     "last_setup_check": 1784725570050,
     "zone": null,
     "trade": null,
-    "last_candle_t": 1784817000000,
-    "setup": null
+    "last_candle_t": 1784914800000,
+    "setup": {
+      "side": "LOW",
+      "direction": "LONG",
+      "level": 0.3999,
+      "ext": 0.39184,
+      "note": "closed below 4h-range low - a close back inside triggers the LONG"
+    },
+    "day": "2026-07-24"
   },
   "NEAR": {
     "phase": "SCAN",
@@ -137,24 +177,39 @@
       "last_exec_t": 1784725200000
     },
     "trade": null,
-    "last_candle_t": 1784809800000,
-    "setup": null
+    "last_candle_t": 1784914800000,
+    "setup": {
+      "side": "LOW",
+      "direction": "LONG",
+      "level": 1.8911,
+      "ext": 1.8119,
+      "note": "closed below 4h-range low - a close back inside triggers the LONG"
+    },
+    "day": "2026-07-24"
   },
   "LIT": {
     "phase": "SCAN",
     "last_setup_check": 1784725569697,
     "zone": null,
     "trade": null,
-    "last_candle_t": 1784901600000,
-    "setup": null
+    "last_candle_t": 1784914800000,
+    "setup": null,
+    "day": "2026-07-24"
   },
   "FARTCOIN": {
     "phase": "SCAN",
     "last_setup_check": 1784725574053,
     "zone": null,
     "trade": null,
-    "last_candle_t": 1784730600000,
-    "setup": null
+    "last_candle_t": 1784914800000,
+    "setup": {
+      "side": "LOW",
+      "direction": "LONG",
+      "level": 0.13243,
+      "ext": 0.12507,
+      "note": "closed below 4h-range low - a close back inside triggers the LONG"
+    },
+    "day": "2026-07-24"
   },
   "DOGE": {
     "phase": "SCAN",
@@ -168,8 +223,9 @@
       "last_exec_t": 1784725200000
     },
     "trade": null,
-    "last_candle_t": 1784901600000,
-    "setup": null
+    "last_candle_t": 1784914800000,
+    "setup": null,
+    "day": "2026-07-24"
   },
   "AAVE": {
     "phase": "SCAN",
@@ -222,30 +278,30 @@
     "last_setup_check": 1784725575816,
     "zone": null,
     "trade": null,
-    "last_candle_t": 1784809800000,
+    "last_candle_t": 1784914800000,
     "setup": {
-      "direction": "SHORT",
-      "level": 0.37963,
-      "touched": false,
-      "break_vol": 1097529.4,
-      "swing": null,
-      "expires_t": 1784817000000
-    }
+      "side": "LOW",
+      "direction": "LONG",
+      "level": 0.38125,
+      "ext": 0.376,
+      "note": "closed below 4h-range low - a close back inside triggers the LONG"
+    },
+    "day": "2026-07-24"
   },
   "SUI": {
     "phase": "ARMED",
     "last_setup_check": 1784725573577,
     "zone": null,
     "trade": null,
-    "last_candle_t": 1784809800000,
+    "last_candle_t": 1784914800000,
     "setup": {
-      "direction": "SHORT",
-      "level": 0.76204,
-      "touched": false,
-      "break_vol": 585733.3,
-      "swing": null,
-      "expires_t": 1784817000000
-    }
+      "side": "LOW",
+      "direction": "LONG",
+      "level": 0.74106,
+      "ext": 0.71298,
+      "note": "closed below 4h-range low - a close back inside triggers the LONG"
+    },
+    "day": "2026-07-24"
   },
   "TAO": {
     "phase": "SCAN",
@@ -409,16 +465,30 @@
       "last_exec_t": 1784725200000
     },
     "trade": null,
-    "last_candle_t": 1784750400000,
-    "setup": null
+    "last_candle_t": 1784914800000,
+    "setup": {
+      "side": "HIGH",
+      "direction": "SHORT",
+      "level": 0.085165,
+      "ext": 0.087027,
+      "note": "closed above 4h-range high - a close back inside triggers the SHORT"
+    },
+    "day": "2026-07-24"
   },
   "XMR": {
     "phase": "SCAN",
     "last_setup_check": 1784725573060,
     "zone": null,
     "trade": null,
-    "last_candle_t": 1784734200000,
-    "setup": null
+    "last_candle_t": 1784914800000,
+    "setup": {
+      "side": "HIGH",
+      "direction": "SHORT",
+      "level": 359.94,
+      "ext": 363.57,
+      "note": "closed above 4h-range high - a close back inside triggers the SHORT"
+    },
+    "day": "2026-07-24"
   },
   "LINK": {
     "phase": "ARMED",
