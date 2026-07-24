@@ -4,7 +4,7 @@
     "last_setup_check": 1784725566567,
     "zone": null,
     "trade": null,
-    "last_candle_t": 1784889000000,
+    "last_candle_t": 1784894400000,
     "setup": null
   },
   "ETH": {
@@ -12,7 +12,7 @@
     "last_setup_check": 1784725566832,
     "zone": null,
     "trade": null,
-    "last_candle_t": 1784889000000,
+    "last_candle_t": 1784894400000,
     "setup": null
   },
   "HYPE": {
@@ -27,15 +27,22 @@
       "last_exec_t": 1784725200000
     },
     "trade": null,
-    "last_candle_t": 1784889000000,
+    "last_candle_t": 1784894400000,
     "setup": null
   },
   "SOL": {
-    "phase": "SCAN",
+    "phase": "IN_TRADE",
     "last_setup_check": 1784725567805,
     "zone": null,
-    "trade": null,
-    "last_candle_t": 1784889000000,
+    "trade": {
+      "verdict": "SHORT",
+      "entry": 75.136,
+      "stop": 75.3155285720238,
+      "tp": 74.7769428559524,
+      "opened_t": 1784894400000,
+      "checked_t": 1784894400000
+    },
+    "last_candle_t": 1784894400000,
     "setup": null
   },
   "ZEC": {
@@ -50,7 +57,7 @@
       "last_exec_t": 1784725200000
     },
     "trade": null,
-    "last_candle_t": 1784889000000,
+    "last_candle_t": 1784894400000,
     "setup": null
   },
   "XRP": {
@@ -58,11 +65,11 @@
     "last_setup_check": 1784725568905,
     "zone": null,
     "trade": null,
-    "last_candle_t": 1784889000000,
+    "last_candle_t": 1784894400000,
     "setup": null
   },
   "PUMP": {
-    "phase": "ARMED",
+    "phase": "SCAN",
     "last_setup_check": 1784725569300,
     "zone": {
       "direction": "LONG",
@@ -73,15 +80,8 @@
       "last_exec_t": 1784725200000
     },
     "trade": null,
-    "last_candle_t": 1784889000000,
-    "setup": {
-      "direction": "SHORT",
-      "level": 0.00181,
-      "touched": false,
-      "break_vol": 463500360.0,
-      "swing": null,
-      "expires_t": 1784896200000
-    }
+    "last_candle_t": 1784894400000,
+    "setup": null
   },
   "CASHCAT": {
     "phase": "IN_TRADE",
@@ -93,7 +93,7 @@
       "stop": 0.056194225656775225,
       "tp": 0.046393323029674326,
       "opened_t": 1784885400000,
-      "checked_t": 1784885400000
+      "checked_t": 1784894400000
     },
     "last_candle_t": 1784885400000,
     "setup": null
@@ -141,7 +141,7 @@
     "last_setup_check": 1784725569697,
     "zone": null,
     "trade": null,
-    "last_candle_t": 1784889000000,
+    "last_candle_t": 1784894400000,
     "setup": null
   },
   "FARTCOIN": {
@@ -164,7 +164,7 @@
       "last_exec_t": 1784725200000
     },
     "trade": null,
-    "last_candle_t": 1784889000000,
+    "last_candle_t": 1784894400000,
     "setup": null
   },
   "AAVE": {
@@ -192,7 +192,7 @@
       "stop": 0.08577615262356088,
       "tp": 0.09461577106465868,
       "opened_t": 1784734200000,
-      "checked_t": 1784889000000
+      "checked_t": 1784894400000
     },
     "last_candle_t": 1784734200000,
     "setup": null
