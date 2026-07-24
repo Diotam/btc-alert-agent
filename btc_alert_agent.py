@@ -1,27 +1,27 @@
 #!/usr/bin/env python3
 """
-BREAK & RETEST AGENT
----------------------
-Continuation entries at broken structure levels, on one adjustable
-timeframe (TF).
+4-HOUR RANGE AGENT (New York session false-breakout reversals)
+---------------------------------------------------------------
+Each day, the high/low of the FIRST 4-hour window of the New York day
+(00:00-04:00 America/New_York) defines the range - marked only once the
+window has fully closed, and valid until the end of that NY day.
 
-LEVELS: swing pivots (a high/low with PIVOT_WING lower highs / higher
-lows on each side) from the last LEVEL_LOOKBACK candles.
+On 5m candles, after 04:00 NY (mirrored for the low side):
+  1. BREAKOUT  a 5m candle CLOSES above the range high (wicks alone
+               never count). While price stays outside, the excursion
+               extreme is tracked.
+  2. REENTRY   a 5m candle CLOSES back inside the range
+               -> SHORT at that close (the breakout failed)
+               SL = the exact breakout extreme (no pad)
+               TP = 2 x the stop distance
+  Broke the LOW then reentered -> LONG, SL at the exact excursion low,
+  TP 2R.
 
-LONG (mirrored for shorts):
-  1. BREAK    a candle CLOSES above a pivot high by BREAK_MIN_ATR x ATR
-              -> the level arms and is watched for RETEST_TTL candles
-  2. RETEST   price trades back down into the level zone
-              (level + RETEST_TOL_ATR x ATR)
-  3. REJECT   the retest candle closes back ABOVE the level
-              -> enter at that close
-              stop  = level - STOP_PAD_ATR x ATR (old resistance failed)
-              TP    = entry + RR x risk (RR = 1.5)
-  FAIL: a close back below the level by FAIL_CLOSE_ATR x ATR cancels the
-  setup (failed break). Expiry after RETEST_TTL candles also cancels.
+One live trade per asset; after it closes, a fresh breakout can arm the
+same range again. At NY midnight everything resets and waits for the
+new day's 04:00 range.
 
-Exits: single TP at 1.5R or the stop, with intrabar detection on the
-live candle. Closes are recorded to trades.log.
+Exits: TP or SL, with intrabar detection. Closes recorded to trades.log.
 
 Alerts are delivered to Telegram. Config from environment variables
 (GitHub repo Secrets):
@@ -68,23 +68,12 @@ ASSETS = [                         # used when DISCOVER_ALL = False / discovery 
 ]
 
 # --- Strategy dials -------------------------------------------------------
-TF = "30m"                   # strategy timeframe - one knob: "5m"/"15m"/"30m"
-PIVOT_WING = 5               # candles each side that define a swing pivot
-LEVEL_LOOKBACK = 120         # candles scanned for pivot levels
-BREAK_MIN_ATR = 0.10         # close must clear the level by this x ATR
-RETEST_TOL_ATR = 0.15        # retest zone extends this x ATR beyond the level
-RETEST_TTL = 4               # retest must come within 1-4 candles of the break
-BREAK_VOL_MULT = 1.5         # breakout volume must be >= this x 20-candle avg
-MAX_SWING_ATR = 0.40         # retest wick deeper than this below the level = skip
-TREND_TF = "1h"              # higher-TF trend filter
-TREND_FAST, TREND_SLOW = 20, 50   # 1h EMA pair that defines the trend
-FAIL_CLOSE_ATR = 0.10        # close back through the level by this = failed break
-STOP_MIN_ATR = 0.25          # stop sits 0.25-0.50 ATR beyond the level,
-STOP_MAX_ATR = 0.50          # behind the retest swing
-RR = 2.0                     # minimum reward-to-risk 2:1
-TP_MAX_RR = 3.0              # structure targets are capped at this many R
-FAILED_BREAK_REVERSAL = True # trade the squeeze when a break fails
-REV_STOP_PAD_ATR = 0.15      # reversal stop pad beyond the failed excursion
+TF = "5m"                    # execution timeframe (the spec is 5m closes)
+RANGE_TZ = "America/New_York"
+RANGE_HOURS = 4              # first N hours of the NY day define the range
+RR = 2.0                     # TP = 2 x the stop distance
+MIN_RANGE_CANDLES = 40       # 5m candles required inside 00:00-04:00 to
+                             # trust the range (48 = perfect coverage)
 ENABLE_SHORTS = True
 
 ALERT_ENTRIES = True
@@ -96,6 +85,14 @@ TIMEZONE = "America/Chicago"
 LOCAL_TZ = ZoneInfo(TIMEZONE)
 
 MS = {"5m": 300_000, "15m": 900_000, "30m": 1_800_000, "1h": 3_600_000}
+
+# knob tolerance: accept "30min", "15M", "1H", "60m" etc.
+_TF_ALIASES = {"5min": "5m", "15min": "15m", "30min": "30m",
+               "60m": "1h", "60min": "1h", "1hr": "1h"}
+TF = _TF_ALIASES.get(TF.strip().lower(), TF.strip().lower())
+if TF not in MS:
+    raise SystemExit(f"CONFIG ERROR: TF={TF!r} is not a known timeframe - "
+                     f"use one of {sorted(MS)}")
 LOOKBACK = {"5m": 300, "15m": 400, "30m": 400, "1h": 200}
 
 REQUEST_TIMEOUT_S = 8              # fail fast: a throttled API must not burn 20s
@@ -372,60 +369,58 @@ def send_telegram(text):
         raise RuntimeError(f"Telegram send failed: {resp.get('description')}")
 
 
-# --------------------------- break & retest engine --------------------------
-def pivot_high(candles, j, wing=PIVOT_WING):
-    if j < wing or j + wing >= len(candles):
-        return False
-    h = candles[j]["h"]
-    return all(h > candles[j + k]["h"] for k in range(1, wing + 1)) and \
-        all(h > candles[j - k]["h"] for k in range(1, wing + 1))
+# ----------------------------- 4h range engine ------------------------------
+NY_TZ = ZoneInfo(RANGE_TZ)
 
 
-def pivot_low(candles, j, wing=PIVOT_WING):
-    if j < wing or j + wing >= len(candles):
-        return False
-    l = candles[j]["l"]
-    return all(l < candles[j + k]["l"] for k in range(1, wing + 1)) and \
-        all(l < candles[j - k]["l"] for k in range(1, wing + 1))
+def ny_dt(ms):
+    return datetime.fromtimestamp(ms / 1000, NY_TZ)
 
 
-def pivot_levels(candles, upto_i):
-    """Confirmed pivot highs/lows strictly before candle upto_i."""
-    highs, lows = [], []
-    start = max(PIVOT_WING, upto_i - LEVEL_LOOKBACK)
-    for j in range(start, upto_i - PIVOT_WING):
-        if pivot_high(candles, j):
-            highs.append(candles[j]["h"])
-        if pivot_low(candles, j):
-            lows.append(candles[j]["l"])
-    return highs, lows
+def day_range(candles, d):
+    """High/low of 5m candles inside [00:00, 04:00) NY of date d.
+    Returns (hi, lo, ready)."""
+    hi = lo = None
+    count = 0
+    end_seen = False
+    for c in candles:
+        dt = ny_dt(c["t"])
+        if dt.date() == d and dt.hour < RANGE_HOURS:
+            hi = c["h"] if hi is None else max(hi, c["h"])
+            lo = c["l"] if lo is None else min(lo, c["l"])
+            count += 1
+            if dt.hour == RANGE_HOURS - 1 and dt.minute == 55:
+                end_seen = True
+    return hi, lo, (count >= MIN_RANGE_CANDLES and end_seen)
 
 
 def stage_message(asset, direction, level, px, t):
-    e = "\U0001F7E2" if direction == "LONG" else "\U0001F534"
+    e = "\U0001F534" if direction == "SHORT" else "\U0001F7E2"
+    side = "high" if direction == "SHORT" else "low"
     return "\n".join([
-        f"{e} <b>LEVEL BROKEN \u00b7 {esc(asset['symbol'])} {direction}</b>",
-        f"Closed {'above' if direction == 'LONG' else 'below'} "
-        f"${fmt_px(level)} - watching for the retest",
-        f"<i>{esc(asset['label'])} \u00b7 {TF} \u00b7 {esc(fmt_ts(t))}</i>",
+        f"{e} <b>RANGE BREAK \u00b7 {esc(asset['symbol'])}</b>",
+        f"5m closed {'above' if direction == 'SHORT' else 'below'} the "
+        f"4h-range {side} (${fmt_px(level)}) - a close back inside "
+        f"triggers the {direction}",
+        f"<i>{esc(asset['label'])} \u00b7 {esc(fmt_ts(t))}</i>",
     ])
 
 
-def entry_message(asset, direction, plan, level, source, t, note=None):
+def entry_message(asset, direction, plan, hi, lo, ext, source, t):
     e = "\U0001F7E2" if direction == "LONG" else "\U0001F534"
+    broke = "high" if direction == "SHORT" else "low"
     lines = [
         f"{e} <b>{direction} ENTRY \u00b7 {esc(asset['symbol'])}</b>",
-        f"<i>{esc(asset['label'])} \u00b7 {TF} \u00b7 break &amp; retest \u00b7 {esc(fmt_ts(t))}</i>",
+        f"<i>{esc(asset['label'])} \u00b7 5m \u00b7 4h-range reversal \u00b7 {esc(fmt_ts(t))}</i>",
         "",
-        f"\U0001F4CA <b>Setup</b>: " + (esc(note) if note else
-        f"broke ${fmt_px(level)}, retested it as "
-        f"{'support' if direction == 'LONG' else 'resistance'}, and rejected"),
+        f"\U0001F4CA <b>Setup</b>: NY 00-04 range ${fmt_px(lo)} - ${fmt_px(hi)}; "
+        f"5m closed beyond the {broke}, then closed back INSIDE - "
+        f"failed breakout",
         "",
         "\U0001F4CB <b>Plan</b>",
         f"Entry: <code>${fmt_px(plan['entry'])}</code>",
-        f"Stop:  <code>${fmt_px(plan['stop'])}</code>  (beyond the level)",
-        f"TP:    <code>${fmt_px(plan['tp'])}</code>  "
-        f"({abs(plan['tp'] - plan['entry']) / max(abs(plan['entry'] - plan['stop']), 1e-12):.1f}R)",
+        f"Stop:  <code>${fmt_px(plan['stop'])}</code>  (exact breakout extreme)",
+        f"TP:    <code>${fmt_px(plan['tp'])}</code>  ({RR:.0f}x the stop distance)",
         f"<i>data: {esc(source)}</i>",
     ]
     return "\n".join(lines)
@@ -565,213 +560,81 @@ def process_open_trade(asset, trade, candles, last_closed_t):
     return trade, changed
 
 
-def structure_target(entry, risk, direction, highs, lows):
-    """TP at the nearest prior opposite pivot if it offers RR >= RR,
-    capped at TP_MAX_RR. No structure -> plain RR target.
-    Returns (tp, rr) or (None, rr) when structure is too close."""
-    if direction == "LONG":
-        cands = [p for p in highs if p > entry]
-        struct = min(cands) if cands else None
-    else:
-        cands = [p for p in lows if p < entry]
-        struct = max(cands) if cands else None
-    if struct is None:
-        return entry + RR * risk if direction == "LONG" \
-            else entry - RR * risk, RR
-    rr = abs(struct - entry) / risk
-    if rr < RR:
-        return None, rr                      # target too close - skip
-    if rr > TP_MAX_RR:
-        return (entry + TP_MAX_RR * risk if direction == "LONG"
-                else entry - TP_MAX_RR * risk), TP_MAX_RR
-    return struct, rr
-
-
-def trend_agrees(asset, direction):
-    """1h trend filter: EMA20 vs EMA50 on the higher timeframe must point
-    the same way as the trade. Feed failure = no trade (conservative)."""
-    try:
-        _, ch = fetch(asset, TREND_TF, TREND_SLOW + 10)
-        if not ch or len(ch) < TREND_SLOW + 2:
-            return False
-        closes = [c["c"] for c in ch]
-        f = ema(closes, TREND_FAST)[len(ch) - 2]
-        s = ema(closes, TREND_SLOW)[len(ch) - 2]
-        if f is None or s is None:
-            return False
-        return f > s if direction == "LONG" else f < s
-    except Exception:
-        return False
-
-
-def process_candle(asset, ast, real, vols_avg, a, i, source):
-    """Walk ONE newly closed candle through the break & retest engine.
-    All eight checklist rules are enforced here + trend_agrees()."""
+def process_candle(asset, ast, real, i, source, rng_cache):
+    """Walk ONE newly closed 5m candle through the 4h-range engine."""
     sym = asset["symbol"]
     c = real[i]
-    atr_i = a[i] or 0
-    setup = ast["setup"]
+    close_dt = ny_dt(c["t"] + MS[TF])
+    d = close_dt.date()
 
-    # ---- active broken level ------------------------------------------------
-    if setup:
-        long = setup["direction"] == "LONG"
-        lvl = setup["level"]
-        # track BOTH post-break extremes (retest side + excursion side)
-        if setup.get("lo") is None:
-            setup["lo"], setup["hi"] = c["l"], c["h"]
-        else:
-            setup["lo"] = min(setup["lo"], c["l"])
-            setup["hi"] = max(setup["hi"], c["h"])
-        setup["swing"] = setup["lo"] if long else setup["hi"]
-        if c["t"] > setup["expires_t"]:
-            log(f"{sym}: no retest within {RETEST_TTL} candles - setup expired")
-            ast["setup"], ast["phase"], setup = None, "SCAN", None
-        elif (c["c"] < lvl if long else c["c"] > lvl):
-            log(f"{sym}: failed break - closed back through ${fmt_px(lvl)}")
-            if FAILED_BREAK_REVERSAL and setup.get("lo") is not None:
-                rev = "SHORT" if long else "LONG"
-                rlong = rev == "LONG"
-                stop = (setup["lo"] - REV_STOP_PAD_ATR * atr_i) if not rlong \
-                    else 0  # placeholder, set below
-                if rlong:
-                    stop = setup["lo"] - REV_STOP_PAD_ATR * atr_i
-                else:
-                    stop = setup["hi"] + REV_STOP_PAD_ATR * atr_i
-                entry = c["c"]
-                risk = (entry - stop) if rlong else (stop - entry)
-                if risk > 0:
-                    highs, lows = pivot_levels(real, i)
-                    tp, rr = structure_target(entry, risk, rev, highs, lows)
-                    if tp is None:
-                        log(f"{sym}: reversal skipped - structure target "
-                            f"only {rr:.1f}R away")
-                    else:
-                        plan = {"entry": entry, "stop": stop, "tp": tp}
-                        if ALERT_ENTRIES:
-                            send_telegram(entry_message(
-                                asset, rev, plan, lvl, source,
-                                c["t"] + MS[TF],
-                                note=f"FAILED BREAK reversal - the "
-                                     f"{'breakdown' if rlong else 'breakout'} "
-                                     f"was reclaimed; squeeze entry "
-                                     f"({rr:.1f}R target)"))
-                        log(f"ALERT SENT -> telegram: {sym} {rev} REVERSAL "
-                            f"ENTRY @ ${fmt_px(entry)} (failed break of "
-                            f"${fmt_px(lvl)})")
-                        RUN_ALERTS.append(
-                            f"{sym} {rev} failed-break entry @ ${fmt_px(entry)}")
-                        ast["trade"] = {"verdict": rev, "entry": entry,
-                                        "stop": stop, "tp": tp,
-                                        "opened_t": c["t"],
-                                        "checked_t": c["t"]}
-                        ast["phase"], ast["setup"] = "IN_TRADE", None
-                        return True
-            ast["setup"], ast["phase"], setup = None, "SCAN", None
-        else:
-            touched = c["l"] <= lvl + RETEST_TOL_ATR * atr_i if long \
-                else c["h"] >= lvl - RETEST_TOL_ATR * atr_i
-            if touched and not setup.get("touched"):
-                setup["touched"] = True
-                log(f"{sym}: retesting ${fmt_px(lvl)}")
-            rejected = touched and (c["c"] > lvl if long else c["c"] < lvl)
-            if rejected:
-                # rule: retest volume must be LOWER than breakout volume
-                if c["v"] >= setup["break_vol"]:
-                    log(f"{sym}: retest volume >= breakout volume - not a "
-                        "quiet retest, waiting")
-                    return True
-                # rule: retest swing must not have pierced too deep
-                swing = setup["swing"]
-                too_deep = swing < lvl - MAX_SWING_ATR * atr_i if long \
-                    else swing > lvl + MAX_SWING_ATR * atr_i
-                if too_deep:
-                    log(f"{sym}: retest wick too deep past the level - "
-                        "setup discarded")
-                    ast["setup"], ast["phase"] = None, "SCAN"
-                    return True
-                # rule: 1h trend must agree
-                if not trend_agrees(asset, setup["direction"]):
-                    log(f"{sym}: {TREND_TF} trend disagrees - no trade")
-                    ast["setup"], ast["phase"] = None, "SCAN"
-                    return True
-                # stop behind the retest swing, 0.25-0.50 ATR beyond the level
-                if long:
-                    stop = min(swing, lvl - STOP_MIN_ATR * atr_i)
-                    stop = max(stop, lvl - STOP_MAX_ATR * atr_i)
-                else:
-                    stop = max(swing, lvl + STOP_MIN_ATR * atr_i)
-                    stop = min(stop, lvl + STOP_MAX_ATR * atr_i)
-                entry = c["c"]
-                risk = (entry - stop) if long else (stop - entry)
-                if risk <= 0:
-                    ast["setup"], ast["phase"] = None, "SCAN"
-                    return True
-                highs_l, lows_l = pivot_levels(real, i)
-                tp, rr_used = structure_target(entry, risk,
-                                               setup["direction"],
-                                               highs_l, lows_l)
-                if tp is None:
-                    log(f"{sym}: entry skipped - structure target only "
-                        f"{rr_used:.1f}R away (min {RR}R)")
-                    ast["setup"], ast["phase"] = None, "SCAN"
-                    return True
-                plan = {"entry": entry, "stop": stop, "tp": tp}
-                if ALERT_ENTRIES:
-                    send_telegram(entry_message(
-                        asset, setup["direction"], plan, lvl, source,
-                        c["t"] + MS[TF]))
-                log(f"ALERT SENT -> telegram: {sym} {setup['direction']} "
-                    f"ENTRY @ ${fmt_px(entry)} (retest of ${fmt_px(lvl)}, "
-                    f"{TREND_TF} trend aligned)")
-                RUN_ALERTS.append(
-                    f"{sym} {setup['direction']} entry @ ${fmt_px(entry)}")
-                ast["trade"] = {"verdict": setup["direction"],
-                                "entry": entry, "stop": stop, "tp": tp,
-                                "opened_t": c["t"], "checked_t": c["t"]}
-                ast["phase"], ast["setup"] = "IN_TRADE", None
-                return True
-        if ast["setup"] or ast["trade"]:
-            return True
+    # NY-day rollover: everything resets
+    if ast.get("day") != str(d):
+        if ast.get("setup"):
+            log(f"{sym}: NY day rolled over - pending breakout cleared")
+        ast["day"], ast["setup"] = str(d), None
 
-    # ---- hunt a fresh break: full close beyond + volume >= 1.5x average ----
-    if i < 1:
+    # only trade after the range window has fully closed
+    if (close_dt.hour, close_dt.minute) <= (RANGE_HOURS, 0):
         return False
-    vol_ok = (vols_avg[i - 1] or 0) > 0 and \
-        c["v"] >= BREAK_VOL_MULT * vols_avg[i - 1]
-    highs, lows = pivot_levels(real, i)
-    prev_close = real[i - 1]["c"]
-    broken_high = [p for p in highs
-                   if prev_close <= p and c["c"] > p + BREAK_MIN_ATR * atr_i]
-    broken_low = [p for p in lows
-                  if prev_close >= p and c["c"] < p - BREAK_MIN_ATR * atr_i]
-    if broken_high or (broken_low and ENABLE_SHORTS):
-        if not vol_ok:
-            log(f"{sym}: level broken but volume below "
-                f"{BREAK_VOL_MULT}x average - ignored")
-            return True
-    if broken_high:
-        lvl = max(broken_high)
-        ast["setup"] = {"direction": "LONG", "level": lvl, "touched": False,
-                        "break_vol": c["v"], "swing": None,
-                        "expires_t": c["t"] + RETEST_TTL * MS[TF]}
-        ast["phase"] = "ARMED"
-        log(f"{sym}: LONG level broken at ${fmt_px(lvl)} on "
-            f"{c['v'] / (vols_avg[i - 1] or 1):.1f}x volume - "
-            "watching for retest")
-        if ALERT_STAGES:
-            send_telegram(stage_message(asset, "LONG", lvl, c["c"], c["t"]))
+
+    if d not in rng_cache:
+        rng_cache[d] = day_range(real, d)
+    hi, lo, ready = rng_cache[d]
+    if not ready:
+        return False
+
+    brk = ast["setup"]
+
+    # ---- closes OUTSIDE the range: register / extend the breakout ----------
+    if c["c"] > hi:
+        if brk and brk["side"] == "HIGH":
+            brk["ext"] = max(brk["ext"], c["h"])
+        else:
+            ast["setup"] = {"side": "HIGH", "direction": "SHORT",
+                            "level": hi, "ext": c["h"],
+                            "note": f"closed above 4h-range high - a close "
+                                    f"back inside triggers the SHORT"}
+            log(f"{sym}: 5m closed ABOVE the 4h-range high ${fmt_px(hi)} - "
+                "watching for reentry (SHORT on close back inside)")
+            if ALERT_STAGES:
+                send_telegram(stage_message(asset, "SHORT", hi, c["c"], c["t"]))
         return True
-    if broken_low and ENABLE_SHORTS:
-        lvl = min(broken_low)
-        ast["setup"] = {"direction": "SHORT", "level": lvl, "touched": False,
-                        "break_vol": c["v"], "swing": None,
-                        "expires_t": c["t"] + RETEST_TTL * MS[TF]}
-        ast["phase"] = "ARMED"
-        log(f"{sym}: SHORT level broken at ${fmt_px(lvl)} on "
-            f"{c['v'] / (vols_avg[i - 1] or 1):.1f}x volume - "
-            "watching for retest")
-        if ALERT_STAGES:
-            send_telegram(stage_message(asset, "SHORT", lvl, c["c"], c["t"]))
+    if c["c"] < lo and ENABLE_SHORTS is not None:      # lows always tracked
+        if brk and brk["side"] == "LOW":
+            brk["ext"] = min(brk["ext"], c["l"])
+        else:
+            ast["setup"] = {"side": "LOW", "direction": "LONG",
+                            "level": lo, "ext": c["l"],
+                            "note": f"closed below 4h-range low - a close "
+                                    f"back inside triggers the LONG"}
+            log(f"{sym}: 5m closed BELOW the 4h-range low ${fmt_px(lo)} - "
+                "watching for reentry (LONG on close back inside)")
+            if ALERT_STAGES:
+                send_telegram(stage_message(asset, "LONG", lo, c["c"], c["t"]))
+        return True
+
+    # ---- closes back INSIDE with a pending breakout: the reversal entry ----
+    if brk and lo <= c["c"] <= hi:
+        short = brk["side"] == "HIGH"
+        entry = c["c"]
+        stop = brk["ext"]                       # the EXACT breakout extreme
+        risk = (stop - entry) if short else (entry - stop)
+        if risk <= 0:
+            ast["setup"] = None
+            return True
+        tp = entry - RR * risk if short else entry + RR * risk
+        direction = "SHORT" if short else "LONG"
+        plan = {"entry": entry, "stop": stop, "tp": tp}
+        if ALERT_ENTRIES:
+            send_telegram(entry_message(asset, direction, plan, hi, lo,
+                                        brk["ext"], source, c["t"] + MS[TF]))
+        log(f"ALERT SENT -> telegram: {sym} {direction} ENTRY @ "
+            f"${fmt_px(entry)} (failed break of the 4h-range "
+            f"{'high' if short else 'low'})")
+        RUN_ALERTS.append(f"{sym} {direction} entry @ ${fmt_px(entry)}")
+        ast["trade"] = {"verdict": direction, "entry": entry, "stop": stop,
+                        "tp": tp, "opened_t": c["t"], "checked_t": c["t"]}
+        ast["phase"], ast["setup"] = "IN_TRADE", None
         return True
     return False
 
@@ -797,14 +660,13 @@ def check_asset(asset, state):
         return changed
 
     # ---- scan / armed: process each newly closed candle --------------------
-    source, cs = fetch(asset, TF, LEVEL_LOOKBACK + 2 * PIVOT_WING + 20)
+    source, cs = fetch(asset, TF, 300)     # ~25h of 5m: covers the NY day
     if not cs:
         RUN_STATUS.append(f"{sym} feed failed")
         state[sym] = ast
         return changed
 
-    a = atr(cs)
-    vols_avg = sma([c["v"] for c in cs], 20)
+    rng_cache = {}
 
     last_closed = len(cs) - 2
     cutoff = cs[last_closed]["t"] - REPLAY_CANDLES * MS[TF]
@@ -813,7 +675,7 @@ def check_asset(asset, state):
     for i in range(len(cs)):
         if i > last_closed or cs[i]["t"] <= ast["last_candle_t"]:
             continue
-        ch = process_candle(asset, ast, cs, vols_avg, a, i, source)
+        ch = process_candle(asset, ast, cs, i, source, rng_cache)
         changed = changed or ch
         ast["last_candle_t"] = cs[i]["t"]
         if ast["trade"]:
@@ -821,7 +683,7 @@ def check_asset(asset, state):
 
     stage = ast["phase"]
     if ast["setup"]:
-        stage = f"ARMED ({ast['setup']['direction']} ${fmt_px(ast['setup']['level'])})"
+        stage = f"BROKE-{ast['setup']['side']} ({ast['setup']['direction']} on reentry)"
     RUN_STATUS.append(f"{sym} {stage}")
     state[sym] = ast
     return changed
@@ -932,9 +794,9 @@ if __name__ == "__main__":
             watched = ", ".join(a["symbol"] for a in ASSETS)
         send_telegram("\u2705 <b>Signal alert agent - test message</b>\n"
                       f"Your alert pipeline works. Watching: {esc(watched)}.\n"
-                      f"Strategy: break &amp; retest ({TF}) - pivot level "
-                      "breaks, retest-and-reject entries, stop beyond the "
-                      f"level, TP {RR}R, intrabar exit detection.")
+                      f"Strategy: 4h range (NY 00:00-04:00) - 5m close "
+                      "outside the range, then a close back INSIDE enters "
+                      f"the reversal; SL at the exact breakout extreme, TP {RR:.0f}R.")
         print("Test message sent to Telegram.")
     elif "--loop" in sys.argv:
         run_loop()
