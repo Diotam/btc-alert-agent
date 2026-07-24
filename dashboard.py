@@ -269,7 +269,7 @@ function render(d){
   document.getElementById('csub').textContent=LABEL[PERIOD];
   const cut=Date.now()-DAYS[PERIOD]*86400000;
   const shown=d.closed.filter(c=>c.t>=cut).slice(0,20);
-  const icons={TP:'🏁',TP2:'🏁',STOP:'❌',RUNNER:'🏃'};
+  const icons={TP:'✅',TP2:'✅',STOP:'❌',RUNNER:'🏃'};
   document.getElementById('closed').innerHTML=shown.length?shown.map(c=>{
    const cls=c.dir==='LONG'?'long':'short';
    const when=new Date(c.t).toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
