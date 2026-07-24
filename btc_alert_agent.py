@@ -57,7 +57,9 @@ DEXES = [""]                       # fallback when dex discovery fails
 COMMODITY_TICKERS = ("XAU", "GOLD", "XAG", "SILVER", "XPT", "PLAT",
                      "XPD", "PALLAD", "CL", "OIL", "WTI", "BRENT",
                      "NG", "NATGAS", "HG", "COPPER")
-COMMODITY_MIN_VOLUME_USD = 1_000_000   # commodities trade thinner - lower floor
+COMMODITY_MIN_VOLUME_USD = 5_000_000   # commodities trade thinner - lower floor
+STOCK_DEXES = ("xyz",)                 # TradeXYZ equities venue
+STOCK_MIN_VOLUME_USD = 5_000_000
 ONLY = []                          # trade ONLY these symbols ([] = whole universe)
 MIN_DAY_VOLUME_USD = 10_000_000    # skip markets below $10M 24h notional
 MAX_ASSETS = 70
@@ -75,9 +77,15 @@ ASSETS = [                         # used when DISCOVER_ALL = False / discovery 
 # --- Strategy dials -------------------------------------------------------
 TF = "5m"                    # execution timeframe (the spec is 5m closes)
 RANGE_TZ = "America/New_York"
-RANGE_HOURS = 4              # first N hours of the NY day define the range
+# session windows per asset class (NY h:m start -> h:m end):
+#   crypto & commodities: the first 4h of the NY day (overnight range)
+#   stocks: the cash-session OPENING RANGE (equities are closed overnight,
+#           so the 00-04 window would be a meaningless flat line)
+SESSIONS = {"crypto": (0, 0, 4, 0),
+            "commodity": (0, 0, 4, 0),
+            "stock": (9, 30, 10, 30)}
 RR = 2.0                     # TP = 2 x the stop distance
-MIN_RANGE_CANDLES = 40       # min 5m candles needed to trust the range
+RANGE_MIN_ATR = 0.30         # range narrower than this x ATR = untradeable day
 ENABLE_SHORTS = True
 
 ALERT_ENTRIES = True
@@ -292,15 +300,23 @@ def discover_assets():
                 vol = 0.0
             name = u["name"]
             if dex:
-                # builder venues: commodities only (stocks stay excluded)
-                if not is_commodity(name):
+                if is_commodity(name):
+                    if vol < COMMODITY_MIN_VOLUME_USD:
+                        continue
+                    cls = "commodity"
+                elif dex in STOCK_DEXES:
+                    if vol < STOCK_MIN_VOLUME_USD:
+                        continue
+                    cls = "stock"
+                else:
+                    continue                    # unknown venue class: skip
+            else:
+                if vol < MIN_DAY_VOLUME_USD:
                     continue
-                if vol < COMMODITY_MIN_VOLUME_USD:
-                    continue
-            elif vol < MIN_DAY_VOLUME_USD:
-                continue
+                cls = "crypto"
             coin = f"{dex}:{name}" if dex else name
             found.append({"symbol": coin, "hl_coin": coin, "vol": vol,
+                          "cls": cls,
                           "label": f"{name}-PERP" + (f" ({dex})" if dex else ""),
                           "fallbacks": []})
     found.sort(key=lambda a: a["vol"], reverse=True)
@@ -392,21 +408,30 @@ def ny_dt(ms):
     return datetime.fromtimestamp(ms / 1000, NY_TZ)
 
 
-def day_range(candles, d):
-    """High/low of 5m candles inside [00:00, 04:00) NY of date d.
-    Returns (hi, lo, ready)."""
+def session_window(cls):
+    h1, m1, h2, m2 = SESSIONS.get(cls, SESSIONS["crypto"])
+    return h1 * 60 + m1, h2 * 60 + m2
+
+
+def day_range(candles, d, cls):
+    """High/low of 5m candles inside the class's session window on NY
+    date d. Returns (hi, lo, ready)."""
+    start, end = session_window(cls)
     hi = lo = None
     count = 0
     end_seen = False
     for c in candles:
         dt = ny_dt(c["t"])
-        if dt.date() == d and dt.hour < RANGE_HOURS:
+        mins = dt.hour * 60 + dt.minute
+        if dt.date() == d and start <= mins and mins + 5 <= end:
             hi = c["h"] if hi is None else max(hi, c["h"])
             lo = c["l"] if lo is None else min(lo, c["l"])
             count += 1
-            if dt.hour == RANGE_HOURS - 1 and dt.minute == 55:
+            if mins == end - 5:
                 end_seen = True
-    return hi, lo, (count >= MIN_RANGE_CANDLES and end_seen)
+    expected = (end - start) // 5
+    ready = count >= expected - max(2, expected // 6) and end_seen
+    return hi, lo, ready
 
 
 def stage_message(asset, direction, level, px, t):
@@ -424,11 +449,14 @@ def stage_message(asset, direction, level, px, t):
 def entry_message(asset, direction, plan, hi, lo, ext, source, t):
     e = "\U0001F7E2" if direction == "LONG" else "\U0001F534"
     broke = "high" if direction == "SHORT" else "low"
+    h1, m1, h2, m2 = SESSIONS.get(asset.get("cls", "crypto"), SESSIONS["crypto"])
+    win = f"NY {h1:02d}:{m1:02d}-{h2:02d}:{m2:02d}"
+    kind = "opening-range" if asset.get("cls") == "stock" else "4h-range"
     lines = [
         f"{e} <b>{direction} ENTRY \u00b7 {esc(asset['symbol'])}</b>",
-        f"<i>{esc(asset['label'])} \u00b7 5m \u00b7 4h-range reversal \u00b7 {esc(fmt_ts(t))}</i>",
+        f"<i>{esc(asset['label'])} \u00b7 5m \u00b7 {kind} reversal \u00b7 {esc(fmt_ts(t))}</i>",
         "",
-        f"\U0001F4CA <b>Setup</b>: NY 00-04 range ${fmt_px(lo)} - ${fmt_px(hi)}; "
+        f"\U0001F4CA <b>Setup</b>: {win} range ${fmt_px(lo)} - ${fmt_px(hi)}; "
         f"5m closed beyond the {broke}, then closed back INSIDE - "
         f"failed breakout",
         "",
@@ -575,7 +603,7 @@ def process_open_trade(asset, trade, candles, last_closed_t):
     return trade, changed
 
 
-def process_candle(asset, ast, real, i, source, rng_cache):
+def process_candle(asset, ast, real, a, i, source, rng_cache):
     """Walk ONE newly closed 5m candle through the 4h-range engine."""
     sym = asset["symbol"]
     c = real[i]
@@ -588,14 +616,19 @@ def process_candle(asset, ast, real, i, source, rng_cache):
             log(f"{sym}: NY day rolled over - pending breakout cleared")
         ast["day"], ast["setup"] = str(d), None
 
-    # only trade after the range window has fully closed
-    if (close_dt.hour, close_dt.minute) <= (RANGE_HOURS, 0):
+    # only trade after the class's range window has fully closed
+    cls = asset.get("cls", "crypto")
+    _, win_end = session_window(cls)
+    if close_dt.hour * 60 + close_dt.minute <= win_end:
         return False
 
     if d not in rng_cache:
-        rng_cache[d] = day_range(real, d)
+        rng_cache[d] = day_range(real, d, cls)
     hi, lo, ready = rng_cache[d]
     if not ready:
+        return False
+    # dead-flat window: a range narrower than 0.3 x ATR is noise, not a range
+    if a[i] and (hi - lo) < RANGE_MIN_ATR * a[i]:
         return False
 
     brk = ast["setup"]
@@ -681,6 +714,7 @@ def check_asset(asset, state):
         state[sym] = ast
         return changed
 
+    a = atr(cs)
     rng_cache = {}
 
     last_closed = len(cs) - 2
@@ -690,7 +724,7 @@ def check_asset(asset, state):
     for i in range(len(cs)):
         if i > last_closed or cs[i]["t"] <= ast["last_candle_t"]:
             continue
-        ch = process_candle(asset, ast, cs, i, source, rng_cache)
+        ch = process_candle(asset, ast, cs, a, i, source, rng_cache)
         changed = changed or ch
         ast["last_candle_t"] = cs[i]["t"]
         if ast["trade"]:
