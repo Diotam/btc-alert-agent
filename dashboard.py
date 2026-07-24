@@ -116,9 +116,19 @@ def build_data():
                 else (f"{lvl:,.2f}" if lvl else "?")
             phase = z.get("note") or ("retesting" if z.get("touched")
                                       else "waiting for retest")
+            # progress from the excursion extreme back to the entry trigger
+            # (the range edge): 0% = at the extreme, 100% = at the level
+            prog = None
+            ext = z.get("ext")
+            if mid and lvl is not None and ext is not None and ext != lvl:
+                if z.get("side") == "HIGH":
+                    prog = (ext - mid) / (ext - lvl) * 100
+                else:
+                    prog = (mid - ext) / (lvl - ext) * 100
+                prog = max(0.0, min(100.0, prog))
             zones.append({"sym": sym, "dir": z["direction"],
                           "stage": f"${lvl_s} \u00b7 {phase}",
-                          "mid": mid})
+                          "mid": mid, "prog": prog})
     trades.sort(key=lambda t: t["sym"])
     zones.sort(key=lambda z: z["sym"])
     closed, pnl = closed_trades()
@@ -249,10 +259,12 @@ function render(d){
   }).join(''):'<div class="card muted">none</div>';
   document.getElementById('zones').innerHTML=d.zones.length?d.zones.map(z=>{
    const cls=z.dir==='LONG'?'long':'short';
+   const pbar=z.prog==null?'':`<div class=bar><div class=fill style="width:${z.prog}%;background:#58a6ff"></div></div>
+    <div class=muted>${Math.round(z.prog)}% of the way back to the entry trigger</div>`;
    return `<div class=card><div class=row>
     <span class=sym>${z.sym} <span class=${cls}>${z.dir}</span></span>
     <span class=muted>now <span class=num>$${px(z.mid)}</span></span></div>
-    <div class=row><span class=muted>${z.stage}</span></div></div>`
+    <div class=row><span class=muted>${z.stage}</span></div>${pbar}</div>`
   }).join(''):'<div class="card muted">none</div>';
   document.getElementById('csub').textContent=LABEL[PERIOD];
   const cut=Date.now()-DAYS[PERIOD]*86400000;
