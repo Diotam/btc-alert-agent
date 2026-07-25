@@ -88,6 +88,15 @@ SESSIONS = {"crypto": (0, 0, 4, 0),
             "stock": (9, 30, 10, 30)}
 RR = 2.0                     # TP = 2 x the stop distance
 RANGE_MIN_ATR = 0.30         # range narrower than this x ATR = untradeable day
+# price-action confirmation on the reentry candle (Plan A):
+#   * body must close AGAINST the breakout (bearish for a short, bullish long)
+#   * the candle must still have wicked beyond the level (it came from outside)
+#   * the close must land in the far REJECT_CLOSE_PCT of the candle's range
+REQUIRE_REJECTION = True
+REJECT_CLOSE_PCT = 0.40
+REQUIRE_REENTRY_VOLUME = False   # optional extra: volume >= x 20-candle average
+REENTRY_VOL_MULT = 1.0
+
 OVERRIDE_ON_NEW_SIGNAL = True # a fresh qualifying reversal REPLACES the open
                               # trade on that symbol (closed at the new entry
                               # price and booked as OVERRIDE)
@@ -438,21 +447,46 @@ def day_range(candles, d, cls):
     """High/low of 5m candles inside the class's session window on NY
     date d. Returns (hi, lo, ready)."""
     start, end = session_window(cls)
+    step = MS[TF] // 60_000            # candle length in minutes (TF-agnostic)
     hi = lo = None
     count = 0
     end_seen = False
     for c in candles:
         dt = ny_dt(c["t"])
         mins = dt.hour * 60 + dt.minute
-        if dt.date() == d and start <= mins and mins + 5 <= end:
+        if dt.date() == d and start <= mins and mins + step <= end:
             hi = c["h"] if hi is None else max(hi, c["h"])
             lo = c["l"] if lo is None else min(lo, c["l"])
             count += 1
-            if mins == end - 5:
+            if mins + step == end:
                 end_seen = True
-    expected = (end - start) // 5
+    expected = max(1, (end - start) // step)
     ready = count >= expected - max(2, expected // 6) and end_seen
     return hi, lo, ready
+
+
+def rejection_ok(c, level, short):
+    """Price-action confirmation for a reentry candle. Returns (ok, why)."""
+    rng = c["h"] - c["l"]
+    if rng <= 0:
+        return False, "flat candle"
+    if short:
+        if c["c"] >= c["o"]:
+            return False, "body is not bearish"
+        if c["h"] < level:
+            return False, "no wick back above the level"
+        pos = (c["c"] - c["l"]) / rng
+        if pos > REJECT_CLOSE_PCT:
+            return False, f"close sits {pos * 100:.0f}% up the candle"
+    else:
+        if c["c"] <= c["o"]:
+            return False, "body is not bullish"
+        if c["l"] > level:
+            return False, "no wick back below the level"
+        pos = (c["h"] - c["c"]) / rng
+        if pos > REJECT_CLOSE_PCT:
+            return False, f"close sits {pos * 100:.0f}% down the candle"
+    return True, ""
 
 
 def stage_message(asset, direction, level, px, t):
@@ -475,11 +509,12 @@ def entry_message(asset, direction, plan, hi, lo, ext, source, t):
     kind = "opening-range" if asset.get("cls") == "stock" else "4h-range"
     lines = [
         f"{e} <b>{direction} ENTRY \u00b7 {esc(asset['symbol'])}</b>",
-        f"<i>{esc(asset['label'])} \u00b7 5m \u00b7 {kind} reversal \u00b7 {esc(fmt_ts(t))}</i>",
+        f"<i>{esc(asset['label'])} \u00b7 {TF} \u00b7 {kind} reversal \u00b7 {esc(fmt_ts(t))}</i>",
         "",
         f"\U0001F4CA <b>Setup</b>: {win} range ${fmt_px(lo)} - ${fmt_px(hi)}; "
-        f"5m closed beyond the {broke}, then closed back INSIDE - "
-        f"failed breakout",
+        f"{TF} closed beyond the {broke}, then closed back INSIDE"
+        + (" on a confirmed rejection candle" if REQUIRE_REJECTION else "")
+        + " - failed breakout",
         "",
         "\U0001F4CB <b>Plan</b>",
         f"Entry: <code>${fmt_px(plan['entry'])}</code>",
@@ -687,6 +722,20 @@ def process_candle(asset, ast, real, a, i, source, rng_cache):
     # ---- closes back INSIDE with a pending breakout: the reversal entry ----
     if brk and lo <= c["c"] <= hi:
         short = brk["side"] == "HIGH"
+        lvl = brk["level"]
+        if REQUIRE_REJECTION:
+            ok, why = rejection_ok(c, lvl, short)
+            if not ok:
+                log(f"{sym}: reentry closed inside but price action unconfirmed "
+                    f"({why}) - setup stays armed")
+                return True
+        if REQUIRE_REENTRY_VOLUME:
+            window = [x["v"] for x in real[max(0, i - 20):i] if x.get("v")]
+            avg = sum(window) / len(window) if window else 0
+            if avg and c["v"] < REENTRY_VOL_MULT * avg:
+                log(f"{sym}: reentry volume {c['v'] / avg:.1f}x average - "
+                    "below the floor, setup stays armed")
+                return True
         entry = c["c"]
         stop = brk["ext"]                       # the EXACT breakout extreme
         risk = (stop - entry) if short else (entry - stop)
