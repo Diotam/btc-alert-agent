@@ -92,6 +92,8 @@ RANGE_MIN_ATR = 0.30         # range narrower than this x ATR = untradeable day
 #   * body must close AGAINST the breakout (bearish for a short, bullish long)
 #   * the candle must still have wicked beyond the level (it came from outside)
 #   * the close must land in the far REJECT_CLOSE_PCT of the candle's range
+MIN_STOP_PCT = 0.25              # skip entries whose stop sits closer than
+                                 # this % of price - sub-noise stops just churn
 REQUIRE_REJECTION = True
 REJECT_CLOSE_PCT = 0.40
 REQUIRE_REENTRY_VOLUME = False   # optional extra: volume >= x 20-candle average
@@ -741,6 +743,11 @@ def process_candle(asset, ast, real, a, i, source, rng_cache):
         risk = (stop - entry) if short else (entry - stop)
         if risk <= 0:
             ast["setup"] = None
+            return True
+        if MIN_STOP_PCT and entry and risk / entry * 100 < MIN_STOP_PCT:
+            log(f"{sym}: stop only {risk / entry * 100:.3f}% away "
+                f"(min {MIN_STOP_PCT}%) - too tight to be worth fees, "
+                "setup stays armed")
             return True
         tp = entry - RR * risk if short else entry + RR * risk
         direction = "SHORT" if short else "LONG"
