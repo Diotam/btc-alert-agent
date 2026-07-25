@@ -267,7 +267,13 @@ function render(d){
      ?Math.abs((t.tp-t.entry)/(t.entry-t.stop)):2;
    // freeze the card once TP or stop has traded - the agent confirms the
    // close on its next scan (<=5 min) and the card moves to Closed trades
-   const tpDone=t.r!=null&&t.r>=RRT, slDone=t.r!=null&&t.r<=-1;
+   // latch the freeze per trade: once TP or the stop trades, this card stops
+   // updating even if price wanders back through the level
+   const fkey=`${t.sym}:${t.opened_t}`;
+   window.__froz=window.__froz||{};
+   if(t.r!=null&&t.r>=RRT)window.__froz[fkey]='tp';
+   if(t.r!=null&&t.r<=-1)window.__froz[fkey]='sl';
+   const tpDone=window.__froz[fkey]==='tp', slDone=window.__froz[fkey]==='sl';
    const showR=tpDone?RRT:slDone?-1:t.r;
    const showPnl=tpDone?sgn*(t.tp-t.entry)/t.entry*100
      :slDone?sgn*(t.stop-t.entry)/t.entry*100:t.pnl;
@@ -285,7 +291,7 @@ function render(d){
     <div class=row><span class=sym>${t.sym} <span class=${cls}>${t.dir}</span>${t.lev?` <span class=lev>${t.lev}x</span>`:''} ${badge}</span>
     <span class="num ${showPnl>=0?'pnl-pos':'pnl-neg'}">${showPnl==null?'-':(showPnl>=0?'+':'')+showPnl.toFixed(2)+'%'}</span></div>
     <div class=row><span class=muted>entry <span class=num>$${px(t.entry)}</span></span>
-    <span class=muted>now <span class=num>$${px(t.mid)}</span></span></div>
+    <span class=muted>${tpDone||slDone?'exit':'now'} <span class=num>$${px(tpDone?t.tp:slDone?t.stop:t.mid)}</span></span></div>
     <div class=row><span class=muted>stop <span class=num>$${px(t.stop)}</span></span>
     <span class=muted>TP <span class=num>$${px(t.tp)}</span></span></div>
     <div class=bar><div class=fill style="width:${rp}%;background:${rc}"></div></div>
