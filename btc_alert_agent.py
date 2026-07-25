@@ -343,6 +343,7 @@ def discover_assets():
             coin = name if (":" in name or not dex) else f"{dex}:{name}"
             found.append({"symbol": coin, "hl_coin": coin, "vol": vol,
                           "cls": cls,
+                          "lev": u.get("maxLeverage"),
                           "label": f"{base_name(name)}-PERP"
                                    + (f" ({dex})" if dex else ""),
                           "fallbacks": []})
@@ -793,6 +794,8 @@ def check_asset(asset, state):
     ast = state.get(sym) or blank_asset_state()
     for k, v in blank_asset_state().items():
         ast.setdefault(k, v)
+    if asset.get("lev"):
+        ast["lev"] = asset["lev"]          # max leverage, for the dashboard
     changed = False
     cs = None
 
