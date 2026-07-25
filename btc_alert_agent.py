@@ -57,9 +57,9 @@ DEXES = [""]                       # fallback when dex discovery fails
 COMMODITY_TICKERS = ("XAU", "GOLD", "XAG", "SILVER", "XPT", "PLAT",
                      "XPD", "PALLAD", "CL", "OIL", "WTI", "BRENT",
                      "NG", "NATGAS", "HG", "COPPER")
-COMMODITY_MIN_VOLUME_USD = 1_000_000   # commodities trade thinner - lower floor
+COMMODITY_MIN_VOLUME_USD = 5_000_000   # commodities trade thinner - lower floor
 STOCK_DEXES = ("xyz",)                 # TradeXYZ equities venue
-STOCK_MIN_VOLUME_USD = 1_000_000
+STOCK_MIN_VOLUME_USD = 5_000_000
 ONLY = []                          # trade ONLY these symbols ([] = whole universe)
 EXCLUDE = ["PUMP"]                 # never trade these symbols - add coins here
                                    # (matches the base name on any venue)
