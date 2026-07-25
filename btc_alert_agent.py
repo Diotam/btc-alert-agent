@@ -99,6 +99,8 @@ REJECT_CLOSE_PCT = 0.40
 REQUIRE_REENTRY_VOLUME = False   # optional extra: volume >= x 20-candle average
 REENTRY_VOL_MULT = 1.0
 
+OVERRIDE_ONLY_OPPOSITE = True # only replace when the new signal REVERSES the
+                              # open trade - a same-direction signal is churn
 OVERRIDE_ON_NEW_SIGNAL = True # a fresh qualifying reversal REPLACES the open
                               # trade on that symbol (closed at the new entry
                               # price and booked as OVERRIDE)
@@ -755,6 +757,12 @@ def process_candle(asset, ast, real, a, i, source, rng_cache):
         # a fresh qualifying signal REPLACES any trade still open on this
         # symbol: book the incumbent at this candle's close, then take over
         old_trade = ast.get("trade")
+        if old_trade and OVERRIDE_ONLY_OPPOSITE \
+                and old_trade["verdict"] == direction:
+            log(f"{sym}: {direction} signal matches the open trade's "
+                "direction - not replacing it")
+            ast["setup"] = None
+            return True
         if old_trade:
             if ALERT_LIFECYCLE:
                 send_telegram(lifecycle_message(
