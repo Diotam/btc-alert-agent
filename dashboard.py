@@ -24,19 +24,49 @@ PORT = int(os.environ.get("DASH_PORT", "8080"))
 _price_cache = {"t": 0.0, "mids": {}}
 
 
+def _mids_for(dex=None):
+    """allMids for one venue. Builder venues need an explicit dex arg;
+    their keys may come back bare ('GOLD') or prefixed ('xyz:GOLD')."""
+    payload = {"type": "allMids"}
+    if dex:
+        payload["dex"] = dex
+    req = urllib.request.Request(
+        "https://api.hyperliquid.xyz/info",
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=6) as r:
+        raw = json.loads(r.read())
+    out = {}
+    for k, v in raw.items():
+        try:
+            px = float(v)
+        except (TypeError, ValueError):
+            continue
+        out[k] = px
+        if dex and ":" not in k:
+            out[f"{dex}:{k}"] = px          # match how the agent names them
+    return out
+
+
 def prices():
     if time.time() - _price_cache["t"] < 0.8:
         return _price_cache["mids"]
+    mids = {}
     try:
-        req = urllib.request.Request(
-            "https://api.hyperliquid.xyz/info",
-            data=json.dumps({"type": "allMids"}).encode(),
-            headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=6) as r:
-            mids = {k: float(v) for k, v in json.loads(r.read()).items()}
-        _price_cache.update(t=time.time(), mids=mids)
+        mids.update(_mids_for())
     except Exception:
         pass
+    # every venue that appears in state (xyz, km, ...) gets its own call
+    state, _ = read_state()
+    dexes = sorted({k.split(":")[0] for k in state
+                    if isinstance(k, str) and ":" in k and not k.startswith("_")})
+    for dex in dexes:
+        try:
+            mids.update(_mids_for(dex))
+        except Exception:
+            continue
+    if mids:
+        _price_cache.update(t=time.time(), mids=mids)
     return _price_cache["mids"]
 
 
