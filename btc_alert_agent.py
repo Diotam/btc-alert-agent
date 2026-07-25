@@ -61,6 +61,8 @@ COMMODITY_MIN_VOLUME_USD = 5_000_000   # commodities trade thinner - lower floor
 STOCK_DEXES = ("xyz",)                 # TradeXYZ equities venue
 STOCK_MIN_VOLUME_USD = 5_000_000
 ONLY = []                          # trade ONLY these symbols ([] = whole universe)
+EXCLUDE = ["PUMP"]                 # never trade these symbols - add coins here
+                                   # (matches the base name on any venue)
 MIN_DAY_VOLUME_USD = 10_000_000    # skip markets below $10M 24h notional
 MAX_ASSETS = 70
 FETCH_DELAY_S = 0.12
@@ -299,6 +301,8 @@ def discover_assets():
             except (TypeError, ValueError):
                 vol = 0.0
             name = u["name"]
+            if name.upper() in {x.upper() for x in EXCLUDE}:
+                continue
             if dex:
                 if is_commodity(name):
                     if vol < COMMODITY_MIN_VOLUME_USD:
@@ -323,11 +327,17 @@ def discover_assets():
     return found[:MAX_ASSETS]
 
 
+def _not_excluded(a):
+    base = a["symbol"].split(":")[-1].upper()
+    return base not in {x.upper() for x in EXCLUDE}
+
+
 def active_assets():
     if ONLY:
-        return [a for a in ASSETS if a["symbol"] in ONLY] or ASSETS[:1]
+        picked = [a for a in ASSETS if a["symbol"] in ONLY] or ASSETS[:1]
+        return [a for a in picked if _not_excluded(a)]
     if not DISCOVER_ALL:
-        return ASSETS
+        return [a for a in ASSETS if _not_excluded(a)]
     assets = discover_assets()
     if assets:
         crypto = sum(1 for a in assets if ":" not in a["symbol"])
