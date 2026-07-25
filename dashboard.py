@@ -304,11 +304,13 @@ function render(d){
   const cut=Date.now()-DAYS[PERIOD]*86400000;
   const shown=d.closed.filter(c=>c.t>=cut).slice(0,20);
   const icons={TP:'✅',TP2:'✅',STOP:'❌',RUNNER:'🏃'};
+  // OVERRIDE closes have no fixed outcome - the P&L decides the icon
+  const iconFor=c=>icons[c.kind]||(c.pnl_pct>=0?'✅':'❌');
   document.getElementById('closed').innerHTML=shown.length?shown.map(c=>{
    const cls=c.dir==='LONG'?'long':'short';
    const when=new Date(c.t).toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
    return `<div class=card><div class=row>
-    <span class=sym>${icons[c.kind]||''} ${c.sym} <span class=${cls}>${c.dir}</span>
+    <span class=sym>${iconFor(c)} ${c.sym} <span class=${cls}>${c.dir}</span>
     <span class=muted style="font-weight:400">${c.kind}</span></span>
     <span class="num ${c.pnl_pct>=0?'pnl-pos':'pnl-neg'}">${(c.pnl_pct>=0?'+':'')+c.pnl_pct.toFixed(2)}%</span></div>
     <div class=row><span class=muted>$${px(c.entry)} → $${px(c.exit)}</span>
