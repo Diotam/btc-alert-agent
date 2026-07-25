@@ -57,9 +57,9 @@ DEXES = [""]                       # fallback when dex discovery fails
 COMMODITY_TICKERS = ("XAU", "GOLD", "XAG", "SILVER", "XPT", "PLAT",
                      "XPD", "PALLAD", "CL", "OIL", "WTI", "BRENT",
                      "NG", "NATGAS", "HG", "COPPER")
-COMMODITY_MIN_VOLUME_USD = 5_000_000   # commodities trade thinner - lower floor
+COMMODITY_MIN_VOLUME_USD = 1_000_000   # commodities trade thinner - lower floor
 STOCK_DEXES = ("xyz",)                 # TradeXYZ equities venue
-STOCK_MIN_VOLUME_USD = 5_000_000
+STOCK_MIN_VOLUME_USD = 1_000_000
 ONLY = []                          # trade ONLY these symbols ([] = whole universe)
 EXCLUDE = ["PUMP"]                 # never trade these symbols - add coins here
                                    # (matches the base name on any venue)
@@ -88,6 +88,9 @@ SESSIONS = {"crypto": (0, 0, 4, 0),
             "stock": (9, 30, 10, 30)}
 RR = 2.0                     # TP = 2 x the stop distance
 RANGE_MIN_ATR = 0.30         # range narrower than this x ATR = untradeable day
+OVERRIDE_ON_NEW_SIGNAL = True # a fresh qualifying reversal REPLACES the open
+                              # trade on that symbol (closed at the new entry
+                              # price and booked as OVERRIDE)
 ENABLE_SHORTS = True
 
 ALERT_ENTRIES = True
@@ -489,8 +492,10 @@ def entry_message(asset, direction, plan, hi, lo, ext, source, t):
 
 def lifecycle_message(asset, kind, trade, exit_px, event_t, note):
     emoji, title, sub = {
-        "TP": ("\U0001F3C1", "TAKE PROFIT HIT", f"{RR}R target reached"),
+        "TP": ("\u2705", "TAKE PROFIT HIT", f"{RR:.0f}R target reached"),
         "STOP": ("\u274C", "STOPPED OUT", "Stop level hit"),
+        "OVERRIDE": ("\U0001F504", "TRADE REPLACED",
+                     "closed early - a fresh range signal took over"),
     }[kind]
     pnl = pnl_pct(trade, exit_px)
     return "\n".join([
@@ -691,6 +696,20 @@ def process_candle(asset, ast, real, a, i, source, rng_cache):
         tp = entry - RR * risk if short else entry + RR * risk
         direction = "SHORT" if short else "LONG"
         plan = {"entry": entry, "stop": stop, "tp": tp}
+        # a fresh qualifying signal REPLACES any trade still open on this
+        # symbol: book the incumbent at this candle's close, then take over
+        old_trade = ast.get("trade")
+        if old_trade:
+            if ALERT_LIFECYCLE:
+                send_telegram(lifecycle_message(
+                    asset, "OVERRIDE", old_trade, entry, c["t"] + MS[TF],
+                    f"replaced by a new {direction} range signal"))
+            log(f"{sym}: trade REPLACED at ${fmt_px(entry)} by a fresh "
+                f"{direction} signal")
+            record_close(sym, old_trade, entry, "OVERRIDE", c["t"] + MS[TF])
+            RUN_ALERTS.append(
+                f"{sym} trade replaced ({pnl_pct(old_trade, entry):+.2f}%)")
+            ast["trade"] = None
         if ALERT_ENTRIES:
             send_telegram(entry_message(asset, direction, plan, hi, lo,
                                         brk["ext"], source, c["t"] + MS[TF]))
@@ -711,22 +730,28 @@ def check_asset(asset, state):
     for k, v in blank_asset_state().items():
         ast.setdefault(k, v)
     changed = False
+    cs = None
 
     # ---- IN_TRADE: watch TP / stop ----------------------------------------
     if ast["trade"]:
-        source, cs = fetch(asset, TF, 30)
+        source, cs = fetch(asset, TF, 30 if not OVERRIDE_ON_NEW_SIGNAL else 300)
         if cs:
             trade, ch = process_open_trade(asset, ast["trade"], cs, cs[-2]["t"])
             ast["trade"] = trade
             changed = changed or ch
             if trade is None:
                 ast["phase"] = "SCAN"
-        RUN_STATUS.append(f"{sym} IN_TRADE" if ast["trade"] else f"{sym} SCAN")
-        state[sym] = ast
-        return changed
+        # exits win over overrides (process_open_trade ran first). Fall through
+        # to the candle walk when the trade closed just now, or when overrides
+        # are enabled and it is still open.
+        if ast["trade"] and not OVERRIDE_ON_NEW_SIGNAL:
+            RUN_STATUS.append(f"{sym} IN_TRADE")
+            state[sym] = ast
+            return changed
 
     # ---- scan / armed: process each newly closed candle --------------------
-    source, cs = fetch(asset, TF, 300)     # ~25h of 5m: covers the NY day
+    if not cs:                             # not already fetched above
+        source, cs = fetch(asset, TF, 300) # ~25h of 5m: covers the NY day
     if not cs:
         RUN_STATUS.append(f"{sym} feed failed")
         state[sym] = ast
@@ -745,8 +770,8 @@ def check_asset(asset, state):
         ch = process_candle(asset, ast, cs, a, i, source, rng_cache)
         changed = changed or ch
         ast["last_candle_t"] = cs[i]["t"]
-        if ast["trade"]:
-            break
+        if ast["trade"] and ast["trade"].get("opened_t") == cs[i]["t"]:
+            break                          # a new trade opened on this candle
 
     stage = ast["phase"]
     if ast["setup"]:
