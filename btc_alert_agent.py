@@ -5,9 +5,8 @@
 Each day, the high/low of the FIRST 4-hour window of the New York day
 (00:00-04:00 America/New_York) defines the range - marked only once the
 window has fully closed, and valid until the end of that NY day.
-Stocks use the cash-session opening range instead (09:30-10:30 NY).
 
-On 5m candles, after the window closes (mirrored for the low side):
+On 5m candles, after 04:00 NY (mirrored for the low side):
   1. BREAKOUT  a 5m candle CLOSES above the range high (wicks alone
                never count). While price stays outside, the excursion
                extreme is tracked.
@@ -18,12 +17,9 @@ On 5m candles, after the window closes (mirrored for the low side):
   Broke the LOW then reentered -> LONG, SL at the exact excursion low,
   TP 2R.
 
-Entries whose stop distance is below MIN_RISK_ATR x ATR are skipped -
-a stop tighter than the spread is a guaranteed stop-out, not a trade.
-
 One live trade per asset; after it closes, a fresh breakout can arm the
 same range again. At NY midnight everything resets and waits for the
-new day's range.
+new day's 04:00 range.
 
 Exits: TP or SL, with intrabar detection. Closes recorded to trades.log.
 
@@ -42,6 +38,7 @@ import os
 import sys
 import time
 import urllib.request
+import zlib
 from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -49,6 +46,7 @@ from zoneinfo import ZoneInfo
 # ============================= CONFIG ======================================
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+
 
 
 # --- Asset universe -------------------------------------------------------
@@ -59,11 +57,11 @@ DEXES = [""]                       # fallback when dex discovery fails
 COMMODITY_TICKERS = ("XAU", "GOLD", "XAG", "SILVER", "XPT", "PLAT",
                      "XPD", "PALLAD", "CL", "OIL", "WTI", "BRENT",
                      "NG", "NATGAS", "HG", "COPPER")
-COMMODITY_MIN_VOLUME_USD = 5_000_000   # commodities trade thinner - lower floor
+COMMODITY_MIN_VOLUME_USD = 1_000_000   # commodities trade thinner - lower floor
 STOCK_DEXES = ("xyz",)                 # TradeXYZ equities venue
-STOCK_MIN_VOLUME_USD = 5_000_000
+STOCK_MIN_VOLUME_USD = 1_000_000
 ONLY = []                          # trade ONLY these symbols ([] = whole universe)
-EXCLUDE = ["PUMP", "CASHCAT"]      # never trade these symbols - add coins here
+EXCLUDE = ["PUMP"]                 # never trade these symbols - add coins here
                                    # (matches the base name on any venue)
 MIN_DAY_VOLUME_USD = 10_000_000    # skip markets below $10M 24h notional
 MAX_ASSETS = 70
@@ -71,7 +69,7 @@ FETCH_DELAY_S = 0.12
 REQUEST_TIMEOUT_S = 8              # fail fast: a throttled API must not burn 20s
 RUN_BUDGET_S = 480                 # hard per-run budget; remaining assets resume
                                    # next run via a rotating cursor
-REPLAY_CANDLES = 3                 # candles replayed per run (covers any run gap)
+MAX_ZONES = 20                     # cap concurrently open reversal zones
 
 ASSETS = [                         # used when DISCOVER_ALL = False / discovery fails
     {"symbol": "BTC", "label": "BTC-PERP", "hl_coin": "BTC",
@@ -89,11 +87,7 @@ SESSIONS = {"crypto": (0, 0, 4, 0),
             "commodity": (0, 0, 4, 0),
             "stock": (9, 30, 10, 30)}
 RR = 2.0                     # TP = 2 x the stop distance
-# NOTE: both thresholds below are measured in units of the EXECUTION-timeframe
-# ATR (5m). A genuine 4h range spans many 5m ATRs, so RANGE_MIN_ATR has to be
-# well above 1 to filter anything at all.
-RANGE_MIN_ATR = 6.0          # range narrower than this x 5m ATR = dead-flat day
-MIN_RISK_ATR = 0.5           # skip entries whose stop is tighter than this x ATR
+RANGE_MIN_ATR = 0.30         # range narrower than this x ATR = untradeable day
 ENABLE_SHORTS = True
 
 ALERT_ENTRIES = True
@@ -115,8 +109,11 @@ if TF not in MS:
                      f"use one of {sorted(MS)}")
 LOOKBACK = {"5m": 300, "15m": 400, "30m": 400, "1h": 200}
 
-TF_MINUTES = MS[TF] // 60_000
-
+REQUEST_TIMEOUT_S = 8              # fail fast: a throttled API must not burn 20s
+RUN_BUDGET_S = 480                 # hard per-run budget; remaining assets resume
+                                   # next run via a rotating cursor
+FETCH_DELAY_S = 0.12
+REPLAY_CANDLES = 3                 # candles replayed per run (covers any run gap)
 
 def fmt_ts(ms, fmt="%Y-%m-%d %I:%M %p %Z"):
     return datetime.fromtimestamp(ms / 1000, tz=LOCAL_TZ).strftime(fmt)
@@ -276,8 +273,14 @@ def list_dexes():
     return DEXES
 
 
+def base_name(name):
+    """Strip any venue prefix Hyperliquid already includes ('xyz:GOLD')
+    and kGOLD-style multipliers, leaving the bare ticker."""
+    return name.split(":")[-1].upper().lstrip("K")
+
+
 def is_commodity(name):
-    base = name.upper().lstrip("K")        # kGOLD-style multipliers
+    base = base_name(name)
     return any(base.startswith(t) for t in COMMODITY_TICKERS)
 
 
@@ -304,7 +307,7 @@ def discover_assets():
             except (TypeError, ValueError):
                 vol = 0.0
             name = u["name"]
-            if name.upper() in {x.upper() for x in EXCLUDE}:
+            if base_name(name) in {base_name(x) for x in EXCLUDE}:
                 continue
             if dex:
                 if is_commodity(name):
@@ -321,18 +324,18 @@ def discover_assets():
                 if vol < MIN_DAY_VOLUME_USD:
                     continue
                 cls = "crypto"
-            coin = f"{dex}:{name}" if dex else name
+            coin = name if (":" in name or not dex) else f"{dex}:{name}"
             found.append({"symbol": coin, "hl_coin": coin, "vol": vol,
                           "cls": cls,
-                          "label": f"{name}-PERP" + (f" ({dex})" if dex else ""),
+                          "label": f"{base_name(name)}-PERP"
+                                   + (f" ({dex})" if dex else ""),
                           "fallbacks": []})
     found.sort(key=lambda a: a["vol"], reverse=True)
     return found[:MAX_ASSETS]
 
 
 def _not_excluded(a):
-    base = a["symbol"].split(":")[-1].upper()
-    return base not in {x.upper() for x in EXCLUDE}
+    return base_name(a["symbol"]) not in {base_name(x) for x in EXCLUDE}
 
 
 def active_assets():
@@ -344,9 +347,11 @@ def active_assets():
     assets = discover_assets()
     if assets:
         crypto = sum(1 for a in assets if ":" not in a["symbol"])
-        log(f"Discovered {len(assets)} markets above "
-            f"${MIN_DAY_VOLUME_USD:,.0f} 24h volume "
-            f"({crypto} crypto, {len(assets) - crypto} stocks/indices)")
+        n_com = sum(1 for a in assets if a.get("cls") == "commodity")
+        n_stk = sum(1 for a in assets if a.get("cls") == "stock")
+        log(f"Discovered {len(assets)} markets: {crypto} crypto "
+            f"(>= ${MIN_DAY_VOLUME_USD:,.0f}), {n_com} commodities, "
+            f"{n_stk} stocks")
         return assets
     log("Discovery returned nothing - falling back to manual ASSETS list.")
     return ASSETS
@@ -427,23 +432,22 @@ def session_window(cls):
 
 
 def day_range(candles, d, cls):
-    """High/low of execution-TF candles inside the class's session window on
-    NY date d. Returns (hi, lo, ready)."""
+    """High/low of 5m candles inside the class's session window on NY
+    date d. Returns (hi, lo, ready)."""
     start, end = session_window(cls)
-    step = TF_MINUTES
     hi = lo = None
     count = 0
     end_seen = False
     for c in candles:
         dt = ny_dt(c["t"])
         mins = dt.hour * 60 + dt.minute
-        if dt.date() == d and start <= mins and mins + step <= end:
+        if dt.date() == d and start <= mins and mins + 5 <= end:
             hi = c["h"] if hi is None else max(hi, c["h"])
             lo = c["l"] if lo is None else min(lo, c["l"])
             count += 1
-            if mins == end - step:
+            if mins == end - 5:
                 end_seen = True
-    expected = (end - start) // step
+    expected = (end - start) // 5
     ready = count >= expected - max(2, expected // 6) and end_seen
     return hi, lo, ready
 
@@ -466,10 +470,9 @@ def entry_message(asset, direction, plan, hi, lo, ext, source, t):
     h1, m1, h2, m2 = SESSIONS.get(asset.get("cls", "crypto"), SESSIONS["crypto"])
     win = f"NY {h1:02d}:{m1:02d}-{h2:02d}:{m2:02d}"
     kind = "opening-range" if asset.get("cls") == "stock" else "4h-range"
-    risk_pct = abs(plan["stop"] - plan["entry"]) / plan["entry"] * 100
     lines = [
         f"{e} <b>{direction} ENTRY \u00b7 {esc(asset['symbol'])}</b>",
-        f"<i>{esc(asset['label'])} \u00b7 {esc(fmt_ts(t))} \u00b7 {kind} reversal</i>",
+        f"<i>{esc(asset['label'])} \u00b7 5m \u00b7 {kind} reversal \u00b7 {esc(fmt_ts(t))}</i>",
         "",
         f"\U0001F4CA <b>Setup</b>: {win} range ${fmt_px(lo)} - ${fmt_px(hi)}; "
         f"5m closed beyond the {broke}, then closed back INSIDE - "
@@ -477,8 +480,7 @@ def entry_message(asset, direction, plan, hi, lo, ext, source, t):
         "",
         "\U0001F4CB <b>Plan</b>",
         f"Entry: <code>${fmt_px(plan['entry'])}</code>",
-        f"Stop:  <code>${fmt_px(plan['stop'])}</code>  "
-        f"(exact breakout extreme \u00b7 {risk_pct:.2f}% risk)",
+        f"Stop:  <code>${fmt_px(plan['stop'])}</code>  (exact breakout extreme)",
         f"TP:    <code>${fmt_px(plan['tp'])}</code>  ({RR:.0f}x the stop distance)",
         f"<i>data: {esc(source)}</i>",
     ]
@@ -643,14 +645,14 @@ def process_candle(asset, ast, real, a, i, source, rng_cache):
     hi, lo, ready = rng_cache[d]
     if not ready:
         return False
-    # dead-flat window: a range narrower than RANGE_MIN_ATR x ATR is noise
+    # dead-flat window: a range narrower than 0.3 x ATR is noise, not a range
     if a[i] and (hi - lo) < RANGE_MIN_ATR * a[i]:
         return False
 
     brk = ast["setup"]
 
     # ---- closes OUTSIDE the range: register / extend the breakout ----------
-    if c["c"] > hi and ENABLE_SHORTS:
+    if c["c"] > hi:
         if brk and brk["side"] == "HIGH":
             brk["ext"] = max(brk["ext"], c["h"])
         else:
@@ -663,7 +665,7 @@ def process_candle(asset, ast, real, a, i, source, rng_cache):
             if ALERT_STAGES:
                 send_telegram(stage_message(asset, "SHORT", hi, c["c"], c["t"]))
         return True
-    if c["c"] < lo:
+    if c["c"] < lo and ENABLE_SHORTS is not None:      # lows always tracked
         if brk and brk["side"] == "LOW":
             brk["ext"] = min(brk["ext"], c["l"])
         else:
@@ -683,14 +685,7 @@ def process_candle(asset, ast, real, a, i, source, rng_cache):
         entry = c["c"]
         stop = brk["ext"]                       # the EXACT breakout extreme
         risk = (stop - entry) if short else (entry - stop)
-        # a stop tighter than MIN_RISK_ATR x ATR is inside the noise/spread:
-        # it is a guaranteed stop-out, not a trade. Skip it.
-        min_risk = MIN_RISK_ATR * (a[i] or 0)
-        if risk <= 0 or risk < min_risk:
-            if risk > 0:
-                log(f"{sym}: reentry skipped - stop only "
-                    f"{risk / entry * 100:.3f}% away, below the "
-                    f"{MIN_RISK_ATR}x ATR floor")
+        if risk <= 0:
             ast["setup"] = None
             return True
         tp = entry - RR * risk if short else entry + RR * risk
@@ -840,7 +835,7 @@ def seconds_to_next_close(buffer_s=15):
 
 
 def run_loop():
-    log("4h-range reversal agent started (loop mode). Ctrl+C to stop.")
+    log("3MA + fractal agent started (loop mode). Ctrl+C to stop.")
     check_once()
     while True:
         wait = seconds_to_next_close()
@@ -868,8 +863,7 @@ if __name__ == "__main__":
                       f"Your alert pipeline works. Watching: {esc(watched)}.\n"
                       f"Strategy: 4h range (NY 00:00-04:00) - 5m close "
                       "outside the range, then a close back INSIDE enters "
-                      f"the reversal; SL at the exact breakout extreme, TP {RR:.0f}R. "
-                      f"Stops tighter than {MIN_RISK_ATR}x ATR are skipped.")
+                      f"the reversal; SL at the exact breakout extreme, TP {RR:.0f}R.")
         print("Test message sent to Telegram.")
     elif "--loop" in sys.argv:
         run_loop()
