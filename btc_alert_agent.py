@@ -61,7 +61,7 @@ COMMODITY_MIN_VOLUME_USD = 5_000_000   # commodities trade thinner - lower floor
 STOCK_DEXES = ("xyz",)                 # TradeXYZ equities venue
 STOCK_MIN_VOLUME_USD = 5_000_000
 ONLY = []                          # trade ONLY these symbols ([] = whole universe)
-EXCLUDE = ["PUMP"]                 # never trade these symbols - add coins here
+EXCLUDE = ["PUMP", “CASHCAT”]                 # never trade these symbols - add coins here
                                    # (matches the base name on any venue)
 MIN_DAY_VOLUME_USD = 10_000_000    # skip markets below $10M 24h notional
 MAX_ASSETS = 70
