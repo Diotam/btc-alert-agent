@@ -97,7 +97,7 @@ RANGE_MIN_ATR = 0.30         # range narrower than this x ATR = untradeable day
 #   * body must close AGAINST the breakout (bearish for a short, bullish long)
 #   * the candle must still have wicked beyond the level (it came from outside)
 #   * the close must land in the far REJECT_CLOSE_PCT of the candle's range
-MIN_STOP_PCT = 0.25              # skip entries whose stop sits closer than
+MIN_STOP_PCT = 0.50              # skip entries whose stop sits closer than
                                  # this % of price - sub-noise stops just churn
 REQUIRE_REJECTION = True
 REJECT_CLOSE_PCT = 0.40
