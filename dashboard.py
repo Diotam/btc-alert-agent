@@ -176,12 +176,16 @@ def build_data():
             swing = zz.get("swing")
             edge = top if long_ else bot
             band = abs(edge - swing) if (edge is not None and swing) else None
-            prog = None
-            if zz.get("touched"):
-                prog = 100.0
+            # step 1: flipped, waiting for the pullback (fill 10-60% by how
+            # close price is)   step 2: pulled back, waiting for the candle
+            step = 2 if zz.get("touched") else 1
+            prog = 10.0
+            if step == 2:
+                prog = 80.0
             elif mid and edge is not None and band:
                 gap = (mid - edge) if long_ else (edge - mid)
-                prog = max(0.0, min(100.0, (1 - gap / band) * 100))
+                approach = max(0.0, min(1.0, 1 - gap / band))
+                prog = 10.0 + 50.0 * approach
             lvl_s = f"{edge:,.6f}".rstrip("0").rstrip(".") if edge and edge < 1 \
                 else (f"{edge:,.2f}" if edge else "?")
             stage = ("pulled back into the HA "
@@ -194,7 +198,7 @@ def build_data():
             zones.append({"sym": sym, "dir": zz.get("dir"),
                           "lev": ast.get("lev"),
                           "stage": f"${lvl_s} \u00b7 {stage}",
-                          "mid": mid, "prog": prog})
+                          "mid": mid, "prog": prog, "step": step})
         z = ast.get("setup")
         if z:
             lvl = z.get("level")
@@ -357,8 +361,16 @@ function render(d){
   }).join(''):'<div class="card muted">none</div>';
   document.getElementById('zones').innerHTML=d.zones.length?d.zones.map(z=>{
    const cls=z.dir==='LONG'?'long':'short';
-   const pbar=z.prog==null?'':`<div class=bar><div class=fill style="width:${z.prog}%;background:#58a6ff"></div></div>
-    <div class=muted>${Math.round(z.prog)}% of the way back to the entry trigger</div>`;
+   const names=['HA flip','pullback','confirm candle'];
+   const st=z.step||1;
+   const chips=names.map((s,n)=>{
+     const done=st>n+1, cur=st===n+1;
+     const col=done?'#3fb950':(cur?'#58a6ff':'#484f58');
+     return `<span style="color:${col}">${done?'✓':(cur?'▸':'·')} ${s}</span>`;
+   }).join(' <span style="color:#30363d">→</span> ');
+   const pbar=z.prog==null?`<div class=muted style="margin-top:6px">${chips}</div>`
+    :`<div class=bar><div class=fill style="width:${z.prog}%;background:#58a6ff"></div></div>
+      <div class=muted>step ${st} of 3 &nbsp; ${chips}</div>`;
    return `<div class=card><div class=row>
     <span class=sym>${z.sym} <span class=${cls}>${z.dir}</span>${z.lev?` <span class=lev>${z.lev}x</span>`:''}</span>
     <span class=muted>now <span class=num>$${px(z.mid)}</span></span></div>
