@@ -55,7 +55,7 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 # --- Asset universe -------------------------------------------------------
 DISCOVER_ALL = True
-DISCOVER_DEXES = True              # scan HIP-3 builder dexes too - but only
+DISCOVER_DEXES = False              # scan HIP-3 builder dexes too - but only
                                    # commodity markets are admitted from them
 DEXES = [""]                       # fallback when dex discovery fails
 COMMODITY_TICKERS = ("XAU", "GOLD", "XAG", "SILVER", "XPT", "PLAT",
@@ -67,7 +67,7 @@ STOCK_MIN_VOLUME_USD = 5_000_000
 ONLY = []                          # trade ONLY these symbols ([] = whole universe)
 EXCLUDE = ["PUMP"]                 # never trade these symbols - add coins here
                                    # (matches the base name on any venue)
-MIN_DAY_VOLUME_USD = 5_000_000     # skip markets below $5M 24h notional
+MIN_DAY_VOLUME_USD = 5_000_000     # skip markets below $10M 24h notional
 MAX_ASSETS = 70
 FETCH_DELAY_S = 0.12
 REQUEST_TIMEOUT_S = 8              # fail fast: a throttled API must not burn 20s
@@ -79,7 +79,7 @@ ASSETS = [                         # used when DISCOVER_ALL = False / discovery 
 ]
 
 # --- Strategy dials -------------------------------------------------------
-TF = "5m"                    # execution timeframe (the spec is 5m closes)
+TF = "15m"                    # execution timeframe (the spec is 5m closes)
 RANGE_TZ = "America/New_York"
 # session windows per asset class (NY h:m start -> h:m end):
 #   crypto & commodities: the first 4h of the NY day (overnight range)
