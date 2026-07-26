@@ -1,30 +1,35 @@
 #!/usr/bin/env python3
 """
-4-HOUR RANGE AGENT (New York session false-breakout reversals)
----------------------------------------------------------------
-Each day, the high/low of the FIRST 4-HOUR CANDLE of the New York day
-defines the range - marked only once that candle has fully closed, and
-valid until the end of that NY day. Exchange 4h candles are UTC-aligned,
-so the window is the first 4h boundary at or after NY midnight:
-00:00-04:00 NY while New York is on EDT, 03:00-07:00 NY on EST.
-(Stocks instead use the 09:30-10:30 cash-session opening range.)
+4-HOUR RANGE AGENT (New York session reversals, Heikin Ashi confirmed)
+-----------------------------------------------------------------------
+The high/low of the FIRST 4-HOUR CANDLE of the New York day defines the
+range - marked once that candle closes, valid until NY midnight. Exchange
+4h candles are UTC-aligned, so the window is the first 4h boundary at or
+after NY midnight: 00:00-04:00 NY on EDT, 03:00-07:00 NY on EST. Stocks
+instead use the 09:30-10:30 cash-session opening range.
 
-On 5m candles, after 04:00 NY (mirrored for the low side):
-  1. BREAKOUT  a 5m candle CLOSES above the range high (wicks alone
-               never count). While price stays outside, the excursion
-               extreme is tracked.
-  2. REENTRY   a 5m candle CLOSES back inside the range
-               -> SHORT at that close (the breakout failed)
-               SL = the exact breakout extreme (no pad)
-               TP = 2 x the stop distance
-  Broke the LOW then reentered -> LONG, SL at the exact excursion low,
-  TP 2R.
+PATHWAY 1 - failed breakout (5m closes, wicks never count):
+  1. a candle CLOSES outside the range; while price stays outside, the
+     excursion extreme is tracked
+  2. a candle CLOSES back inside
+  3. then wait for HA_CONFIRM_CANDLES consecutive LARGE Heikin Ashi
+     candles with no wick on the trade side:
+        broke the HIGH -> bearish HA candles, no UPPER wicks -> SHORT
+        broke the LOW  -> bullish HA candles, no LOWER wicks -> LONG
+     Entry at that candle's close. SL = the exact excursion extreme,
+     TP = 2 x the stop distance.
 
-One live trade per asset; after it closes, a fresh breakout can arm the
-same range again. At NY midnight everything resets and waits for the
-new day's 04:00 range.
+PATHWAY 2 - inside the range (DOJI_ENTRY):
+  while price trades inside the range, an HA doji arms the same HA
+  confirmation in either direction. SL = the extreme reached since the
+  doji, TP = 2 x the stop distance.
 
-Exits: TP or SL, with intrabar detection. Closes recorded to trades.log.
+Entries also need a stop at least MIN_STOP_PCT of price away, and a range
+at least RANGE_MIN_ATR x ATR wide.
+
+Exits: TP or SL, with intrabar detection. An opposite-direction signal
+replaces an open trade; same-direction signals are ignored. Closes are
+recorded to trades.log.
 
 Alerts are delivered to Telegram. Config from environment variables
 (GitHub repo Secrets):
@@ -66,7 +71,7 @@ STOCK_MIN_VOLUME_USD = 5_000_000
 ONLY = []                          # trade ONLY these symbols ([] = whole universe)
 EXCLUDE = ["PUMP"]                 # never trade these symbols - add coins here
                                    # (matches the base name on any venue)
-MIN_DAY_VOLUME_USD = 5_000_000     # skip markets below $5M 24h notional
+MIN_DAY_VOLUME_USD = 10_000_000    # skip markets below $10M 24h notional
 MAX_ASSETS = 70
 FETCH_DELAY_S = 0.12
 REQUEST_TIMEOUT_S = 8              # fail fast: a throttled API must not burn 20s
@@ -93,16 +98,20 @@ SESSIONS = {"crypto": (0, 0, 4, 0),
             "stock": (9, 30, 10, 30)}
 RR = 2.0                     # TP = 2 x the stop distance
 RANGE_MIN_ATR = 0.30         # range narrower than this x ATR = untradeable day
-# price-action confirmation on the reentry candle (Plan A):
-#   * body must close AGAINST the breakout (bearish for a short, bullish long)
-#   * the candle must still have wicked beyond the level (it came from outside)
-#   * the close must land in the far REJECT_CLOSE_PCT of the candle's range
-MIN_STOP_PCT = 0.50              # skip entries whose stop sits closer than
+MIN_STOP_PCT = 0.25              # skip entries whose stop sits closer than
                                  # this % of price - sub-noise stops just churn
-REQUIRE_REJECTION = True
-REJECT_CLOSE_PCT = 0.40
-REQUIRE_REENTRY_VOLUME = False   # optional extra: volume >= x 20-candle average
-REENTRY_VOL_MULT = 1.0
+
+# Heikin Ashi entry confirmation:
+#   SHORT wants HA_CONFIRM_CANDLES consecutive LARGE bearish HA candles with
+#   no UPPER wicks; LONG wants large bullish HA candles with no LOWER wicks.
+HA_CONFIRM_CANDLES = 2
+HA_BODY_MIN_ATR = 0.50           # "large" = HA body at least this x ATR
+HA_WICK_TOL_ATR = 0.05           # "no wick" allowance (exact zeros are rare)
+# second pathway: while price trades INSIDE the range, a doji arms the same
+# HA confirmation in either direction
+DOJI_ENTRY = True
+HA_DOJI_BODY_ATR = 0.15          # HA body this small counts as a doji
+DOJI_TTL = 12                    # candles a doji stays valid
 
 OVERRIDE_ONLY_OPPOSITE = True # only replace when the new signal REVERSES the
                               # open trade - a same-direction signal is churn
@@ -442,6 +451,50 @@ def send_telegram(text):
         raise RuntimeError(f"Telegram send failed: {resp.get('description')}")
 
 
+# ------------------------------ heikin ashi --------------------------------
+def heikin_ashi(candles):
+    """Standard HA series, aligned 1:1 with the input candles."""
+    out = []
+    for c in candles:
+        hc = (c["o"] + c["h"] + c["l"] + c["c"]) / 4
+        ho = (c["o"] + c["c"]) / 2 if not out \
+            else (out[-1]["o"] + out[-1]["c"]) / 2
+        out.append({"t": c["t"], "o": ho, "c": hc,
+                    "h": max(c["h"], ho, hc), "l": min(c["l"], ho, hc)})
+    return out
+
+
+def ha_strong(hac, atr_i, short):
+    """A LARGE HA candle with no wick on the trade side: shorts want a big
+    bearish body with no upper wick, longs a big bullish body with no lower
+    wick."""
+    if not atr_i:
+        return False
+    if abs(hac["c"] - hac["o"]) < HA_BODY_MIN_ATR * atr_i:
+        return False
+    if short and hac["c"] >= hac["o"]:
+        return False
+    if not short and hac["c"] <= hac["o"]:
+        return False
+    tol = HA_WICK_TOL_ATR * atr_i
+    if short:
+        return hac["h"] - max(hac["o"], hac["c"]) <= tol
+    return min(hac["o"], hac["c"]) - hac["l"] <= tol
+
+
+def ha_confirmed(ha, a, i, short):
+    """HA_CONFIRM_CANDLES consecutive strong candles ending at index i."""
+    if i + 1 < HA_CONFIRM_CANDLES:
+        return False
+    return all(ha_strong(ha[i - k], a[i - k], short)
+               for k in range(HA_CONFIRM_CANDLES))
+
+
+def ha_doji(hac, atr_i):
+    """Indecision: an HA body small relative to ATR."""
+    return bool(atr_i) and abs(hac["c"] - hac["o"]) <= HA_DOJI_BODY_ATR * atr_i
+
+
 # ----------------------------- 4h range engine ------------------------------
 NY_TZ = ZoneInfo(RANGE_TZ)
 
@@ -486,30 +539,6 @@ def day_range(candles, d, cls):
     return hi, lo, ready
 
 
-def rejection_ok(c, level, short):
-    """Price-action confirmation for a reentry candle. Returns (ok, why)."""
-    rng = c["h"] - c["l"]
-    if rng <= 0:
-        return False, "flat candle"
-    if short:
-        if c["c"] >= c["o"]:
-            return False, "body is not bearish"
-        if c["h"] < level:
-            return False, "no wick back above the level"
-        pos = (c["c"] - c["l"]) / rng
-        if pos > REJECT_CLOSE_PCT:
-            return False, f"close sits {pos * 100:.0f}% up the candle"
-    else:
-        if c["c"] <= c["o"]:
-            return False, "body is not bullish"
-        if c["l"] > level:
-            return False, "no wick back below the level"
-        pos = (c["h"] - c["c"]) / rng
-        if pos > REJECT_CLOSE_PCT:
-            return False, f"close sits {pos * 100:.0f}% down the candle"
-    return True, ""
-
-
 def stage_message(asset, direction, level, px, t):
     e = "\U0001F534" if direction == "SHORT" else "\U0001F7E2"
     side = "high" if direction == "SHORT" else "low"
@@ -522,29 +551,25 @@ def stage_message(asset, direction, level, px, t):
     ])
 
 
-def entry_message(asset, direction, plan, hi, lo, ext, source, t):
+def entry_message(asset, direction, plan, hi, lo, source, t, trigger):
     e = "\U0001F7E2" if direction == "LONG" else "\U0001F534"
-    broke = "high" if direction == "SHORT" else "low"
     cls = asset.get("cls", "crypto")
     s_ms, e_ms = window_ms(ny_dt(t).date(), cls)
     win = f"NY {ny_dt(s_ms):%H:%M}-{ny_dt(e_ms):%H:%M}"
     kind = "opening-range" if cls == "stock" else "first 4h candle"
-    lines = [
+    return "\n".join([
         f"{e} <b>{direction} ENTRY \u00b7 {esc(asset['symbol'])}</b>",
-        f"<i>{esc(asset['label'])} \u00b7 {TF} \u00b7 {kind} reversal \u00b7 {esc(fmt_ts(t))}</i>",
+        f"<i>{esc(asset['label'])} \u00b7 {TF} \u00b7 {kind} \u00b7 {esc(fmt_ts(t))}</i>",
         "",
         f"\U0001F4CA <b>Setup</b>: {win} range ${fmt_px(lo)} - ${fmt_px(hi)}; "
-        f"{TF} closed beyond the {broke}, then closed back INSIDE"
-        + (" on a confirmed rejection candle" if REQUIRE_REJECTION else "")
-        + " - failed breakout",
+        f"{esc(trigger)}",
         "",
         "\U0001F4CB <b>Plan</b>",
         f"Entry: <code>${fmt_px(plan['entry'])}</code>",
-        f"Stop:  <code>${fmt_px(plan['stop'])}</code>  (exact breakout extreme)",
+        f"Stop:  <code>${fmt_px(plan['stop'])}</code>",
         f"TP:    <code>${fmt_px(plan['tp'])}</code>  ({RR:.0f}x the stop distance)",
         f"<i>data: {esc(source)}</i>",
-    ]
-    return "\n".join(lines)
+    ])
 
 
 def lifecycle_message(asset, kind, trade, exit_px, event_t, note):
@@ -605,7 +630,8 @@ def record_close(sym, trade, exit_px, kind, t_event=None):
 
 
 def blank_asset_state():
-    return {"phase": "SCAN", "last_candle_t": 0, "setup": None, "trade": None}
+    return {"phase": "SCAN", "last_candle_t": 0, "setup": None, "trade": None,
+            "doji": None}
 
 
 # ------------------------------- agent ------------------------------------
@@ -683,7 +709,55 @@ def process_open_trade(asset, trade, candles, last_closed_t):
     return trade, changed
 
 
-def process_candle(asset, ast, real, a, i, source, rng_cache):
+def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger):
+    """Risk checks, override handling, alert and trade creation. Returns True
+    if a trade was opened."""
+    sym = asset["symbol"]
+    short = direction == "SHORT"
+    entry = c["c"]
+    risk = (stop - entry) if short else (entry - stop)
+    if risk <= 0:
+        return False
+    if MIN_STOP_PCT and entry and risk / entry * 100 < MIN_STOP_PCT:
+        log(f"{sym}: stop only {risk / entry * 100:.3f}% away "
+            f"(min {MIN_STOP_PCT}%) - too tight to be worth fees, waiting")
+        return False
+    tp = entry - RR * risk if short else entry + RR * risk
+    plan = {"entry": entry, "stop": stop, "tp": tp}
+    event_t = c["t"] + MS[TF]
+
+    old_trade = ast.get("trade")
+    if old_trade and OVERRIDE_ONLY_OPPOSITE \
+            and old_trade["verdict"] == direction:
+        log(f"{sym}: {direction} signal matches the open trade's direction "
+            "- not replacing it")
+        ast["setup"], ast["doji"] = None, None
+        return False
+    if old_trade:
+        if ALERT_LIFECYCLE:
+            send_telegram(lifecycle_message(
+                asset, "OVERRIDE", old_trade, entry, event_t,
+                f"replaced by a new {direction} range signal"))
+        log(f"{sym}: trade REPLACED at ${fmt_px(entry)} by a fresh "
+            f"{direction} signal")
+        record_close(sym, old_trade, entry, "OVERRIDE", event_t)
+        RUN_ALERTS.append(
+            f"{sym} trade replaced ({pnl_pct(old_trade, entry):+.2f}%)")
+        ast["trade"] = None
+
+    if ALERT_ENTRIES:
+        send_telegram(entry_message(asset, direction, plan, hi, lo, source,
+                                    event_t, trigger))
+    log(f"ALERT SENT -> telegram: {sym} {direction} ENTRY @ "
+        f"${fmt_px(entry)} ({trigger})")
+    RUN_ALERTS.append(f"{sym} {direction} entry @ ${fmt_px(entry)}")
+    ast["trade"] = {"verdict": direction, "entry": entry, "stop": stop,
+                    "tp": tp, "opened_t": c["t"], "checked_t": c["t"]}
+    ast["phase"], ast["setup"], ast["doji"] = "IN_TRADE", None, None
+    return True
+
+
+def process_candle(asset, ast, real, ha, a, i, source, rng_cache):
     """Walk ONE newly closed 5m candle through the 4h-range engine."""
     sym = asset["symbol"]
     c = real[i]
@@ -694,7 +768,7 @@ def process_candle(asset, ast, real, a, i, source, rng_cache):
     if ast.get("day") != str(d):
         if ast.get("setup"):
             log(f"{sym}: NY day rolled over - pending breakout cleared")
-        ast["day"], ast["setup"] = str(d), None
+        ast["day"], ast["setup"], ast["doji"] = str(d), None, None
 
     # only trade after the class's range window has fully closed
     cls = asset.get("cls", "crypto")
@@ -717,9 +791,10 @@ def process_candle(asset, ast, real, a, i, source, rng_cache):
     if c["c"] > hi:
         if brk and brk["side"] == "HIGH":
             brk["ext"] = max(brk["ext"], c["h"])
+            brk["reentered"] = False       # left the range again: reconfirm
         else:
             ast["setup"] = {"side": "HIGH", "direction": "SHORT",
-                            "level": hi, "ext": c["h"],
+                            "level": hi, "ext": c["h"], "reentered": False,
                             "note": f"closed above 4h-range high - a close "
                                     f"back inside triggers the SHORT"}
             log(f"{sym}: 5m closed ABOVE the 4h-range high ${fmt_px(hi)} - "
@@ -730,9 +805,10 @@ def process_candle(asset, ast, real, a, i, source, rng_cache):
     if c["c"] < lo and ENABLE_SHORTS is not None:      # lows always tracked
         if brk and brk["side"] == "LOW":
             brk["ext"] = min(brk["ext"], c["l"])
+            brk["reentered"] = False       # left the range again: reconfirm
         else:
             ast["setup"] = {"side": "LOW", "direction": "LONG",
-                            "level": lo, "ext": c["l"],
+                            "level": lo, "ext": c["l"], "reentered": False,
                             "note": f"closed below 4h-range low - a close "
                                     f"back inside triggers the LONG"}
             log(f"{sym}: 5m closed BELOW the 4h-range low ${fmt_px(lo)} - "
@@ -741,68 +817,47 @@ def process_candle(asset, ast, real, a, i, source, rng_cache):
                 send_telegram(stage_message(asset, "LONG", lo, c["c"], c["t"]))
         return True
 
-    # ---- closes back INSIDE with a pending breakout: the reversal entry ----
+    # ---- pending breakout: reentry, then HA confirmation ------------------
     if brk and lo <= c["c"] <= hi:
         short = brk["side"] == "HIGH"
-        lvl = brk["level"]
-        if REQUIRE_REJECTION:
-            ok, why = rejection_ok(c, lvl, short)
-            if not ok:
-                log(f"{sym}: reentry closed inside but price action unconfirmed "
-                    f"({why}) - setup stays armed")
-                return True
-        if REQUIRE_REENTRY_VOLUME:
-            window = [x["v"] for x in real[max(0, i - 20):i] if x.get("v")]
-            avg = sum(window) / len(window) if window else 0
-            if avg and c["v"] < REENTRY_VOL_MULT * avg:
-                log(f"{sym}: reentry volume {c['v'] / avg:.1f}x average - "
-                    "below the floor, setup stays armed")
-                return True
-        entry = c["c"]
-        stop = brk["ext"]                       # the EXACT breakout extreme
-        risk = (stop - entry) if short else (entry - stop)
-        if risk <= 0:
-            ast["setup"] = None
-            return True
-        if MIN_STOP_PCT and entry and risk / entry * 100 < MIN_STOP_PCT:
-            log(f"{sym}: stop only {risk / entry * 100:.3f}% away "
-                f"(min {MIN_STOP_PCT}%) - too tight to be worth fees, "
-                "setup stays armed")
-            return True
-        tp = entry - RR * risk if short else entry + RR * risk
-        direction = "SHORT" if short else "LONG"
-        plan = {"entry": entry, "stop": stop, "tp": tp}
-        # a fresh qualifying signal REPLACES any trade still open on this
-        # symbol: book the incumbent at this candle's close, then take over
-        old_trade = ast.get("trade")
-        if old_trade and OVERRIDE_ONLY_OPPOSITE \
-                and old_trade["verdict"] == direction:
-            log(f"{sym}: {direction} signal matches the open trade's "
-                "direction - not replacing it")
-            ast["setup"] = None
-            return True
-        if old_trade:
-            if ALERT_LIFECYCLE:
-                send_telegram(lifecycle_message(
-                    asset, "OVERRIDE", old_trade, entry, c["t"] + MS[TF],
-                    f"replaced by a new {direction} range signal"))
-            log(f"{sym}: trade REPLACED at ${fmt_px(entry)} by a fresh "
-                f"{direction} signal")
-            record_close(sym, old_trade, entry, "OVERRIDE", c["t"] + MS[TF])
-            RUN_ALERTS.append(
-                f"{sym} trade replaced ({pnl_pct(old_trade, entry):+.2f}%)")
-            ast["trade"] = None
-        if ALERT_ENTRIES:
-            send_telegram(entry_message(asset, direction, plan, hi, lo,
-                                        brk["ext"], source, c["t"] + MS[TF]))
-        log(f"ALERT SENT -> telegram: {sym} {direction} ENTRY @ "
-            f"${fmt_px(entry)} (failed break of the 4h-range "
-            f"{'high' if short else 'low'})")
-        RUN_ALERTS.append(f"{sym} {direction} entry @ ${fmt_px(entry)}")
-        ast["trade"] = {"verdict": direction, "entry": entry, "stop": stop,
-                        "tp": tp, "opened_t": c["t"], "checked_t": c["t"]}
-        ast["phase"], ast["setup"] = "IN_TRADE", None
+        if not brk.get("reentered"):
+            brk["reentered"] = True
+            log(f"{sym}: closed back INSIDE the range - waiting for "
+                f"{HA_CONFIRM_CANDLES} large HA candles with no "
+                f"{'upper' if short else 'lower'} wicks")
+        if ha_confirmed(ha, a, i, short):
+            fire_entry(asset, ast, "SHORT" if short else "LONG", c,
+                       brk["ext"], hi, lo, source,
+                       f"{TF} closed beyond the "
+                       f"{'high' if short else 'low'}, then back INSIDE - "
+                       f"{HA_CONFIRM_CANDLES} large HA candles with no "
+                       f"{'upper' if short else 'lower'} wicks confirmed it")
         return True
+
+    # ---- no breakout pending: doji INSIDE the range, then HA confirmation --
+    if DOJI_ENTRY and not brk and lo <= c["c"] <= hi:
+        dj = ast.get("doji")
+        if dj and c["t"] > dj["expires_t"]:
+            log(f"{sym}: inside-range doji expired without confirmation")
+            ast["doji"], dj = None, None
+        if dj:
+            dj["hi"] = max(dj["hi"], c["h"])
+            dj["lo"] = min(dj["lo"], c["l"])
+            for short in (True, False):
+                if ha_confirmed(ha, a, i, short):
+                    fire_entry(asset, ast, "SHORT" if short else "LONG", c,
+                               dj["hi"] if short else dj["lo"], hi, lo, source,
+                               "doji inside the range, then "
+                               f"{HA_CONFIRM_CANDLES} large HA candles with no "
+                               f"{'upper' if short else 'lower'} wicks")
+                    return True
+        elif ha_doji(ha[i], a[i]):
+            ast["doji"] = {"hi": c["h"], "lo": c["l"],
+                           "expires_t": c["t"] + DOJI_TTL * MS[TF]}
+            log(f"{sym}: doji inside the 4h range - watching for "
+                f"{HA_CONFIRM_CANDLES} large HA candles either way")
+        return True
+
     return False
 
 
@@ -842,6 +897,7 @@ def check_asset(asset, state):
         return changed
 
     a = atr(cs)
+    ha = heikin_ashi(cs)
     rng_cache = {}
 
     last_closed = len(cs) - 2
@@ -851,7 +907,7 @@ def check_asset(asset, state):
     for i in range(len(cs)):
         if i > last_closed or cs[i]["t"] <= ast["last_candle_t"]:
             continue
-        ch = process_candle(asset, ast, cs, a, i, source, rng_cache)
+        ch = process_candle(asset, ast, cs, ha, a, i, source, rng_cache)
         changed = changed or ch
         ast["last_candle_t"] = cs[i]["t"]
         if ast["trade"] and ast["trade"].get("opened_t") == cs[i]["t"]:
