@@ -886,8 +886,8 @@ def process_open_trade(asset, trade, candles, last_closed_t):
             RUN_ALERTS.append(
                 f"{sym} STOPPED OUT ({pnl_pct(trade, trade['stop']):+.2f}%)")
             return None, True
-        if tp_hit:
-            if trade.get("runner") and not trade.get("half"):
+        if tp_hit and not trade.get("half"):
+            if trade.get("runner"):
                 trade["half"] = True
                 trade["stop"] = trade["entry"]
                 if ALERT_LIFECYCLE:
@@ -960,8 +960,8 @@ def process_open_trade(asset, trade, candles, last_closed_t):
             RUN_ALERTS.append(
                 f"{sym} STOPPED OUT ({pnl_pct(trade, trade['stop']):+.2f}%)")
             return None, True
-        if tp_hit:
-            if trade.get("runner") and not trade.get("half"):
+        if tp_hit and not trade.get("half"):
+            if trade.get("runner"):
                 trade["half"] = True
                 trade["stop"] = trade["entry"]
                 if ALERT_LIFECYCLE:
@@ -1034,7 +1034,9 @@ def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger,
     RUN_ALERTS.append(f"{sym} {direction} entry @ ${fmt_px(entry)}")
     ast["trade"] = {"verdict": direction, "entry": entry, "stop": stop,
                     "tp": tp, "opened_t": c["t"], "checked_t": c["t"],
-                    "rr": rr, "runner": bool(runner), "half": False}
+                    "rr": rr, "runner": bool(runner), "half": False,
+                    "risk0": risk}          # original risk, kept for R maths
+                                            # after the stop moves to breakeven
     ast["phase"], ast["setup"] = "IN_TRADE", None
     ast["doji"], ast["zone"] = None, None
     return True
