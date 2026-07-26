@@ -105,6 +105,29 @@ def closed_trades(keep=200):
             rows.append(json.loads(ln))
         except json.JSONDecodeError:
             continue
+    # a runner books two ledger rows (TP_HALF then RUNNER/BE) - merge them
+    # into ONE closed trade so the list and the W/L counts see a single result
+    merged, index = [], {}
+    for r in rows:
+        key = (r.get("sym"), round(float(r.get("entry") or 0), 10))
+        if r.get("kind") == "TP_HALF":
+            m = dict(r)
+            m["kind"] = "TP"
+            m["parts"] = ["TP_HALF"]
+            merged.append(m)
+            index[key] = m
+            continue
+        if r.get("kind") in ("RUNNER", "BE") and key in index:
+            m = index.pop(key)
+            m["pnl_pct"] = round(m.get("pnl_pct", 0) + r.get("pnl_pct", 0), 3)
+            m["exit"] = r.get("exit")
+            m["t"] = r.get("t", m.get("t"))
+            m["parts"].append(r.get("kind"))
+            m["kind"] = "TP" if m["pnl_pct"] > 0 else "STOP"
+            continue
+        merged.append(dict(r))
+    rows = merged
+
     now_ms = time.time() * 1000
     def window(days):
         cut = now_ms - days * 86400_000
@@ -345,10 +368,11 @@ function render(d){
   // OVERRIDE closes have no fixed outcome - the P&L decides the icon
   const iconFor=c=>icons[c.kind]||(c.pnl_pct>=0?'✅':'❌');
   document.getElementById('closed').innerHTML=shown.length?shown.map(c=>{
+   const partLbl=(c.parts&&c.parts.length>1)?' <span class=muted style="font-size:10.5px">half + runner</span>':'';
    const cls=c.dir==='LONG'?'long':'short';
    const when=new Date(c.t).toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
    return `<div class=card><div class=row>
-    <span class=sym>${iconFor(c)} ${c.sym} <span class=${cls}>${c.dir}</span>
+    <span class=sym>${iconFor(c)} ${c.sym} <span class=${cls}>${c.dir}</span>${partLbl}
     <span class=muted style="font-weight:400">${c.kind}</span></span>
     <span class="num ${c.pnl_pct>=0?'pnl-pos':'pnl-neg'}">${(c.pnl_pct>=0?'+':'')+c.pnl_pct.toFixed(2)}%</span></div>
     <div class=row><span class=muted>$${px(c.entry)} → $${px(c.exit)}</span>
