@@ -117,9 +117,12 @@ def closed_trades(keep=200):
             merged.append(m)
             index[key] = m
             continue
-        if r.get("kind") in ("RUNNER", "BE") and key in index:
+        if key in index and r.get("kind") in ("RUNNER", "BE", "TP", "STOP"):
             m = index.pop(key)
-            m["pnl_pct"] = round(m.get("pnl_pct", 0) + r.get("pnl_pct", 0), 3)
+            add = r.get("pnl_pct", 0)
+            if (r.get("frac") or 1.0) >= 1.0:
+                add *= 0.5          # only half the position was still open
+            m["pnl_pct"] = round(m.get("pnl_pct", 0) + add, 3)
             m["exit"] = r.get("exit")
             m["t"] = r.get("t", m.get("t"))
             m["parts"].append(r.get("kind"))
