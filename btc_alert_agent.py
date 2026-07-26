@@ -67,8 +67,6 @@ MIN_DAY_VOLUME_USD = 10_000_000    # skip markets below $10M 24h notional
 MAX_ASSETS = 70
 FETCH_DELAY_S = 0.12
 REQUEST_TIMEOUT_S = 8              # fail fast: a throttled API must not burn 20s
-RUN_BUDGET_S = 480                 # hard per-run budget; remaining assets resume
-                                   # next run via a rotating cursor
 MAX_ZONES = 20                     # cap concurrently open reversal zones
 
 ASSETS = [                         # used when DISCOVER_ALL = False / discovery fails
@@ -152,6 +150,7 @@ def pnl_pct(trade, exit_px):
 # --------------------------- run summary -----------------------------------
 RUN_ALERTS = []
 RUN_STATUS = []
+RUN_UNIVERSE = [0]                 # [universe size] for the run summary
 
 
 def write_run_summary():
@@ -166,7 +165,7 @@ def write_run_summary():
             extras.append("staging: " + "; ".join(staged)[:120])
         if open_t:
             extras.append(f"{open_t} in trade")
-        headline = (f"No signal - {n} markets scanned"
+        headline = (f"No signal - {n} of {RUN_UNIVERSE[0] or n} markets scanned"
                     + (f" ({', '.join(extras)})" if extras else ""))
     log("SUMMARY: " + headline)
     print(f"::notice title={'ALERT SENT' if RUN_ALERTS else 'No signal'}::{headline}")
@@ -869,17 +868,28 @@ def check_once():
     failures = 0
     start = time.time()
     assets = active_assets()
+    RUN_UNIVERSE[0] = len(assets)
     meta = state.get("_meta") or {}
     cursor = meta.get("cursor", 0) % max(len(assets), 1)
-    order = assets[cursor:] + assets[:cursor]      # rotate for fairness
+    rotated = assets[cursor:] + assets[:cursor]    # rotate for fairness
+    # symbols holding an open trade go FIRST every run - an exit check must
+    # never wait for the cursor to come around
+    held = {a["symbol"] for a in rotated
+            if (state.get(a["symbol"]) or {}).get("trade")}
+    order = [a for a in rotated if a["symbol"] in held] + \
+        [a for a in rotated if a["symbol"] not in held]
     stopped_at = None
+    rot_done = 0                                   # non-priority assets done
     try:
         for n, asset in enumerate(order):
             if time.time() - start > RUN_BUDGET_S:
-                stopped_at = (cursor + n) % len(assets)
-                log(f"Run budget ({RUN_BUDGET_S}s) reached after {n} assets - "
-                    f"resuming from {assets[stopped_at]['symbol']} next run")
+                stopped_at = (cursor + rot_done) % len(assets)
+                log(f"Run budget ({RUN_BUDGET_S}s) reached after {n} assets "
+                    f"({len(held)} open trades checked first) - resuming from "
+                    f"{assets[stopped_at]['symbol']} next run")
                 break
+            if asset["symbol"] not in held:
+                rot_done += 1
             try:
                 had_trade = bool((state.get(asset["symbol"]) or {}).get("trade"))
                 changed = check_asset(asset, state) or changed
