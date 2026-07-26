@@ -67,7 +67,7 @@ STOCK_MIN_VOLUME_USD = 5_000_000
 ONLY = []                          # trade ONLY these symbols ([] = whole universe)
 EXCLUDE = ["PUMP"]                 # never trade these symbols - add coins here
                                    # (matches the base name on any venue)
-MIN_DAY_VOLUME_USD = 10_000_000    # skip markets below $10M 24h notional
+MIN_DAY_VOLUME_USD = 5_000_000     # skip markets below $5M 24h notional
 MAX_ASSETS = 70
 FETCH_DELAY_S = 0.12
 REQUEST_TIMEOUT_S = 8              # fail fast: a throttled API must not burn 20s
