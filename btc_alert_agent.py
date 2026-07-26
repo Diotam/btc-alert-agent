@@ -2,9 +2,12 @@
 """
 4-HOUR RANGE AGENT (New York session false-breakout reversals)
 ---------------------------------------------------------------
-Each day, the high/low of the FIRST 4-hour window of the New York day
-(00:00-04:00 America/New_York) defines the range - marked only once the
-window has fully closed, and valid until the end of that NY day.
+Each day, the high/low of the FIRST 4-HOUR CANDLE of the New York day
+defines the range - marked only once that candle has fully closed, and
+valid until the end of that NY day. Exchange 4h candles are UTC-aligned,
+so the window is the first 4h boundary at or after NY midnight:
+00:00-04:00 NY while New York is on EDT, 03:00-07:00 NY on EST.
+(Stocks instead use the 09:30-10:30 cash-session opening range.)
 
 On 5m candles, after 04:00 NY (mirrored for the low side):
   1. BREAKOUT  a 5m candle CLOSES above the range high (wicks alone
@@ -81,6 +84,10 @@ RANGE_TZ = "America/New_York"
 #   crypto & commodities: the first 4h of the NY day (overnight range)
 #   stocks: the cash-session OPENING RANGE (equities are closed overnight,
 #           so the 00-04 window would be a meaningless flat line)
+# crypto/commodities take the FIRST 4-HOUR CANDLE of the NY day. Exchange 4h
+# candles are UTC-aligned, so that is the first 4h boundary at or after NY
+# midnight: 00:00-04:00 NY in EDT, 03:00-07:00 NY in EST. Stocks keep the
+# cash-session opening range, which is not a 4h candle.
 SESSIONS = {"crypto": (0, 0, 4, 0),
             "commodity": (0, 0, 4, 0),
             "stock": (9, 30, 10, 30)}
@@ -112,7 +119,8 @@ STATE_FILE = Path(__file__).parent / "btc_agent_state.json"
 TIMEZONE = "America/Chicago"
 LOCAL_TZ = ZoneInfo(TIMEZONE)
 
-MS = {"5m": 300_000, "15m": 900_000, "30m": 1_800_000, "1h": 3_600_000}
+MS = {"5m": 300_000, "15m": 900_000, "30m": 1_800_000, "1h": 3_600_000,
+      "4h": 14_400_000}
 
 # knob tolerance: accept "30min", "15M", "1H", "60m" etc.
 _TF_ALIASES = {"5min": "5m", "15min": "15m", "30min": "30m",
@@ -442,27 +450,36 @@ def ny_dt(ms):
     return datetime.fromtimestamp(ms / 1000, NY_TZ)
 
 
-def session_window(cls):
-    h1, m1, h2, m2 = SESSIONS.get(cls, SESSIONS["crypto"])
-    return h1 * 60 + m1, h2 * 60 + m2
+def window_ms(d, cls):
+    """[start, end) epoch ms of the day's range window on NY date d.
+    Stocks: the cash-session opening range. Everything else: the first
+    4-hour CANDLE of the NY day (UTC-aligned, like the exchange chart)."""
+    if cls == "stock":
+        h1, m1, h2, m2 = SESSIONS["stock"]
+        s = datetime(d.year, d.month, d.day, h1, m1, tzinfo=NY_TZ)
+        e = datetime(d.year, d.month, d.day, h2, m2, tzinfo=NY_TZ)
+        return int(s.timestamp() * 1000), int(e.timestamp() * 1000)
+    midnight = int(datetime(d.year, d.month, d.day,
+                            tzinfo=NY_TZ).timestamp() * 1000)
+    step = MS["4h"]
+    start = -(-midnight // step) * step        # first 4h boundary >= midnight
+    return start, start + step
 
 
 def day_range(candles, d, cls):
     """High/low of 5m candles inside the class's session window on NY
     date d. Returns (hi, lo, ready)."""
-    start, end = session_window(cls)
-    step = MS[TF] // 60_000            # candle length in minutes (TF-agnostic)
+    start, end = window_ms(d, cls)
+    step = MS[TF]
     hi = lo = None
     count = 0
     end_seen = False
     for c in candles:
-        dt = ny_dt(c["t"])
-        mins = dt.hour * 60 + dt.minute
-        if dt.date() == d and start <= mins and mins + step <= end:
+        if start <= c["t"] and c["t"] + step <= end:
             hi = c["h"] if hi is None else max(hi, c["h"])
             lo = c["l"] if lo is None else min(lo, c["l"])
             count += 1
-            if mins + step == end:
+            if c["t"] + step == end:
                 end_seen = True
     expected = max(1, (end - start) // step)
     ready = count >= expected - max(2, expected // 6) and end_seen
@@ -508,9 +525,10 @@ def stage_message(asset, direction, level, px, t):
 def entry_message(asset, direction, plan, hi, lo, ext, source, t):
     e = "\U0001F7E2" if direction == "LONG" else "\U0001F534"
     broke = "high" if direction == "SHORT" else "low"
-    h1, m1, h2, m2 = SESSIONS.get(asset.get("cls", "crypto"), SESSIONS["crypto"])
-    win = f"NY {h1:02d}:{m1:02d}-{h2:02d}:{m2:02d}"
-    kind = "opening-range" if asset.get("cls") == "stock" else "4h-range"
+    cls = asset.get("cls", "crypto")
+    s_ms, e_ms = window_ms(ny_dt(t).date(), cls)
+    win = f"NY {ny_dt(s_ms):%H:%M}-{ny_dt(e_ms):%H:%M}"
+    kind = "opening-range" if cls == "stock" else "first 4h candle"
     lines = [
         f"{e} <b>{direction} ENTRY \u00b7 {esc(asset['symbol'])}</b>",
         f"<i>{esc(asset['label'])} \u00b7 {TF} \u00b7 {kind} reversal \u00b7 {esc(fmt_ts(t))}</i>",
@@ -680,8 +698,8 @@ def process_candle(asset, ast, real, a, i, source, rng_cache):
 
     # only trade after the class's range window has fully closed
     cls = asset.get("cls", "crypto")
-    _, win_end = session_window(cls)
-    if close_dt.hour * 60 + close_dt.minute <= win_end:
+    _, win_end_ms = window_ms(d, cls)
+    if c["t"] + MS[TF] <= win_end_ms:
         return False
 
     if d not in rng_cache:
