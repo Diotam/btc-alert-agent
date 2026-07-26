@@ -857,9 +857,17 @@ def check_asset(asset, state):
         if ast["trade"] and ast["trade"].get("opened_t") == cs[i]["t"]:
             break                          # a new trade opened on this candle
 
-    stage = ast["phase"]
-    if ast["setup"]:
+    # an open trade always reports IN_TRADE, even when a fresh setup is armed
+    # on the same symbol (the override candidate) - otherwise the run summary
+    # undercounts open trades
+    if ast["trade"]:
+        stage = "IN_TRADE"
+        if ast["setup"]:
+            stage += f" +armed({ast['setup']['direction']})"
+    elif ast["setup"]:
         stage = f"BROKE-{ast['setup']['side']} ({ast['setup']['direction']} on reentry)"
+    else:
+        stage = ast["phase"]
     RUN_STATUS.append(f"{sym} {stage}")
     state[sym] = ast
     return changed
