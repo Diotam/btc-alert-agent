@@ -130,16 +130,45 @@ def build_data():
         if tr:
             sign = 1 if tr["verdict"] == "LONG" else -1
             tp = tr.get("tp") or tr.get("tp2")
-            risk = abs(tr["entry"] - tr["stop"]) or 1
+            risk = tr.get("risk0") or abs(tr["entry"] - tr["stop"]) or 1
             pnl = r_now = None
             if mid:
                 pnl = sign * (mid - tr["entry"]) / tr["entry"] * 100
                 r_now = sign * (mid - tr["entry"]) / risk
             trades.append({"sym": sym, "dir": tr["verdict"],
                            "lev": ast.get("lev"),
+                           "half": bool(tr.get("half")),
+                           "risk": risk,
+                           "runner": bool(tr.get("runner")),
                            "entry": tr["entry"], "stop": tr["stop"],
                            "tp": tp, "mid": mid, "pnl": pnl, "r": r_now,
                            "opened_t": tr.get("opened_t", 0)})
+        zz = ast.get("zone")
+        if zz:
+            long_ = zz.get("dir") == "LONG"
+            top, bot = zz.get("top"), zz.get("bot")
+            swing = zz.get("swing")
+            edge = top if long_ else bot
+            band = abs(edge - swing) if (edge is not None and swing) else None
+            prog = None
+            if zz.get("touched"):
+                prog = 100.0
+            elif mid and edge is not None and band:
+                gap = (mid - edge) if long_ else (edge - mid)
+                prog = max(0.0, min(100.0, (1 - gap / band) * 100))
+            lvl_s = f"{edge:,.6f}".rstrip("0").rstrip(".") if edge and edge < 1 \
+                else (f"{edge:,.2f}" if edge else "?")
+            stage = ("pulled back into the HA "
+                     + ("support" if long_ else "resistance")
+                     + " \u00b7 waiting for a "
+                     + ("green" if long_ else "red") + " candle") \
+                if zz.get("touched") else \
+                ("HA " + ("support" if long_ else "resistance")
+                 + " armed \u00b7 waiting for the pullback")
+            zones.append({"sym": sym, "dir": zz.get("dir"),
+                          "lev": ast.get("lev"),
+                          "stage": f"${lvl_s} \u00b7 {stage}",
+                          "mid": mid, "prog": prog})
         z = ast.get("setup")
         if z:
             lvl = z.get("level")
@@ -263,26 +292,29 @@ function render(d){
    const cls=t.dir==='LONG'?'long':'short';
    const sgn=t.dir==='LONG'?1:-1;
    // each trade's true RR from its own prices (targets vary: 2R..3R/structure)
-   const RRT=(t.tp!=null&&t.entry!=null&&t.entry!==t.stop)
-     ?Math.abs((t.tp-t.entry)/(t.entry-t.stop)):2;
+   const RRT=(t.tp!=null&&t.risk)?Math.abs((t.tp-t.entry)/t.risk)
+     :((t.tp!=null&&t.entry!==t.stop)?Math.abs((t.tp-t.entry)/(t.entry-t.stop)):2);
    // freeze the card once TP or stop has traded - the agent confirms the
    // close on its next scan (<=5 min) and the card moves to Closed trades
    // latch the freeze per trade: once TP or the stop trades, this card stops
    // updating even if price wanders back through the level
    const fkey=`${t.sym}:${t.opened_t}`;
    window.__froz=window.__froz||{};
-   if(t.r!=null&&t.r>=RRT)window.__froz[fkey]='tp';
+   if(!t.half&&t.r!=null&&t.r>=RRT)window.__froz[fkey]='tp';
    if(t.r!=null&&t.r<=-1)window.__froz[fkey]='sl';
    const tpDone=window.__froz[fkey]==='tp', slDone=window.__froz[fkey]==='sl';
    const showR=tpDone?RRT:slDone?-1:t.r;
    const showPnl=tpDone?sgn*(t.tp-t.entry)/t.entry*100
      :slDone?sgn*(t.stop-t.entry)/t.entry*100:t.pnl;
-   const badge=tpDone?'<span class="badge ok">TP hit · closing</span>'
+   const badge=t.half?'<span class="badge ok">half booked · runner</span>'
+     :tpDone?'<span class="badge ok">TP hit · closing</span>'
      :slDone?'<span class="badge warn">stop hit · closing</span>':'';
    // one scale: stop = 0%, entry = 40%, TP = 100% - the fill IS closeness to TP
    const rp=showR==null?0:Math.max(0,Math.min(100,(showR+1)/(1+RRT)*100));
    const rc=showR==null?'#8b949e':showR>=0?'#3fb950':'#f85149';
-   const rlbl=showR==null?'':tpDone?'TP reached - waiting for the close confirmation'
+   const rlbl=showR==null?'':t.half
+     ?`${showR.toFixed(2)}R · half booked, stop at entry - runner exits on the HA flip`
+     :tpDone?'TP reached - waiting for the close confirmation'
      :slDone?'Stop traded - waiting for the close confirmation'
      :showR>=0
      ?`${showR.toFixed(2)}R · ${Math.round(Math.min(100,showR/RRT*100))}% of the way to TP`
