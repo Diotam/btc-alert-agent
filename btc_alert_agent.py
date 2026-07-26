@@ -1,45 +1,31 @@
 #!/usr/bin/env python3
 """
-4-HOUR RANGE AGENT (New York session reversals, Heikin Ashi confirmed)
------------------------------------------------------------------------
-The high/low of the FIRST 4-HOUR CANDLE of the New York day defines the
-range - marked once that candle closes, valid until NY midnight. Exchange
-4h candles are UTC-aligned, so the window is the first 4h boundary at or
-after NY midnight: 00:00-04:00 NY on EDT, 03:00-07:00 NY on EST. Stocks
-instead use the 09:30-10:30 cash-session opening range.
+SMOOTHED-HA TREND-CHANGE AGENT
+-------------------------------
+One pathway. On smoothed Heikin Ashi (SHA_PRE/SHA_POST EMAs, TradingView
+"Smoothed Ha Candles 10 10"):
 
-PATHWAY 1 - failed breakout (5m closes, wicks never count):
-  1. a candle CLOSES outside the range; while price stays outside, the
-     excursion extreme is tracked
-  2. a candle CLOSES back inside
-  3. then wait for HA_CONFIRM_CANDLES consecutive LARGE Heikin Ashi
-     candles with no wick on the trade side:
-        broke the HIGH -> bearish HA candles, no UPPER wicks -> SHORT
-        broke the LOW  -> bullish HA candles, no LOWER wicks -> LONG
-     Entry at that candle's close. SL = the exact excursion extreme,
-     TP = 2 x the stop distance.
-
-PATHWAY 2 - smoothed-HA trend change, then a pullback (TREND_ENTRY):
-  1. a strong run on the smoothed HA - same-colour candles whose bodies GROW,
-     then FADE (TREND_GROW_MIN / TREND_FADE_MIN)
-  2. the HA flips colour: red -> green arms a LONG, green -> red arms a SHORT.
-     No entry yet - those new HA candles become the support (or resistance)
+  1. a strong run - same-colour HA candles whose bodies GROW, then FADE
+  2. the HA flips colour: red -> green arms a LONG, green -> red a SHORT.
+     No entry yet: those new HA candles become support (or resistance)
   3. price pulls back INTO the HA candles
-  4. a candle closes in the trade's direction (green for a long) -> ENTER
-     SL = the swing extreme of the run that just ended
-     TP = 1.5 x risk (RR_TREND)
-  5. at TP: HALF the position is booked, the stop moves to entry, and the
-     runner stays on until the smoothed HA flips against the trade
+  4. a candle closes in the trade's direction -> ENTER at that close
+        SL = the swing extreme of the run that just ended
+        TP = RR_TREND (1.5) x risk
+  5. at TP: HALF is booked and the stop moves to entry; the runner exits
+     when the smoothed HA flips against the trade
 
-A qualifying HA candle never has wicks at BOTH ends (that is indecision),
-and must have no wick at all on the trade side.
+Setups are dropped if the HA turns back, price closes beyond the swing
+extreme, or ZONE_TTL candles pass without a pullback. Entries also need a
+stop at least MIN_STOP_PCT of price away.
 
-Entries also need a stop at least MIN_STOP_PCT of price away, and a range
-at least RANGE_MIN_ATR x ATR wide.
+The old 4h-range failed-breakout pathway is retired (RANGE_ENTRY = False);
+its code is still present and can be switched back on, together with
+RANGE_GATE if entries should be confined to the post-range session.
 
-Exits: TP or SL, with intrabar detection. An opposite-direction signal
-replaces an open trade; same-direction signals are ignored. Closes are
-recorded to trades.log.
+Exits carry intrabar detection. An opposite-direction signal replaces an
+open trade; same-direction signals are ignored. Closes are recorded to
+trades.log with a `frac` field so half-closes count as half.
 
 Alerts are delivered to Telegram. Config from environment variables
 (GitHub repo Secrets):
@@ -127,7 +113,12 @@ HA_WICK_MAX_BODY = 0.25          # "no wick" = wick at most this fraction of
 # second pathway: while price trades INSIDE the range, a doji arms the same
 # HA confirmation in either direction
 HA_REQUIRE_FULL_BODY = False      # True = reject ANY wick, either end
-# --- pathway B: smoothed-HA trend-change pullback --------------------------
+# --- the only pathway: smoothed-HA trend-change pullback -------------------
+RANGE_ENTRY = False          # pathway A (4h-range failed breakout) retired
+RANGE_GATE = False           # the trend pathway does not use the 4h range, so
+                             # neither the session window nor the width guard
+                             # applies - set True to trade only after the
+                             # range window closes on a wide-enough range
 TREND_ENTRY = True
 TREND_RUN_MIN = 4            # candles of one colour before the flip counts
 TREND_GROW_MIN = 2           # bodies must grow this many times during the run
@@ -768,13 +759,15 @@ def entry_message(asset, direction, plan, hi, lo, source, t, trigger):
     cls = asset.get("cls", "crypto")
     s_ms, e_ms = window_ms(ny_dt(t).date(), cls)
     win = f"NY {ny_dt(s_ms):%H:%M}-{ny_dt(e_ms):%H:%M}"
-    kind = "opening-range" if cls == "stock" else "first 4h candle"
+    kind = "smoothed HA" if not RANGE_ENTRY else \
+        ("opening-range" if cls == "stock" else "first 4h candle")
     return "\n".join([
         f"{e} <b>{direction} ENTRY \u00b7 {esc(asset['symbol'])}</b>",
         f"<i>{esc(asset['label'])} \u00b7 {TF} \u00b7 {kind} \u00b7 {esc(fmt_ts(t))}</i>",
         "",
-        f"\U0001F4CA <b>Setup</b>: {win} range ${fmt_px(lo)} - ${fmt_px(hi)}; "
-        f"{esc(trigger)}",
+        f"\U0001F4CA <b>Setup</b>: " +
+        (f"{win} range ${fmt_px(lo)} - ${fmt_px(hi)}; "
+         if (hi is not None and lo is not None) else "") + f"{esc(trigger)}",
         "",
         "\U0001F4CB <b>Plan</b>",
         f"Entry: <code>${fmt_px(plan['entry'])}</code>",
@@ -1060,25 +1053,29 @@ def process_candle(asset, ast, real, ha, a, k, i, source, rng_cache):
             log(f"{sym}: NY day rolled over - pending breakout cleared")
         ast["day"], ast["setup"], ast["doji"] = str(d), None, None
 
-    # only trade after the class's range window has fully closed
     cls = asset.get("cls", "crypto")
-    _, win_end_ms = window_ms(d, cls)
-    if c["t"] + MS[TF] <= win_end_ms:
-        return False
-
     if d not in rng_cache:
         rng_cache[d] = day_range(real, d, cls)
     hi, lo, ready = rng_cache[d]
-    if not ready:
-        return False
-    # dead-flat window: a range narrower than 0.3 x ATR is noise, not a range
-    if a[i] and (hi - lo) < RANGE_MIN_ATR * a[i]:
-        return False
+    if RANGE_GATE:
+        # only trade after the class's range window has fully closed
+        _, win_end_ms = window_ms(d, cls)
+        if c["t"] + MS[TF] <= win_end_ms:
+            return False
+        if not ready:
+            return False
+        # a range narrower than RANGE_MIN_ATR x ATR is noise, not a range
+        if a[i] and (hi - lo) < RANGE_MIN_ATR * a[i]:
+            return False
+    if not RANGE_ENTRY or not ready:
+        hi = lo = None                     # nothing to quote in the alert
 
-    brk = ast["setup"]
+    brk = ast["setup"] if RANGE_ENTRY else None
+    if not RANGE_ENTRY and ast.get("setup"):
+        ast["setup"] = None                # drop any setup left by pathway A
 
     # ---- closes OUTSIDE the range: register / extend the breakout ----------
-    if c["c"] > hi:
+    if RANGE_ENTRY and hi is not None and c["c"] > hi:
         if brk and brk["side"] == "HIGH":
             brk["ext"] = max(brk["ext"], c["h"])
             brk["reentered"] = False       # left the range again: reconfirm
@@ -1092,7 +1089,7 @@ def process_candle(asset, ast, real, ha, a, k, i, source, rng_cache):
             if ALERT_STAGES:
                 send_telegram(stage_message(asset, "SHORT", hi, c["c"], c["t"]))
         return True
-    if c["c"] < lo and ENABLE_SHORTS is not None:      # lows always tracked
+    if RANGE_ENTRY and lo is not None and c["c"] < lo:
         if brk and brk["side"] == "LOW":
             brk["ext"] = min(brk["ext"], c["l"])
             brk["reentered"] = False       # left the range again: reconfirm
@@ -1108,7 +1105,7 @@ def process_candle(asset, ast, real, ha, a, k, i, source, rng_cache):
         return True
 
     # ---- pending breakout: reentry, then HA confirmation ------------------
-    if brk and lo <= c["c"] <= hi:
+    if RANGE_ENTRY and brk and lo <= c["c"] <= hi:
         short = brk["side"] == "HIGH"
         if not brk.get("reentered"):
             brk["reentered"] = True
@@ -1382,9 +1379,10 @@ if __name__ == "__main__":
             watched = ", ".join(a["symbol"] for a in ASSETS)
         send_telegram("\u2705 <b>Signal alert agent - test message</b>\n"
                       f"Your alert pipeline works. Watching: {esc(watched)}.\n"
-                      f"Strategy: 4h range (NY 00:00-04:00) - 5m close "
-                      "outside the range, then a close back INSIDE enters "
-                      f"the reversal; SL at the exact breakout extreme, TP {RR:.0f}R.")
+                      f"Strategy: smoothed HA ({SHA_PRE}/{SHA_POST}) trend "
+                      f"change on {TF} - fading run, colour flip, pullback to "
+                      f"the HA candles, confirmation candle; SL at the swing "
+                      f"extreme, TP {RR_TREND}R with half off and a runner.")
         print("Test message sent to Telegram.")
     elif "--loop" in sys.argv:
         run_loop()
