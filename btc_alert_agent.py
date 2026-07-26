@@ -19,10 +19,20 @@ PATHWAY 1 - failed breakout (5m closes, wicks never count):
      Entry at that candle's close. SL = the exact excursion extreme,
      TP = 2 x the stop distance.
 
-PATHWAY 2 - inside the range (DOJI_ENTRY):
-  while price trades inside the range, an HA doji arms the same HA
-  confirmation in either direction. SL = the extreme reached since the
-  doji, TP = 2 x the stop distance.
+PATHWAY 2 - smoothed-HA trend change, then a pullback (TREND_ENTRY):
+  1. a strong run on the smoothed HA - same-colour candles whose bodies GROW,
+     then FADE (TREND_GROW_MIN / TREND_FADE_MIN)
+  2. the HA flips colour: red -> green arms a LONG, green -> red arms a SHORT.
+     No entry yet - those new HA candles become the support (or resistance)
+  3. price pulls back INTO the HA candles
+  4. a candle closes in the trade's direction (green for a long) -> ENTER
+     SL = the swing extreme of the run that just ended
+     TP = 1.5 x risk (RR_TREND)
+  5. at TP: HALF the position is booked, the stop moves to entry, and the
+     runner stays on until the smoothed HA flips against the trade
+
+A qualifying HA candle never has wicks at BOTH ends (that is indecision),
+and must have no wick at all on the trade side.
 
 Entries also need a stop at least MIN_STOP_PCT of price away, and a range
 at least RANGE_MIN_ATR x ATR wide.
@@ -104,14 +114,48 @@ MIN_STOP_PCT = 0.25              # skip entries whose stop sits closer than
 # Heikin Ashi entry confirmation:
 #   SHORT wants HA_CONFIRM_CANDLES consecutive LARGE bearish HA candles with
 #   no UPPER wicks; LONG wants large bullish HA candles with no LOWER wicks.
+HA_MODE = "smoothed"             # "smoothed" = TradingView Smoothed HA
+SHA_PRE, SHA_POST = 10, 10       # the two EMA lengths ("Smoothed Ha Candles 10 10")
 HA_CONFIRM_CANDLES = 2
-HA_BODY_MIN_ATR = 0.50           # "large" = HA body at least this x ATR
-HA_WICK_TOL_ATR = 0.05           # "no wick" allowance (exact zeros are rare)
+HA_BODY_MIN_ATR = 0.25           # "large" = HA body at least this x ATR.
+                                 # NOTE: smoothed HA bodies are much smaller
+                                 # than raw candles - 0.50 would qualify none
+HA_WICK_MAX_BODY = 0.25          # "no wick" = wick at most this fraction of
+                                 # the candle's own body (scale-free: works on
+                                 # smoothed HA, where wicks track the smoothed
+                                 # high/low rather than the body)
 # second pathway: while price trades INSIDE the range, a doji arms the same
 # HA confirmation in either direction
-DOJI_ENTRY = True
-HA_DOJI_BODY_ATR = 0.15          # HA body this small counts as a doji
+HA_REQUIRE_FULL_BODY = False      # True = reject ANY wick, either end
+# --- pathway B: smoothed-HA trend-change pullback --------------------------
+TREND_ENTRY = True
+TREND_RUN_MIN = 4            # candles of one colour before the flip counts
+TREND_GROW_MIN = 2           # bodies must grow this many times during the run
+TREND_FADE_MIN = 2           # then shrink this many times before the flip
+ZONE_TTL = 24                # candles the HA support/resistance stays valid
+RR_TREND = 1.5               # pathway B target (pathway A stays at RR)
+RUNNER_HALF_AT_TP = True     # half off at 1.5R, stop to breakeven, rest exits
+                             # when the smoothed HA flips against the trade
+DOJI_ENTRY = False
+HA_DOJI_BODY_ATR = 0.05          # HA body this small counts as a doji
+                                 # (smoothed HA: the flat dashes at the turns)
 DOJI_TTL = 12                    # candles a doji stays valid
+DOJI_COUNT = 1                   # dojis needed to arm (then the two large
+                                 # HA candles still have to confirm)
+DOJI_SAME_COLOR = True           # the doji must match the confirmation
+                                 # candles: red doji -> SHORT, green -> LONG
+
+# stochastic gate - DOJI PATHWAY ONLY. Longs need oversold, shorts overbought,
+# and the move into that extreme must be WEAK: never fade strong momentum.
+STOCH_GATE = True
+STOCH_PERIOD, STOCH_SMOOTH = 14, 3
+STOCH_OVERSOLD, STOCH_OVERBOUGHT = 20.0, 80.0
+# momentum strength, offset baseline: average HA body over the MOM_LOOKBACK
+# candles BEFORE the dojis vs the MOM_LOOKBACK before those. Weak when the
+# recent run is smaller than the prior one. The doji candles themselves and
+# the confirmation candles are excluded from the measurement.
+MOM_LOOKBACK = 20
+MOM_WEAK_RATIO = 1.0
 
 OVERRIDE_ONLY_OPPOSITE = True # only replace when the new signal REVERSES the
                               # open trade - a same-direction signal is churn
@@ -451,7 +495,166 @@ def send_telegram(text):
         raise RuntimeError(f"Telegram send failed: {resp.get('description')}")
 
 
+def _smooth(vals, n):
+    out = []
+    for i in range(len(vals)):
+        w = vals[max(0, i + 1 - n):i + 1]
+        out.append(None if len(w) < n or any(v is None for v in w)
+                   else sum(w) / n)
+    return out
+
+
+def stochastic(candles, period=None, smooth=None):
+    """Slow %K, aligned 1:1 with the candles."""
+    p = period or STOCH_PERIOD
+    s = smooth or STOCH_SMOOTH
+    raw = []
+    for i, c in enumerate(candles):
+        if i + 1 < p:
+            raw.append(None)
+            continue
+        w = candles[i + 1 - p:i + 1]
+        hh = max(x["h"] for x in w)
+        ll = min(x["l"] for x in w)
+        raw.append(50.0 if hh == ll else (c["c"] - ll) / (hh - ll) * 100)
+    return _smooth(raw, s)
+
+
+def momentum_weak(ha, i, skip=0):
+    """Offset baseline on HA bodies: the MOM_LOOKBACK candles ending BEFORE
+    the signal against the MOM_LOOKBACK before those. `skip` pushes the window
+    further back so the signal candles themselves are excluded - for the doji
+    pathway that means the run is measured before the dojis, not through them.
+    Returns (weak, detail)."""
+    e = max(0, i - skip)
+    recent = [abs(x["c"] - x["o"]) for x in ha[max(0, e - MOM_LOOKBACK):e]]
+    prior = [abs(x["c"] - x["o"])
+             for x in ha[max(0, e - 2 * MOM_LOOKBACK):max(0, e - MOM_LOOKBACK)]]
+    if not recent or not prior:
+        return True, "not enough history to judge momentum"
+    r = sum(recent) / len(recent)
+    p = sum(prior) / len(prior)
+    return r < p * MOM_WEAK_RATIO, f"HA body avg {r:.4f} vs prior {p:.4f}"
+
+
+def stoch_ok(k, ha, i, short, skip=0):
+    """Doji-pathway gate: stochastic at the right extreme AND a weak run into
+    it, measured before the signal candles. Returns (ok, why-not)."""
+    if not STOCH_GATE:
+        return True, ""
+    kv = k[i] if i < len(k) else None
+    if kv is None:
+        return False, "no stochastic reading yet"
+    if short and kv < STOCH_OVERBOUGHT:
+        return False, f"%K {kv:.0f} is not above {STOCH_OVERBOUGHT:.0f}"
+    if not short and kv > STOCH_OVERSOLD:
+        return False, f"%K {kv:.0f} is not below {STOCH_OVERSOLD:.0f}"
+    weak, detail = momentum_weak(ha, i, skip)
+    if not weak:
+        return False, (f"strong {'uptrend' if short else 'downtrend'} "
+                       f"momentum ({detail})")
+    return True, ""
+
+
+def doji_label():
+    return f"{DOJI_COUNT} doji" + ("s" if DOJI_COUNT != 1 else "")
+
+
+def trend_flip(ha, a, i):
+    """Did the smoothed HA just flip colour at candle i, after a run that grew
+    then faded? Returns (direction, run_start) or (None, None).
+    LONG = red run that faded, then turned green."""
+    if i < TREND_RUN_MIN + 2 or ha[i].get("warm"):
+        return None, None
+    bull = ha[i]["c"] > ha[i]["o"]
+    if (ha[i - 1]["c"] > ha[i - 1]["o"]) == bull:
+        return None, None                      # no colour change here
+    j = i - 1
+    while j > 0 and not ha[j].get("warm") and \
+            (ha[j]["c"] > ha[j]["o"]) != bull:
+        j -= 1
+    run = list(range(j + 1, i))                # the run that just ended
+    if len(run) < TREND_RUN_MIN:
+        return None, None
+    bodies = [abs(ha[x]["c"] - ha[x]["o"]) for x in run]
+    peak = bodies.index(max(bodies))
+    grew = sum(1 for n in range(1, peak + 1) if bodies[n] > bodies[n - 1])
+    faded = sum(1 for n in range(peak + 1, len(bodies))
+                if bodies[n] < bodies[n - 1])
+    if grew < TREND_GROW_MIN or faded < TREND_FADE_MIN:
+        return None, None
+    return ("LONG" if bull else "SHORT"), run[0]
+
+
+def doji_run(ha, a, i, bear):
+    """DOJI_COUNT consecutive dojis of the same colour, ending at i."""
+    if i + 1 < DOJI_COUNT:
+        return False
+    for kk in range(DOJI_COUNT):
+        h = ha[i - kk]
+        if not ha_doji(h, a[i - kk]):
+            return False
+        if (h["c"] < h["o"]) != bear:
+            return False
+    return True
+
+
 # ------------------------------ heikin ashi --------------------------------
+def _ema_list(vals, n):
+    """EMA that tolerates leading Nones."""
+    out, prev, k = [], None, 2.0 / (n + 1)
+    for v in vals:
+        if v is None:
+            out.append(None)
+            continue
+        prev = v if prev is None else v * k + prev * (1 - k)
+        out.append(prev)
+    return out
+
+
+def smoothed_heikin_ashi(candles, pre=None, post=None):
+    """TradingView-style Smoothed Heikin Ashi: EMA the OHLC, build HA from
+    that, then EMA the HA series again. Warm-up candles are flagged so the
+    gates ignore them."""
+    p1 = pre or SHA_PRE
+    p2 = post or SHA_POST
+    eo, eh, el, ec = (_ema_list([c[key] for c in candles], p1)
+                      for key in ("o", "h", "l", "c"))
+    ho_l, hc_l, hh_l, hl_l = [], [], [], []
+    prev_o = prev_c = None
+    for i in range(len(candles)):
+        if None in (eo[i], eh[i], el[i], ec[i]):
+            ho_l.append(None), hc_l.append(None)
+            hh_l.append(None), hl_l.append(None)
+            continue
+        hc = (eo[i] + eh[i] + el[i] + ec[i]) / 4
+        ho = (eo[i] + ec[i]) / 2 if prev_o is None else (prev_o + prev_c) / 2
+        ho_l.append(ho)
+        hc_l.append(hc)
+        hh_l.append(max(eh[i], ho, hc))
+        hl_l.append(min(el[i], ho, hc))
+        prev_o, prev_c = ho, hc
+    so, sc, sh, sl = (_ema_list(x, p2) for x in (ho_l, hc_l, hh_l, hl_l))
+    out = []
+    warm = max(p1, p2) * 2
+    for i, c in enumerate(candles):
+        if None in (so[i], sc[i], sh[i], sl[i]) or i < warm:
+            px = c["c"]
+            out.append({"t": c["t"], "o": px, "c": px, "h": px, "l": px,
+                        "warm": True})
+            continue
+        hi = max(sh[i], so[i], sc[i])
+        lo = min(sl[i], so[i], sc[i])
+        out.append({"t": c["t"], "o": so[i], "c": sc[i], "h": hi, "l": lo})
+    return out
+
+
+def ha_series(candles):
+    """The HA series the strategy runs on."""
+    return smoothed_heikin_ashi(candles) if HA_MODE == "smoothed" \
+        else heikin_ashi(candles)
+
+
 def heikin_ashi(candles):
     """Standard HA series, aligned 1:1 with the input candles."""
     out = []
@@ -465,6 +668,8 @@ def heikin_ashi(candles):
 
 
 def ha_strong(hac, atr_i, short):
+    if hac.get("warm"):
+        return False
     """A LARGE HA candle with no wick on the trade side: shorts want a big
     bearish body with no upper wick, longs a big bullish body with no lower
     wick."""
@@ -476,10 +681,15 @@ def ha_strong(hac, atr_i, short):
         return False
     if not short and hac["c"] <= hac["o"]:
         return False
-    tol = HA_WICK_TOL_ATR * atr_i
-    if short:
-        return hac["h"] - max(hac["o"], hac["c"]) <= tol
-    return min(hac["o"], hac["c"]) - hac["l"] <= tol
+    body = abs(hac["c"] - hac["o"])
+    tol = HA_WICK_MAX_BODY * body
+    up = hac["h"] - max(hac["o"], hac["c"])
+    dn = min(hac["o"], hac["c"]) - hac["l"]
+    if up > tol and dn > tol:
+        return False                  # wicks at BOTH ends: indecisive, skip it
+    if HA_REQUIRE_FULL_BODY and (up > tol or dn > tol):
+        return False
+    return (up <= tol) if short else (dn <= tol)
 
 
 def ha_confirmed(ha, a, i, short):
@@ -492,6 +702,8 @@ def ha_confirmed(ha, a, i, short):
 
 def ha_doji(hac, atr_i):
     """Indecision: an HA body small relative to ATR."""
+    if hac.get("warm"):
+        return False
     return bool(atr_i) and abs(hac["c"] - hac["o"]) <= HA_DOJI_BODY_ATR * atr_i
 
 
@@ -576,6 +788,12 @@ def lifecycle_message(asset, kind, trade, exit_px, event_t, note):
     emoji, title, sub = {
         "TP": ("\u2705", "TAKE PROFIT HIT", f"{RR:.0f}R target reached"),
         "STOP": ("\u274C", "STOPPED OUT", "Stop level hit"),
+        "TP_HALF": ("\u2705", "HALF CLOSED AT TARGET",
+                    "half booked, stop moved to entry, runner live"),
+        "RUNNER": ("\U0001F3C1", "RUNNER CLOSED",
+                   "smoothed HA flipped - remaining half out"),
+        "BE": ("\u26AA", "RUNNER STOPPED AT BREAKEVEN",
+               "price returned to entry after the half close"),
         "OVERRIDE": ("\U0001F504", "TRADE REPLACED",
                      "closed early - a fresh range signal took over"),
     }[kind]
@@ -613,7 +831,7 @@ def already_closed(sym, trade, exit_px, kind):
     return False
 
 
-def record_close(sym, trade, exit_px, kind, t_event=None):
+def record_close(sym, trade, exit_px, kind, t_event=None, frac=1.0):
     """Append a closed trade to the ledger (best-effort). t_event = the
     actual market time of the exit, so late reconciliations book to the
     day they truly happened."""
@@ -623,7 +841,9 @@ def record_close(sym, trade, exit_px, kind, t_event=None):
                                 "dir": trade["verdict"],
                                 "entry": trade["entry"], "exit": exit_px,
                                 "kind": kind,
-                                "pnl_pct": round(pnl_pct(trade, exit_px), 3)})
+                                "frac": frac,
+                                "pnl_pct": round(
+                                    pnl_pct(trade, exit_px) * frac, 3)})
                     + "\n")
     except OSError:
         pass
@@ -631,7 +851,7 @@ def record_close(sym, trade, exit_px, kind, t_event=None):
 
 def blank_asset_state():
     return {"phase": "SCAN", "last_candle_t": 0, "setup": None, "trade": None,
-            "doji": None}
+            "doji": None, "zone": None}
 
 
 # ------------------------------- agent ------------------------------------
@@ -641,6 +861,7 @@ def process_open_trade(asset, trade, candles, last_closed_t):
     sym = asset["symbol"]
     long = trade["verdict"] == "LONG"
     tp = trade.get("tp") or trade.get("tp2")     # legacy trades keep working
+    ha_ex = ha_series(candles) if trade.get("runner") else None
     changed = False
     for c in candles:
         if c["t"] <= trade["checked_t"] or c["t"] > last_closed_t:
@@ -651,6 +872,16 @@ def process_open_trade(asset, trade, candles, last_closed_t):
         tp_hit = (c["h"] >= tp) if long else (c["l"] <= tp)
         c_close_t = c["t"] + MS[TF]              # label events with the close
         if stop_hit:
+            if trade.get("half"):
+                if ALERT_LIFECYCLE:
+                    send_telegram(lifecycle_message(
+                        asset, "BE", trade, trade["stop"], c_close_t, ""))
+                log(f"{sym}: RUNNER STOPPED AT BREAKEVEN "
+                    f"${fmt_px(trade['stop'])}")
+                record_close(sym, trade, trade["stop"], "BE", c_close_t,
+                             frac=0.5)
+                RUN_ALERTS.append(f"{sym} runner stopped at breakeven")
+                return None, True
             if already_closed(sym, trade, trade["stop"], "STOP"):
                 log(f"{sym}: duplicate STOP close suppressed")
                 return None, True
@@ -663,6 +894,19 @@ def process_open_trade(asset, trade, candles, last_closed_t):
                 f"{sym} STOPPED OUT ({pnl_pct(trade, trade['stop']):+.2f}%)")
             return None, True
         if tp_hit:
+            if trade.get("runner") and not trade.get("half"):
+                trade["half"] = True
+                trade["stop"] = trade["entry"]
+                if ALERT_LIFECYCLE:
+                    send_telegram(lifecycle_message(
+                        asset, "TP_HALF", trade, tp, c_close_t,
+                        f"stop is now breakeven at ${fmt_px(trade['entry'])}; "
+                        "the rest exits when the smoothed HA flips"))
+                log(f"{sym}: HALF CLOSED at ${fmt_px(tp)}, stop -> breakeven")
+                record_close(sym, trade, tp, "TP_HALF", c_close_t, frac=0.5)
+                RUN_ALERTS.append(
+                    f"{sym} half closed ({pnl_pct(trade, tp) * 0.5:+.2f}%)")
+                return trade, True
             if already_closed(sym, trade, tp, "TP"):
                 log(f"{sym}: duplicate TP close suppressed")
                 return None, True
@@ -674,6 +918,25 @@ def process_open_trade(asset, trade, candles, last_closed_t):
             RUN_ALERTS.append(f"{sym} TP HIT ({pnl_pct(trade, tp):+.2f}%)")
             return None, True
 
+        # runner: out when the smoothed HA flips against the trade
+        if trade.get("half") and ha_ex is not None:
+            n = next((x for x, cc in enumerate(candles) if cc["t"] == c["t"]),
+                     None)
+            if n is not None and not ha_ex[n].get("warm"):
+                flipped = (ha_ex[n]["c"] < ha_ex[n]["o"]) if long \
+                    else (ha_ex[n]["c"] > ha_ex[n]["o"])
+                if flipped:
+                    if ALERT_LIFECYCLE:
+                        send_telegram(lifecycle_message(
+                            asset, "RUNNER", trade, c["c"], c_close_t, ""))
+                    log(f"{sym}: RUNNER OUT at ${fmt_px(c['c'])} (HA flipped)")
+                    record_close(sym, trade, c["c"], "RUNNER", c_close_t,
+                                 frac=0.5)
+                    RUN_ALERTS.append(
+                        f"{sym} runner out "
+                        f"({pnl_pct(trade, c['c']) * 0.5:+.2f}%)")
+                    return None, True
+
     # ---- intrabar check on the LIVE (still forming) candle ------------------
     # A fast move can blow through the stop mid-candle; don't wait for the
     # close to say so. checked_t is NOT advanced for the live candle.
@@ -682,6 +945,16 @@ def process_open_trade(asset, trade, candles, last_closed_t):
         stop_hit = live["l"] <= trade["stop"] if long else live["h"] >= trade["stop"]
         tp_hit = (live["h"] >= tp) if long else (live["l"] <= tp)
         if stop_hit:
+            if trade.get("half"):
+                if ALERT_LIFECYCLE:
+                    send_telegram(lifecycle_message(
+                        asset, "BE", trade, trade["stop"], c_close_t, ""))
+                log(f"{sym}: RUNNER STOPPED AT BREAKEVEN "
+                    f"${fmt_px(trade['stop'])}")
+                record_close(sym, trade, trade["stop"], "BE", c_close_t,
+                             frac=0.5)
+                RUN_ALERTS.append(f"{sym} runner stopped at breakeven")
+                return None, True
             if already_closed(sym, trade, trade["stop"], "STOP"):
                 log(f"{sym}: duplicate STOP close suppressed")
                 return None, True
@@ -695,6 +968,19 @@ def process_open_trade(asset, trade, candles, last_closed_t):
                 f"{sym} STOPPED OUT ({pnl_pct(trade, trade['stop']):+.2f}%)")
             return None, True
         if tp_hit:
+            if trade.get("runner") and not trade.get("half"):
+                trade["half"] = True
+                trade["stop"] = trade["entry"]
+                if ALERT_LIFECYCLE:
+                    send_telegram(lifecycle_message(
+                        asset, "TP_HALF", trade, tp, c_close_t,
+                        f"stop is now breakeven at ${fmt_px(trade['entry'])}; "
+                        "the rest exits when the smoothed HA flips"))
+                log(f"{sym}: HALF CLOSED at ${fmt_px(tp)}, stop -> breakeven")
+                record_close(sym, trade, tp, "TP_HALF", c_close_t, frac=0.5)
+                RUN_ALERTS.append(
+                    f"{sym} half closed ({pnl_pct(trade, tp) * 0.5:+.2f}%)")
+                return trade, True
             if already_closed(sym, trade, tp, "TP"):
                 log(f"{sym}: duplicate TP close suppressed")
                 return None, True
@@ -709,7 +995,8 @@ def process_open_trade(asset, trade, candles, last_closed_t):
     return trade, changed
 
 
-def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger):
+def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger,
+               rr=None, runner=False):
     """Risk checks, override handling, alert and trade creation. Returns True
     if a trade was opened."""
     sym = asset["symbol"]
@@ -722,7 +1009,8 @@ def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger):
         log(f"{sym}: stop only {risk / entry * 100:.3f}% away "
             f"(min {MIN_STOP_PCT}%) - too tight to be worth fees, waiting")
         return False
-    tp = entry - RR * risk if short else entry + RR * risk
+    rr = rr or RR
+    tp = entry - rr * risk if short else entry + rr * risk
     plan = {"entry": entry, "stop": stop, "tp": tp}
     event_t = c["t"] + MS[TF]
 
@@ -731,7 +1019,7 @@ def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger):
             and old_trade["verdict"] == direction:
         log(f"{sym}: {direction} signal matches the open trade's direction "
             "- not replacing it")
-        ast["setup"], ast["doji"] = None, None
+        ast["setup"], ast["doji"], ast["zone"] = None, None, None
         return False
     if old_trade:
         if ALERT_LIFECYCLE:
@@ -752,12 +1040,14 @@ def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger):
         f"${fmt_px(entry)} ({trigger})")
     RUN_ALERTS.append(f"{sym} {direction} entry @ ${fmt_px(entry)}")
     ast["trade"] = {"verdict": direction, "entry": entry, "stop": stop,
-                    "tp": tp, "opened_t": c["t"], "checked_t": c["t"]}
-    ast["phase"], ast["setup"], ast["doji"] = "IN_TRADE", None, None
+                    "tp": tp, "opened_t": c["t"], "checked_t": c["t"],
+                    "rr": rr, "runner": bool(runner), "half": False}
+    ast["phase"], ast["setup"] = "IN_TRADE", None
+    ast["doji"], ast["zone"] = None, None
     return True
 
 
-def process_candle(asset, ast, real, ha, a, i, source, rng_cache):
+def process_candle(asset, ast, real, ha, a, k, i, source, rng_cache):
     """Walk ONE newly closed 5m candle through the 4h-range engine."""
     sym = asset["symbol"]
     c = real[i]
@@ -834,28 +1124,73 @@ def process_candle(asset, ast, real, ha, a, i, source, rng_cache):
                        f"{'upper' if short else 'lower'} wicks confirmed it")
         return True
 
-    # ---- no breakout pending: doji INSIDE the range, then HA confirmation --
-    if DOJI_ENTRY and not brk and lo <= c["c"] <= hi:
-        dj = ast.get("doji")
-        if dj and c["t"] > dj["expires_t"]:
-            log(f"{sym}: inside-range doji expired without confirmation")
-            ast["doji"], dj = None, None
-        if dj:
-            dj["hi"] = max(dj["hi"], c["h"])
-            dj["lo"] = min(dj["lo"], c["l"])
-            for short in (True, False):
-                if ha_confirmed(ha, a, i, short):
-                    fire_entry(asset, ast, "SHORT" if short else "LONG", c,
-                               dj["hi"] if short else dj["lo"], hi, lo, source,
-                               "doji inside the range, then "
-                               f"{HA_CONFIRM_CANDLES} large HA candles with no "
-                               f"{'upper' if short else 'lower'} wicks")
-                    return True
-        elif ha_doji(ha[i], a[i]):
-            ast["doji"] = {"hi": c["h"], "lo": c["l"],
-                           "expires_t": c["t"] + DOJI_TTL * MS[TF]}
-            log(f"{sym}: doji inside the 4h range - watching for "
-                f"{HA_CONFIRM_CANDLES} large HA candles either way")
+    # ---- pathway B: smoothed-HA trend change, pull back, then confirm -----
+    if TREND_ENTRY and not brk:
+        z = ast.get("zone")
+
+        # a fresh flip arms (or re-arms) the zone
+        direction, run_start = trend_flip(ha, a, i)
+        if direction:
+            long_ = direction == "LONG"
+            swing = min(x["l"] for x in real[run_start:i + 1]) if long_ \
+                else max(x["h"] for x in real[run_start:i + 1])
+            ast["zone"] = {
+                "dir": direction,
+                "top": max(ha[i]["o"], ha[i]["c"]),
+                "bot": min(ha[i]["o"], ha[i]["c"]),
+                "swing": swing,
+                "touched": False,
+                "expires_t": c["t"] + ZONE_TTL * MS[TF],
+            }
+            log(f"{sym}: smoothed HA flipped "
+                f"{'red->green' if long_ else 'green->red'} after a fading "
+                f"{'down' if long_ else 'up'}trend - HA "
+                f"{'support' if long_ else 'resistance'} armed at "
+                f"${fmt_px(ha[i]['c'])}, waiting for a pullback")
+            return True
+
+        if not z:
+            return False
+        long_ = z["dir"] == "LONG"
+
+        # the flip must still hold: HA turning back cancels it
+        if (ha[i]["c"] < ha[i]["o"]) if long_ else (ha[i]["c"] > ha[i]["o"]):
+            log(f"{sym}: HA turned back before the pullback traded - zone dropped")
+            ast["zone"] = None
+            return True
+        if c["t"] > z["expires_t"]:
+            log(f"{sym}: HA {'support' if long_ else 'resistance'} expired "
+                "without a pullback")
+            ast["zone"] = None
+            return True
+        # the zone rides with the HA candles
+        z["top"] = max(ha[i]["o"], ha[i]["c"])
+        z["bot"] = min(ha[i]["o"], ha[i]["c"])
+        if (c["c"] < z["swing"]) if long_ else (c["c"] > z["swing"]):
+            log(f"{sym}: closed beyond the swing "
+                f"{'low' if long_ else 'high'} - zone invalidated")
+            ast["zone"] = None
+            return True
+
+        # step 1: price pulls back INTO the HA candles
+        reached = (c["l"] <= z["top"]) if long_ else (c["h"] >= z["bot"])
+        if reached and not z["touched"]:
+            z["touched"] = True
+            log(f"{sym}: pulled back into the HA "
+                f"{'support' if long_ else 'resistance'} - waiting for a "
+                f"{'green' if long_ else 'red'} candle to confirm")
+            return True
+
+        # step 2: a candle in the trade's direction confirms the area held
+        if z["touched"]:
+            confirmed = (c["c"] > c["o"]) if long_ else (c["c"] < c["o"])
+            if confirmed:
+                fire_entry(asset, ast, z["dir"], c, z["swing"], hi, lo, source,
+                           f"smoothed HA flipped, price pulled back to the HA "
+                           f"{'support' if long_ else 'resistance'} and printed "
+                           f"a {'green' if long_ else 'red'} candle",
+                           rr=RR_TREND, runner=RUNNER_HALF_AT_TP)
+                return True
         return True
 
     return False
@@ -897,7 +1232,8 @@ def check_asset(asset, state):
         return changed
 
     a = atr(cs)
-    ha = heikin_ashi(cs)
+    ha = ha_series(cs)
+    stoch_k = stochastic(cs)
     rng_cache = {}
 
     last_closed = len(cs) - 2
@@ -907,7 +1243,8 @@ def check_asset(asset, state):
     for i in range(len(cs)):
         if i > last_closed or cs[i]["t"] <= ast["last_candle_t"]:
             continue
-        ch = process_candle(asset, ast, cs, ha, a, i, source, rng_cache)
+        ch = process_candle(asset, ast, cs, ha, a, stoch_k, i, source,
+                            rng_cache)
         changed = changed or ch
         ast["last_candle_t"] = cs[i]["t"]
         if ast["trade"] and ast["trade"].get("opened_t") == cs[i]["t"]:
