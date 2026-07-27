@@ -1128,7 +1128,7 @@ def record_close(sym, trade, exit_px, kind, t_event=None, frac=1.0):
 
 def blank_asset_state():
     return {"phase": "SCAN", "last_candle_t": 0, "setup": None, "trade": None,
-            "doji": None, "zone": None}
+            "doji": None, "zone": None, "watch": None}
 
 
 # ------------------------------- agent ------------------------------------
@@ -1547,6 +1547,31 @@ def v2_reversal(real, a, es, i, long_):
                  f"reclaimed it")
 
 
+def v2_watch(real, a, ef, es, i, long_):
+    """Context is in place but the trigger has not printed yet.
+    Returns (pathway, note) or None."""
+    if not a[i] or ef[i] is None or es[i] is None:
+        return None
+    c, atr_i = real[i], a[i]
+    win = real[max(0, i - V2_LOOKBACK):i + 1]
+    trend = (ef[i] > es[i] and c["c"] > es[i]) if long_ \
+        else (ef[i] < es[i] and c["c"] < es[i])
+    if trend:
+        tol = V2_PULLBACK_TOL * atr_i
+        near = (c["l"] <= ef[i] + tol) if long_ else (c["h"] >= ef[i] - tol)
+        if near:
+            return ("continuation",
+                    f"trend intact, price back at the {TF} EMA{V2_FAST} - "
+                    f"waiting for the reclaim candle")
+    stretch = (es[i] - min(p["l"] for p in win)) if long_ \
+        else (max(p["h"] for p in win) - es[i])
+    if stretch >= V2_STRETCH_ATR * atr_i:
+        return ("reversal",
+                f"{stretch / atr_i:.1f} ATR from the EMA{V2_SLOW} - waiting "
+                f"for a sweep and reclaim")
+    return None
+
+
 def process_candle_v2(asset, ast, real, a, i, source):
     if ast.get("trade"):
         return False
@@ -1608,7 +1633,27 @@ def process_candle_v2(asset, ast, real, a, i, source):
             if ast.get("trade"):
                 ast["trade"]["mtf"] = True
                 ast["trade"]["hl"] = ext
+                ast["watch"] = None
             return True
+
+    # nothing triggered - record what we are watching, for the dashboard
+    ast["watch"] = None
+    for long_ in (True, False):
+        direction = "LONG" if long_ else "SHORT"
+        w = v2_watch(real, a, ef, es, i, long_)
+        if not w:
+            continue
+        kind, note = w
+        if V2_REGIME_ROUTING and regime:
+            if regime == "trend" and kind == "reversal":
+                continue
+            if regime == "trend" and bias and bias != direction:
+                continue
+            if regime == "range" and kind == "continuation":
+                continue
+        ast["watch"] = {"kind": kind, "dir": direction, "note": note,
+                        "regime": regime, "t": c["t"]}
+        break
     return False
 
 
