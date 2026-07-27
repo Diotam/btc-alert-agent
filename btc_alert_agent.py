@@ -1410,7 +1410,8 @@ def process_candle_mtf(asset, ast, real, ha, a, i, source):
                  break_ext=c["h"] if long_ else c["l"],
                  deadline_t=c["t"] + RETEST_MAX * MS[TF],
                  retest_ext=None, pb_vols=[])
-        log(f"{sym}: STRUCTURE BREAK above ${fmt_px(lvl)} "
+        log(f"{sym}: STRUCTURE BREAK "
+            f"{'above' if long_ else 'below'} ${fmt_px(lvl)} "
             f"({body / atr_i:.2f} ATR body, "
             f"{(c.get('v') or 0) / vavg if vavg else 0:.1f}x volume) - "
             f"waiting up to {RETEST_MAX} candles for the retest")
