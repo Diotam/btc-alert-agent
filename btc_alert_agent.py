@@ -141,7 +141,9 @@ VOL_BASE = 20                        # volume average length
 EXHAUST_MIN = 3                      # consecutive red HA candles before a flip
 BREAK_BODY_ATR = 0.60                # break candle body, x ATR
 BREAK_VOL_MULT = 1.20                # break candle volume, x 20-bar average
-RETEST_MAX = 6                       # candles allowed for the retest
+FLIP_TTL = 48                        # candles a flip stays live waiting for
+                                     # the structure break (48 x 5m = 4h)
+RETEST_MAX = 12                      # candles allowed for the retest (1h)
 RETEST_TOL_ATR = 0.15                # how far a close may sit beyond the level
 STOP_BUFFER_ATR = 0.15               # buffer under the retest low
 MAX_STOP_ATR = 1.25                  # skip if the stop is wider than this
@@ -1277,7 +1279,7 @@ def process_candle_mtf(asset, ast, real, ha, a, i, source):
             ast["zone"] = {"dir": direction, "stage": "flip", "level": lvl,
                            "flip_t": c["t"],
                            "extreme": c["l"] if long_ else c["h"],
-                           "expires_t": c["t"] + 24 * MS[TF]}
+                           "expires_t": c["t"] + FLIP_TTL * MS[TF]}
             log(f"{sym}: {direction} HA flip after exhaustion, {why}; needs a "
                 f"close beyond ${fmt_px(lvl)} to become a setup")
             if ALERT_STAGES:
