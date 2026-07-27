@@ -173,6 +173,12 @@ def build_data():
                            "tp": tp, "mid": mid, "pnl": pnl, "r": r_now,
                            "opened_t": tr.get("opened_t", 0)})
         w = ast.get("watch")
+        # a watch that has not been refreshed in an hour is stale - the symbol
+        # stopped qualifying, left the universe, or is no longer being scanned
+        if w and (time.time() * 1000 - (w.get("t") or 0)) > 3_600_000:
+            w = None
+        if w and ast.get("trade"):
+            w = None                      # a live trade takes the card instead
         if w:
             long_ = w.get("dir") == "LONG"
             kind = w.get("kind", "setup")
