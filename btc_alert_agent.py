@@ -154,6 +154,9 @@ CONT_PULLBACK_TOL_ATR = 0.25       # the pullback must reach within this of
 CONT_TRIGGER_HA = True             # the resumption candle needs HA agreement:
                                    # the slow series still with the trend, or
                                    # plain HA turned back (momentum flipped)
+CONT_NO_SLOW_FLIP = True           # ...and the slow series must not have
+                                   # flipped AGAINST the trade inside the
+                                   # window - that is a reversal, not a pullback
 CONT_STOP_STRUCTURAL = True        # stop under the pullback extreme when the
                                    # risk fits, tighten to the trigger candle
                                    # only when it does not
@@ -1409,6 +1412,18 @@ def continuation_signal(real, ha, a, e20, i, long_):
         raw = heikin_ashi(real[:i + 1])[i]
         raw_ok = (raw["c"] > raw["o"]) if long_ else (raw["c"] < raw["o"])
         if not (slow_ok or raw_ok):
+            return False, None, ""
+    if CONT_NO_SLOW_FLIP:
+        # the trend series must not have turned against the trade: find the
+        # last slow-HA colour change in the window and require it to be ours
+        last_flip = None
+        for j in range(i - CONT_LOOKBACK + 1, i + 1):
+            if ha[j].get("warm") or ha[j - 1].get("warm"):
+                continue
+            now_bull = ha[j]["c"] > ha[j]["o"]
+            if now_bull != (ha[j - 1]["c"] > ha[j - 1]["o"]):
+                last_flip = now_bull
+        if last_flip is not None and last_flip != long_:
             return False, None, ""
     return True, ext, (f"{same}/{len(trend)} HA candles with the trend, "
                        f"pullback to the {TF} EMA{EMA5} held, resumption candle "
