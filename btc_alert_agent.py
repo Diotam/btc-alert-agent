@@ -1462,25 +1462,44 @@ def continuation_signal(real, ha, a, e20, i, long_):
                        f"with HA agreeing")
 
 
+HTF_CACHE_S = 900            # the 4h/1h read barely moves inside this window
+HTF_RETRY_S = 120            # after a failure, retry sooner than that
+_HTF_CACHE = {}
+
+
 def htf_context(asset):
-    """1h read: (bias, regime). bias is which side of the EMA50 price sits;
-    regime is 'trend' when that EMA is moving decisively, else 'range'."""
+    """Higher-timeframe read: (bias, regime). Cached per symbol - without
+    this the extra fetches get rate-limited and routing silently turns off."""
+    sym = asset["symbol"]
+    hit = _HTF_CACHE.get(sym)
+    if hit:
+        age = time.time() - hit[0]
+        ttl = HTF_CACHE_S if hit[1][0] else HTF_RETRY_S
+        if age < ttl:
+            return hit[1]
     try:
         _, h = fetch(asset, V2_HTF, V2_HTF_EMA + 30)
         if not h or len(h) < V2_HTF_EMA + 12:
-            log(f"{asset['symbol']}: {V2_HTF} history too short "
+            log(f"{sym}: {V2_HTF} history too short "
                 f"({0 if not h else len(h)} candles, need {V2_HTF_EMA + 12}) - "
                 "bias and regime routing are OFF for this symbol")
+            _HTF_CACHE[sym] = (time.time(), (None, None))
             return None, None
         e = _ema_list([c["c"] for c in h], V2_HTF_EMA)
         ah = atr(h)
         j = len(h) - 2
         if e[j] is None or e[j - 6] is None or not ah[j]:
+            _HTF_CACHE[sym] = (time.time(), (None, None))
             return None, None
         bias = "LONG" if h[j]["c"] > e[j] else "SHORT"
         slope = abs(e[j] - e[j - 6]) / ah[j]
-        return bias, ("trend" if slope >= V2_TREND_SLOPE else "range")
-    except Exception:
+        out = bias, ("trend" if slope >= V2_TREND_SLOPE else "range")
+        _HTF_CACHE[sym] = (time.time(), out)
+        return out
+    except Exception as e:
+        log(f"{sym}: {V2_HTF} context failed ({type(e).__name__}) - "
+            "routing off until the retry")
+        _HTF_CACHE[sym] = (time.time(), (None, None))
         return None, None
 
 
