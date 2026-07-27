@@ -142,6 +142,13 @@ NEWS_RECENT_H = 6            # a headline this fresh gets a caution line
 NEWS_URL = ("https://feeds.finance.yahoo.com/rss/2.0/headline"
             "?s={t}&region=US&lang=en-US")
 
+# legacy volume knobs - only read by the pre-v2 HA pathway, kept so that
+# STRATEGY_V2 = False still runs instead of raising NameError
+VOL_GATE = False
+VOL_RUN_MULT = 1.20
+VOL_PULLBACK_MAX = 0.90
+VOL_CONFIRM_MULT = 1.00
+
 # --- pathway C: trend continuation (pullback inside an established trend) ---
 CONT_ENTRY = True
 CONT_LOOKBACK = 20           # window used to judge "established trend"
@@ -528,7 +535,8 @@ def sma(values, period):
     return out
 
 
-def atr(candles, period=14):
+def atr(candles, period=None):
+    period = period or ATR_PERIOD
     out = [None] * len(candles)
     prev = None
     for i in range(1, len(candles)):
