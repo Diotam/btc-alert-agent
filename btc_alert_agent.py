@@ -79,7 +79,7 @@ ASSETS = [                         # used when DISCOVER_ALL = False / discovery 
 ]
 
 # --- Strategy dials -------------------------------------------------------
-TF = "15m"                    # execution timeframe (the spec is 5m closes)
+TF = "5m"                     # execution timeframe (the spec is 5m closes)
 RANGE_TZ = "America/New_York"
 # session windows per asset class (NY h:m start -> h:m end):
 #   crypto & commodities: the first 4h of the NY day (overnight range)
@@ -94,6 +94,12 @@ SESSIONS = {"crypto": (0, 0, 4, 0),
             "stock": (9, 30, 10, 30)}
 RR = 2.0                     # TP = 2 x the stop distance
 RANGE_MIN_ATR = 0.30         # range narrower than this x ATR = untradeable day
+# stop placement: the raw stop is the swing extreme of the run that faded.
+#   SL_PAD_ATR  pushes it that much further away (breathing room for wicks)
+#   SL_MIN_PCT  widens it to at least this % of price instead of skipping the
+#               trade - leave at 0 to keep skipping via MIN_STOP_PCT
+SL_PAD_ATR = 0.25
+SL_MIN_PCT = 0.0
 MIN_STOP_PCT = 0.25              # skip entries whose stop sits closer than
                                  # this % of price - sub-noise stops just churn
 
@@ -103,7 +109,7 @@ MIN_STOP_PCT = 0.25              # skip entries whose stop sits closer than
 HA_MODE = "smoothed"             # "smoothed" = TradingView Smoothed HA
 SHA_PRE, SHA_POST = 10, 10       # the two EMA lengths ("Smoothed Ha Candles 10 10")
 HA_CONFIRM_CANDLES = 2
-HA_BODY_MIN_ATR = 0.50           # "large" = HA body at least this x ATR.
+HA_BODY_MIN_ATR = 0.25           # "large" = HA body at least this x ATR.
                                  # NOTE: smoothed HA bodies are much smaller
                                  # than raw candles - 0.50 would qualify none
 HA_WICK_MAX_BODY = 0.25          # "no wick" = wick at most this fraction of
@@ -989,12 +995,22 @@ def process_open_trade(asset, trade, candles, last_closed_t):
 
 
 def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger,
-               rr=None, runner=False):
+               rr=None, runner=False, atr_i=None):
     """Risk checks, override handling, alert and trade creation. Returns True
     if a trade was opened."""
     sym = asset["symbol"]
     short = direction == "SHORT"
     entry = c["c"]
+    raw_stop = stop
+    if SL_PAD_ATR and atr_i:                      # breathing room beyond the swing
+        stop = stop + SL_PAD_ATR * atr_i if short else stop - SL_PAD_ATR * atr_i
+    if SL_MIN_PCT and entry:                      # widen rather than skip
+        need = entry * SL_MIN_PCT / 100
+        stop = max(stop, entry + need) if short else min(stop, entry - need)
+    if stop != raw_stop:
+        log(f"{asset['symbol']}: stop widened ${fmt_px(raw_stop)} -> "
+            f"${fmt_px(stop)} (pad {SL_PAD_ATR} ATR"
+            + (f", min {SL_MIN_PCT}%" if SL_MIN_PCT else "") + ")")
     risk = (stop - entry) if short else (entry - stop)
     if risk <= 0:
         return False
@@ -1188,7 +1204,7 @@ def process_candle(asset, ast, real, ha, a, k, i, source, rng_cache):
                            f"smoothed HA flipped, price pulled back to the HA "
                            f"{'support' if long_ else 'resistance'} and printed "
                            f"a {'green' if long_ else 'red'} candle",
-                           rr=RR_TREND, runner=RUNNER_HALF_AT_TP)
+                           rr=RR_TREND, runner=RUNNER_HALF_AT_TP, atr_i=a[i])
                 return True
         return True
 
