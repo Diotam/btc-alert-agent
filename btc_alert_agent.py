@@ -1267,16 +1267,19 @@ def process_open_trade(asset, trade, candles, last_closed_t):
     # close to say so. checked_t is NOT advanced for the live candle.
     live = candles[-1]
     if live["t"] > last_closed_t:
+        # the closed-candle loop may not have run this pulse, so this
+        # section must never rely on its loop variables
+        now_t = int(time.time() * 1000)
         stop_hit = live["l"] <= trade["stop"] if long else live["h"] >= trade["stop"]
         tp_hit = (live["h"] >= tp) if long else (live["l"] <= tp)
         if stop_hit:
             if trade.get("half"):
                 if ALERT_LIFECYCLE:
                     send_telegram(lifecycle_message(
-                        asset, "BE", trade, trade["stop"], c_close_t, ""))
+                        asset, "BE", trade, trade["stop"], now_t, ""))
                 log(f"{sym}: RUNNER STOPPED AT BREAKEVEN "
                     f"${fmt_px(trade['stop'])}")
-                record_close(sym, trade, trade["stop"], "BE", c_close_t,
+                record_close(sym, trade, trade["stop"], "BE", now_t,
                              frac=0.5)
                 RUN_ALERTS.append(f"{sym} runner stopped at breakeven")
                 return None, True
@@ -1298,11 +1301,11 @@ def process_open_trade(asset, trade, candles, last_closed_t):
                 trade["stop"] = trade["entry"]
                 if ALERT_LIFECYCLE:
                     send_telegram(lifecycle_message(
-                        asset, "TP_HALF", trade, tp, c_close_t,
+                        asset, "TP_HALF", trade, tp, now_t,
                         f"stop is now breakeven at ${fmt_px(trade['entry'])}; "
                         "the rest exits when the smoothed HA flips"))
                 log(f"{sym}: HALF CLOSED at ${fmt_px(tp)}, stop -> breakeven")
-                record_close(sym, trade, tp, "TP_HALF", c_close_t, frac=0.5)
+                record_close(sym, trade, tp, "TP_HALF", now_t, frac=0.5)
                 RUN_ALERTS.append(
                     f"{sym} half closed ({pnl_pct(trade, tp) * 0.5:+.2f}%)")
                 return trade, True
