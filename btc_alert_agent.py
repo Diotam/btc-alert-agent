@@ -194,7 +194,9 @@ TF = _TF_ALIASES.get(TF.strip().lower(), TF.strip().lower())
 if TF not in MS:
     raise SystemExit(f"CONFIG ERROR: TF={TF!r} is not a known timeframe - "
                      f"use one of {sorted(MS)}")
-LOOKBACK = {"5m": 300, "15m": 400, "30m": 400, "1h": 200}
+LOOKBACK = {"5m": 300, "15m": 400, "30m": 400, "1h": 500}
+# 1h must cover the 200 EMA with room to spare, or the permission
+# check can never pass
 
 REQUEST_TIMEOUT_S = 8              # fail fast: a throttled API must not burn 20s
 RUN_BUDGET_S = 480                 # hard per-run budget; remaining assets resume
@@ -629,9 +631,11 @@ def htf_permission(asset, direction):
     15m: matching structure, with EMA20/50 and VWAP as a preference.
     Returns (ok, detail)."""
     long_ = direction == "LONG"
-    _, h1 = fetch(asset, HTF_TF, HTF_EMA + 60)
-    if not h1 or len(h1) < HTF_EMA + 5:
-        return False, f"no {HTF_TF} data"
+    _, h1 = fetch(asset, HTF_TF, HTF_EMA + 10)
+    if not h1 or len(h1) < HTF_EMA + 10:
+        return False, (f"{HTF_TF} history too short "
+                       f"({0 if not h1 else len(h1)} candles, need "
+                       f"{HTF_EMA + 10})")
     e200 = _ema_list([c["c"] for c in h1], HTF_EMA)
     i = len(h1) - 2
     if e200[i] is None:
@@ -643,7 +647,7 @@ def htf_permission(asset, direction):
     if (slope < 0) if long_ else (slope > 0):
         return False, f"{HTF_TF} EMA{HTF_EMA} sloping against the trade"
 
-    _, m15 = fetch(asset, MTF_TF, 160)
+    _, m15 = fetch(asset, MTF_TF, MTF_SLOW + 40)
     if not m15 or len(m15) < MTF_SLOW + 10:
         return False, f"no {MTF_TF} data"
     st = structure_bullish(m15[:-1])
