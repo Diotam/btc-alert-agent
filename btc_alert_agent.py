@@ -142,6 +142,14 @@ NEWS_RECENT_H = 6            # a headline this fresh gets a caution line
 NEWS_URL = ("https://feeds.finance.yahoo.com/rss/2.0/headline"
             "?s={t}&region=US&lang=en-US")
 
+# --- pathway C: trend continuation (pullback inside an established trend) ---
+CONT_ENTRY = True
+CONT_LOOKBACK = 20           # window used to judge "established trend"
+CONT_TREND_MIN = 6           # HA candles of the trend colour inside it
+CONT_PULLBACK_MAX = 6        # candles the pullback may last
+CONT_HA_FLIP_MAX = 2         # more opposite HA candles than this = a reversal,
+                             # not a pullback (the other pathway handles those)
+
 STRATEGY_MTF = True          # False -> fall back to the previous HA engine
 HTF_TF, HTF_EMA = "1h", 200          # permission: price vs a flat/rising 200
 MTF_TF = "15m"                       # structure + VWAP + EMA20/50
@@ -1333,6 +1341,60 @@ def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger,
     return True
 
 
+def continuation_signal(real, ha, a, e20, i, long_):
+    """Pullback INSIDE an established trend, then a resumption candle.
+    Returns (ok, pullback_extreme, detail)."""
+    if i < CONT_LOOKBACK + 2 or not a[i] or e20[i] is None:
+        return False, None, ""
+    lo_i = i - CONT_PULLBACK_MAX                      # start of the pullback
+    trend = [ha[j] for j in range(i - CONT_LOOKBACK, lo_i)
+             if not ha[j].get("warm")]
+    if len(trend) < CONT_TREND_MIN:
+        return False, None, ""
+    same = sum(1 for h in trend if (h["c"] > h["o"]) == long_)
+    if same < CONT_TREND_MIN:
+        return False, None, ""
+    if e20[lo_i] is None or \
+            ((real[lo_i]["c"] <= e20[lo_i]) if long_ else
+             (real[lo_i]["c"] >= e20[lo_i])):
+        return False, None, ""                        # trend leg not above/below EMA
+
+    pull = real[lo_i:i]                               # the pullback candles
+    touched = any((p["l"] <= e20[j + lo_i]) if long_ else (p["h"] >= e20[j + lo_i])
+                  for j, p in enumerate(pull) if e20[j + lo_i] is not None)
+    if not touched:
+        return False, None, ""                        # never came back to the EMA
+
+    ext = min(p["l"] for p in pull) if long_ else max(p["h"] for p in pull)
+    # the pullback must not have broken the trend leg's own extreme
+    leg = real[i - CONT_LOOKBACK:lo_i]
+    leg_ext = min(p["l"] for p in leg) if long_ else max(p["h"] for p in leg)
+    if (ext < leg_ext) if long_ else (ext > leg_ext):
+        return False, None, ""
+
+    c = real[i]
+    prev = real[i - 1]
+    # the HA may go the other way briefly during a pullback, but a long
+    # opposite run means the trend is turning - leave that to pathway A
+    run = 0
+    for j in range(lo_i, i):
+        if ha[j].get("warm"):
+            continue
+        if (ha[j]["c"] < ha[j]["o"]) if long_ else (ha[j]["c"] > ha[j]["o"]):
+            run += 1
+        else:
+            run = 0
+    if run > CONT_HA_FLIP_MAX:
+        return False, None, ""
+    ok = ((c["c"] > c["o"]) if long_ else (c["c"] < c["o"])) and \
+        ((c["c"] > e20[i]) if long_ else (c["c"] < e20[i])) and \
+        ((c["c"] > prev["h"]) if long_ else (c["c"] < prev["l"]))
+    if not ok:
+        return False, None, ""
+    return True, ext, (f"{same}/{len(trend)} HA candles with the trend, "
+                       f"pullback to the {TF} EMA{EMA5} held, resumption candle")
+
+
 def process_candle_mtf(asset, ast, real, ha, a, i, source):
     """flip alert -> structure break -> retest -> confirmation -> entry."""
     sym = asset["symbol"]
@@ -1345,6 +1407,41 @@ def process_candle_mtf(asset, ast, real, ha, a, i, source):
     vols = [x.get("v") or 0 for x in real]
     vavg = sum(vols[max(0, i - VOL_BASE):i]) / max(1, len(vols[max(0, i - VOL_BASE):i]))
     z = ast.get("zone")
+
+    # ---------- pathway C: continuation inside an established trend --------
+    # a pending reversal zone does not block a valid continuation entry
+    if CONT_ENTRY and not ast.get("trade"):
+        for long_ in (True, False):
+            ok, ext, detail = continuation_signal(real, ha, a, e20, i, long_)
+            if not ok:
+                continue
+            direction = "LONG" if long_ else "SHORT"
+            allowed, why = htf_permission(asset, direction)
+            if not allowed:
+                log(f"{sym}: {direction} continuation setup but higher "
+                    f"timeframes say no ({why})")
+                break
+            # continuation risk is measured from the RESUMPTION candle, not
+            # the whole pullback: if price falls back through the candle that
+            # restarted the trend, the idea is wrong
+            ref = min(c["l"], ext) if long_ else max(c["h"], ext)
+            ref = c["l"] if long_ else c["h"]
+            stop = ref - STOP_BUFFER_ATR * atr_i if long_ \
+                else ref + STOP_BUFFER_ATR * atr_i
+            risk = (c["c"] - stop) if long_ else (stop - c["c"])
+            if risk <= 0:
+                break
+            if risk > MAX_STOP_ATR * atr_i:
+                log(f"{sym}: continuation stop would be {risk / atr_i:.2f} ATR "
+                    f"wide (max {MAX_STOP_ATR}) - skipped")
+                break
+            fire_entry(asset, ast, direction, c, stop, None, None, source,
+                       f"trend continuation - {detail}; {why}",
+                       rr=RR_TREND, runner=RUNNER_HALF_AT_TP)
+            if ast.get("trade"):
+                ast["trade"]["mtf"] = True
+                ast["trade"]["hl"] = ext
+            return True
 
     # ---------- stage 0: exhaustion + colour flip = ALERT only -------------
     if not z:
