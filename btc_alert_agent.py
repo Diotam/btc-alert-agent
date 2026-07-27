@@ -130,6 +130,14 @@ TREND_RUN_MIN = 4            # candles of one colour before the flip counts
 TREND_GROW_MIN = 2           # bodies must grow this many times during the run
 TREND_FADE_MIN = 2           # then shrink this many times before the flip
 ZONE_TTL = 24                # candles the HA support/resistance stays valid
+# volume confirmation: the faded run needs real participation, the pullback
+# into the zone should be quieter than it, and the confirmation candle should
+# not be a dribble
+VOL_GATE = True
+VOL_BASE = 20                # candles used for the baseline average
+VOL_RUN_MULT = 1.20          # run volume vs the baseline before it
+VOL_PULLBACK_MAX = 0.90      # pullback volume vs the run's own average
+VOL_CONFIRM_MULT = 1.00      # confirmation candle vs its recent average
 RR_TREND = 1.5               # pathway B target (pathway A stays at RR)
 RUNNER_HALF_AT_TP = True     # half off at 1.5R, stop to breakeven, rest exits
                              # when the smoothed HA flips against the trade
@@ -555,6 +563,12 @@ def stoch_ok(k, ha, i, short, skip=0):
 
 def doji_label():
     return f"{DOJI_COUNT} doji" + ("s" if DOJI_COUNT != 1 else "")
+
+
+def avg_vol(candles, lo, hi):
+    vals = [c.get("v") or 0 for c in candles[max(0, lo):max(0, hi)]]
+    vals = [v for v in vals if v > 0]
+    return sum(vals) / len(vals) if vals else 0.0
 
 
 def trend_flip(ha, a, i):
@@ -1147,6 +1161,13 @@ def process_candle(asset, ast, real, ha, a, k, i, source, rng_cache):
         direction, run_start = trend_flip(ha, a, i)
         if direction:
             long_ = direction == "LONG"
+            run_v = avg_vol(real, run_start, i)
+            base_v = avg_vol(real, run_start - VOL_BASE, run_start)
+            if VOL_GATE and base_v and run_v < VOL_RUN_MULT * base_v:
+                log(f"{sym}: HA flipped but the run only carried "
+                    f"{run_v / base_v:.2f}x its baseline volume "
+                    f"(need {VOL_RUN_MULT}x) - not armed")
+                return True
             swing = min(x["l"] for x in real[run_start:i + 1]) if long_ \
                 else max(x["h"] for x in real[run_start:i + 1])
             ast["zone"] = {
@@ -1155,6 +1176,8 @@ def process_candle(asset, ast, real, ha, a, k, i, source, rng_cache):
                 "bot": min(ha[i]["o"], ha[i]["c"]),
                 "swing": swing,
                 "touched": False,
+                "flip_t": c["t"],
+                "run_vol": run_v,
                 "expires_t": c["t"] + ZONE_TTL * MS[TF],
             }
             log(f"{sym}: smoothed HA flipped "
@@ -1199,11 +1222,29 @@ def process_candle(asset, ast, real, ha, a, k, i, source, rng_cache):
         # step 2: a candle in the trade's direction confirms the area held
         if z["touched"]:
             confirmed = (c["c"] > c["o"]) if long_ else (c["c"] < c["o"])
+            if confirmed and VOL_GATE:
+                pb = [x.get("v") or 0 for x in real[:i]
+                      if x["t"] > z.get("flip_t", 0)]
+                pb = [v for v in pb if v > 0]
+                pb_avg = sum(pb) / len(pb) if pb else 0.0
+                run_v = z.get("run_vol") or 0
+                if run_v and pb_avg > VOL_PULLBACK_MAX * run_v:
+                    log(f"{sym}: pullback ran at {pb_avg / run_v:.2f}x the "
+                        f"run's volume (max {VOL_PULLBACK_MAX}x) - not a quiet "
+                        "pullback, still waiting")
+                    return True
+                base_v = avg_vol(real, i - VOL_BASE, i)
+                if base_v and (c.get("v") or 0) < VOL_CONFIRM_MULT * base_v:
+                    log(f"{sym}: confirmation candle volume "
+                        f"{(c.get('v') or 0) / base_v:.2f}x average "
+                        f"(need {VOL_CONFIRM_MULT}x) - waiting for a stronger one")
+                    return True
             if confirmed:
                 fire_entry(asset, ast, z["dir"], c, z["swing"], hi, lo, source,
                            f"smoothed HA flipped, price pulled back to the HA "
                            f"{'support' if long_ else 'resistance'} and printed "
-                           f"a {'green' if long_ else 'red'} candle",
+                           f"a {'green' if long_ else 'red'} candle"
+                           + (" on confirming volume" if VOL_GATE else ""),
                            rr=RR_TREND, runner=RUNNER_HALF_AT_TP, atr_i=a[i])
                 return True
         return True
