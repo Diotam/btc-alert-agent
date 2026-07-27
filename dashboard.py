@@ -172,6 +172,16 @@ def build_data():
                            "entry": tr["entry"], "stop": tr["stop"],
                            "tp": tp, "mid": mid, "pnl": pnl, "r": r_now,
                            "opened_t": tr.get("opened_t", 0)})
+        w = ast.get("watch")
+        if w:
+            long_ = w.get("dir") == "LONG"
+            kind = w.get("kind", "setup")
+            zones.append({"sym": sym, "dir": w.get("dir"),
+                          "lev": ast.get("lev"),
+                          "stage": f"{kind} \u00b7 {w.get('note','')}",
+                          "mid": mid, "prog": 70.0 if kind == "continuation" else 45.0,
+                          "step": 1,
+                          "names": [f"{kind} context", "trigger candle", "entry"]})
         zz = ast.get("zone")
         if zz and zz.get("stage"):
             # multi-timeframe engine: flip -> structure break -> retest
@@ -304,7 +314,7 @@ h1{font-size:17px;margin:4px 0 12px}
   </div>
 </div>
 <div class="section shead" onclick="toggle('trades')"><span class=chev id=c-trades>\u25be</span>Open trades<span class=cnt id=n-trades>0</span></div><div id=trades></div>
-<div class="section shead" onclick="toggle('zones')"><span class=chev id=c-zones>\u25be</span>Armed setups<span class=cnt id=n-zones>0</span></div><div id=zones></div>
+<div class="section shead" onclick="toggle('zones')"><span class=chev id=c-zones>\u25be</span>Watching<span class=cnt id=n-zones>0</span></div><div id=zones></div>
 <div class="section shead" onclick="toggle('closed')"><span class=chev id=c-closed>\u25be</span>Closed trades<span class=cnt id=n-closed>0</span> <span id=csub class=muted style="float:right;text-transform:none;letter-spacing:0"></span></div><div id=closed></div>
 <div class="section shead" onclick="toggle('events')"><span class=chev id=c-events>\u25be</span>Recent events<span class=cnt id=n-events>0</span></div><div id=events></div>
 <script>
