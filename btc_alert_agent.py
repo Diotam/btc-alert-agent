@@ -42,7 +42,9 @@ import os
 import sys
 import time
 import urllib.request
+import re
 import zlib
+from email.utils import parsedate_to_datetime
 from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -55,7 +57,8 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 # --- Asset universe -------------------------------------------------------
 DISCOVER_ALL = True
-DISCOVER_DEXES = False              # scan HIP-3 builder dexes too - but only
+DISCOVER_DEXES = True            # scan builder venues (stocks live there)
+ADMIT_COMMODITIES = False        # stocks yes, metals/energy no              # scan HIP-3 builder dexes too - but only
                                    # commodity markets are admitted from them
 DEXES = [""]                       # fallback when dex discovery fails
 COMMODITY_TICKERS = ("XAU", "GOLD", "XAG", "SILVER", "XPT", "PLAT",
@@ -131,6 +134,14 @@ TREND_GROW_MIN = 2           # bodies must grow this many times during the run
 TREND_FADE_MIN = 2           # then shrink this many times before the flip
 ZONE_TTL = 24                # candles the HA support/resistance stays valid
 # --- multi-timeframe engine ------------------------------------------------
+# --- headlines for stock alerts --------------------------------------------
+NEWS_ENABLED = True
+NEWS_MAX = 2                 # headlines shown per alert
+NEWS_TTL_S = 900             # cache per ticker
+NEWS_RECENT_H = 6            # a headline this fresh gets a caution line
+NEWS_URL = ("https://feeds.finance.yahoo.com/rss/2.0/headline"
+            "?s={t}&region=US&lang=en-US")
+
 STRATEGY_MTF = True          # False -> fall back to the previous HA engine
 HTF_TF, HTF_EMA = "1h", 200          # permission: price vs a flat/rising 200
 MTF_TF = "15m"                       # structure + VWAP + EMA20/50
@@ -402,6 +413,8 @@ def discover_assets():
             if base_name(name) in {base_name(x) for x in EXCLUDE}:
                 continue
             if dex:
+                if is_commodity(name) and not ADMIT_COMMODITIES:
+                    continue
                 if is_commodity(name):
                     if vol < COMMODITY_MIN_VOLUME_USD:
                         continue
@@ -906,6 +919,75 @@ def stage_message(asset, direction, level, px, t):
     ])
 
 
+_NEWS_CACHE = {}
+
+
+def parse_news(xml, limit=NEWS_MAX):
+    """Titles + publish dates from an RSS document. Returns [(title, dt)]."""
+    out = []
+    for item in re.findall(r"<item>(.*?)</item>", xml, re.S)[:limit * 2]:
+        m = re.search(r"<title>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</title>",
+                      item, re.S)
+        if not m:
+            continue
+        title = re.sub(r"\s+", " ", m.group(1)).strip()
+        when = None
+        d = re.search(r"<pubDate>(.*?)</pubDate>", item, re.S)
+        if d:
+            try:
+                when = parsedate_to_datetime(d.group(1).strip())
+            except Exception:
+                when = None
+        out.append((title, when))
+        if len(out) >= limit:
+            break
+    return out
+
+
+def news_for(symbol):
+    """Recent headlines for a stock ticker. Never raises, never blocks long."""
+    if not NEWS_ENABLED:
+        return []
+    ticker = base_name(symbol)
+    hit = _NEWS_CACHE.get(ticker)
+    if hit and time.time() - hit[0] < NEWS_TTL_S:
+        return hit[1]
+    items = []
+    try:
+        req = urllib.request.Request(
+            NEWS_URL.format(t=ticker),
+            headers={"User-Agent": "Mozilla/5.0 (signal-agent)"})
+        with urllib.request.urlopen(req, timeout=6) as r:
+            items = parse_news(r.read().decode("utf-8", "replace"))
+    except Exception as e:
+        log(f"{symbol}: news lookup failed ({type(e).__name__})")
+    _NEWS_CACHE[ticker] = (time.time(), items)
+    return items
+
+
+def news_block(asset):
+    """The headline section for a stock alert, or '' for anything else."""
+    if asset.get("cls") != "stock":
+        return ""
+    items = news_for(asset["symbol"])
+    if not items:
+        return ""
+    now = datetime.now(timezone.utc)
+    lines, fresh = [], False
+    for title, when in items:
+        age = ""
+        if when:
+            hrs = (now - when.astimezone(timezone.utc)).total_seconds() / 3600
+            fresh = fresh or hrs <= NEWS_RECENT_H
+            age = f" \u00b7 {hrs:.0f}h ago" if hrs >= 1 else " \u00b7 just now"
+        lines.append(f"\u2022 {esc(title[:110])}{age}")
+    head = "\U0001F4F0 <b>Headlines</b> <i>(Yahoo Finance)</i>"
+    if fresh:
+        head += "\n\u26A0\ufe0f <i>news in the last few hours - this move may " \
+                "be event-driven, not technical</i>"
+    return "\n\n" + head + "\n" + "\n".join(lines)
+
+
 def entry_message(asset, direction, plan, hi, lo, source, t, trigger):
     e = "\U0001F7E2" if direction == "LONG" else "\U0001F534"
     cls = asset.get("cls", "crypto")
@@ -926,7 +1008,7 @@ def entry_message(asset, direction, plan, hi, lo, source, t, trigger):
         f"Stop:  <code>${fmt_px(plan['stop'])}</code>",
         f"TP:    <code>${fmt_px(plan['tp'])}</code>  ({RR:.0f}x the stop distance)",
         f"<i>data: {esc(source)}</i>",
-    ])
+    ]) + news_block(asset)
 
 
 def lifecycle_message(asset, kind, trade, exit_px, event_t, note):
