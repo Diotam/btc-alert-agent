@@ -82,7 +82,7 @@ ASSETS = [                         # used when DISCOVER_ALL = False / discovery 
 ]
 
 # --- Strategy dials -------------------------------------------------------
-TF = "5m"                     # execution timeframe (the spec is 5m closes)
+TF = "15m"                    # execution timeframe (the spec is 5m closes)
 RANGE_TZ = "America/New_York"
 # session windows per asset class (NY h:m start -> h:m end):
 #   crypto & commodities: the first 4h of the NY day (overnight range)
@@ -170,7 +170,7 @@ CONT_STOP_STRUCTURAL = True        # stop under the pullback extreme when the
 # ===========================================================================
 STRATEGY_V2 = True
 V2_FAST, V2_SLOW = 20, 50        # 5m EMAs
-V2_HTF, V2_HTF_EMA = "1h", 50    # light higher-timeframe bias
+V2_HTF, V2_HTF_EMA = "4h", 50    # higher-timeframe bias and regime
 V2_HTF_REQUIRED = False          # True = 1h must agree, False = advisory only
 V2_LOOKBACK = 8                  # candles a pullback / sweep may span
 V2_PULLBACK_TOL = 0.35           # how close to the EMA counts as a pullback
@@ -257,7 +257,7 @@ TF = _TF_ALIASES.get(TF.strip().lower(), TF.strip().lower())
 if TF not in MS:
     raise SystemExit(f"CONFIG ERROR: TF={TF!r} is not a known timeframe - "
                      f"use one of {sorted(MS)}")
-LOOKBACK = {"5m": 300, "15m": 400, "30m": 400, "1h": 500}
+LOOKBACK = {"5m": 300, "15m": 400, "30m": 400, "1h": 500, "4h": 300}
 # 1h must cover the 200 EMA with room to spare, or the permission
 # check can never pass
 
@@ -363,7 +363,10 @@ def fetch_kraken(pair, interval, lookback):
 
 
 def fetch_yahoo(ticker, interval, lookback):
-    yint = {"5m": "5m", "15m": "15m", "30m": "30m", "1h": "60m"}[interval]
+    yint = {"5m": "5m", "15m": "15m", "30m": "30m",
+            "1h": "60m"}.get(interval)
+    if not yint:
+        return None            # e.g. 4h - no equivalent, never fake it
     rng = "5d" if interval == "5m" else "1mo"
     from urllib.parse import quote
     data = http_json(f"https://query1.finance.yahoo.com/v8/finance/chart/{quote(ticker)}"
@@ -1465,6 +1468,9 @@ def htf_context(asset):
     try:
         _, h = fetch(asset, V2_HTF, V2_HTF_EMA + 30)
         if not h or len(h) < V2_HTF_EMA + 12:
+            log(f"{asset['symbol']}: {V2_HTF} history too short "
+                f"({0 if not h else len(h)} candles, need {V2_HTF_EMA + 12}) - "
+                "bias and regime routing are OFF for this symbol")
             return None, None
         e = _ema_list([c["c"] for c in h], V2_HTF_EMA)
         ah = atr(h)
