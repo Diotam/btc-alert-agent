@@ -161,6 +161,35 @@ CONT_STOP_STRUCTURAL = True        # stop under the pullback extreme when the
                                    # risk fits, tighten to the trigger candle
                                    # only when it does not
 
+# ===========================================================================
+# STRATEGY V2 - two clean pathways, three conditions each
+#   CONTINUATION: trend (EMA20>EMA50) -> pullback to the EMAs -> reclaim candle
+#   REVERSAL:     price stretched from EMA50 -> liquidity sweep -> reclaim
+# Both: stop beyond the swing + buffer, TP 1.5R, half off then a trailing
+# runner. One light 1h bias check, no multi-stage state machine.
+# ===========================================================================
+STRATEGY_V2 = True
+V2_FAST, V2_SLOW = 20, 50        # 5m EMAs
+V2_HTF, V2_HTF_EMA = "1h", 50    # light higher-timeframe bias
+V2_HTF_REQUIRED = False          # True = 1h must agree, False = advisory only
+V2_LOOKBACK = 8                  # candles a pullback / sweep may span
+V2_PULLBACK_TOL = 0.35           # how close to the EMA counts as a pullback
+V2_STRETCH_ATR = 2.0             # distance from EMA50 that counts as extended
+V2_BODY_MIN = 0.45               # trigger candle body, x ATR
+V2_BUFFER = 0.15                 # stop buffer, x ATR
+V2_MAX_STOP = 1.50               # skip if the stop is wider, x ATR
+V2_MAX_TRIGGER_RANGE = 1.30      # a trigger candle wider than this leaves the
+                                 # entry too far from its own invalidation
+V2_RR = 1.5
+# rule 3: the confirming candle must carry participation
+V2_VOL_GATE = True
+V2_VOL_BASE = 20                 # bars in the volume average
+V2_VOL_MULT = 1.20               # trigger candle volume vs that average
+# rule 1: the higher timeframe decides WHICH pathway is allowed
+V2_REGIME_ROUTING = True
+V2_TREND_SLOPE = 0.40            # 1h EMA50 move over 6 bars, x 1h ATR,
+                                 # above which the market counts as trending
+
 STRATEGY_MTF = True          # False -> fall back to the previous HA engine
 HTF_TF, HTF_EMA = "1h", 200          # permission: price vs a flat/rising 200
 MTF_TF = "15m"                       # structure + VWAP + EMA20/50
@@ -1430,6 +1459,159 @@ def continuation_signal(real, ha, a, e20, i, long_):
                        f"with HA agreeing")
 
 
+def htf_context(asset):
+    """1h read: (bias, regime). bias is which side of the EMA50 price sits;
+    regime is 'trend' when that EMA is moving decisively, else 'range'."""
+    try:
+        _, h = fetch(asset, V2_HTF, V2_HTF_EMA + 30)
+        if not h or len(h) < V2_HTF_EMA + 12:
+            return None, None
+        e = _ema_list([c["c"] for c in h], V2_HTF_EMA)
+        ah = atr(h)
+        j = len(h) - 2
+        if e[j] is None or e[j - 6] is None or not ah[j]:
+            return None, None
+        bias = "LONG" if h[j]["c"] > e[j] else "SHORT"
+        slope = abs(e[j] - e[j - 6]) / ah[j]
+        return bias, ("trend" if slope >= V2_TREND_SLOPE else "range")
+    except Exception:
+        return None, None
+
+
+def htf_bias(asset):
+    return htf_context(asset)[0]
+
+
+def v2_continuation(real, a, ef, es, i, long_):
+    """Trend -> pullback to the EMAs -> reclaim candle."""
+    if i < V2_SLOW + V2_LOOKBACK or not a[i] or ef[i] is None or es[i] is None:
+        return None
+    c, prev, atr_i = real[i], real[i - 1], a[i]
+    if (c["h"] - c["l"]) > V2_MAX_TRIGGER_RANGE * atr_i:
+        return None
+    trend = (ef[i] > es[i] and c["c"] > es[i]) if long_ \
+        else (ef[i] < es[i] and c["c"] < es[i])
+    if not trend:
+        return None
+    win = real[i - V2_LOOKBACK:i]
+    tol = V2_PULLBACK_TOL * atr_i
+    pulled = any((p["l"] <= ef[i - V2_LOOKBACK + k] + tol) if long_
+                 else (p["h"] >= ef[i - V2_LOOKBACK + k] - tol)
+                 for k, p in enumerate(win))
+    if not pulled:
+        return None
+    body = abs(c["c"] - c["o"])
+    rng = c["h"] - c["l"]
+    trig = ((c["c"] > c["o"]) if long_ else (c["c"] < c["o"])) and \
+        ((c["c"] > ef[i]) if long_ else (c["c"] < ef[i])) and \
+        ((c["c"] > prev["h"]) if long_ else (c["c"] < prev["l"])) and \
+        body >= V2_BODY_MIN * atr_i and \
+        (rng <= 0 or (((c["c"] - c["l"]) / rng if long_ else (c["h"] - c["c"]) / rng) >= 0.6))
+    if not trig:
+        return None
+    near = real[max(0, i - 2):i + 1]          # the immediate swing only
+    ext = min(p["l"] for p in near) if long_ else max(p["h"] for p in near)
+    return ext, (f"pullback to the {TF} EMA{V2_FAST} in an EMA{V2_FAST}/"
+                 f"{V2_SLOW} trend, reclaim candle {body / atr_i:.2f} ATR")
+
+
+def v2_reversal(real, a, es, i, long_):
+    """Stretched from the EMA50 -> sweep of the recent extreme -> reclaim."""
+    if i < V2_SLOW + V2_LOOKBACK or not a[i] or es[i] is None:
+        return None
+    c, prev, atr_i = real[i], real[i - 1], a[i]
+    if (c["h"] - c["l"]) > V2_MAX_TRIGGER_RANGE * atr_i:
+        return None
+    win = real[i - V2_LOOKBACK:i]
+    # extended AWAY from value in the direction we are fading
+    stretch = (es[i] - min(p["l"] for p in win + [c])) if long_ \
+        else (max(p["h"] for p in win + [c]) - es[i])
+    if stretch < V2_STRETCH_ATR * atr_i:
+        return None
+    # liquidity sweep: this candle took the window's extreme, then closed back
+    prior = min(p["l"] for p in win) if long_ else max(p["h"] for p in win)
+    swept = (c["l"] < prior) if long_ else (c["h"] > prior)
+    if not swept:
+        return None
+    body = abs(c["c"] - c["o"])
+    rng = c["h"] - c["l"]
+    reclaim = ((c["c"] > c["o"]) if long_ else (c["c"] < c["o"])) and \
+        ((c["c"] > prior) if long_ else (c["c"] < prior)) and \
+        body >= V2_BODY_MIN * atr_i and \
+        (rng <= 0 or (((c["c"] - c["l"]) / rng if long_ else (c["h"] - c["c"]) / rng) >= 0.6))
+    if not reclaim:
+        return None
+    ext = c["l"] if long_ else c["h"]
+    return ext, (f"price {stretch / atr_i:.1f} ATR from the EMA{V2_SLOW}, swept "
+                 f"the {V2_LOOKBACK}-candle {'low' if long_ else 'high'} and "
+                 f"reclaimed it")
+
+
+def process_candle_v2(asset, ast, real, a, i, source):
+    if ast.get("trade"):
+        return False
+    sym = asset["symbol"]
+    c, atr_i = real[i], a[i] or 0
+    if not atr_i:
+        return False
+    closes = [x["c"] for x in real]
+    ef = _ema_list(closes, V2_FAST)
+    es = _ema_list(closes, V2_SLOW)
+    vols = [x.get("v") or 0 for x in real]
+    vwin = [v for v in vols[max(0, i - V2_VOL_BASE):i] if v > 0]
+    vavg = sum(vwin) / len(vwin) if vwin else 0.0
+    bias, regime = htf_context(asset) if (V2_REGIME_ROUTING or V2_HTF_REQUIRED) \
+        else (None, None)
+    for long_ in (True, False):
+        direction = "LONG" if long_ else "SHORT"
+        for name, fn in (("continuation", v2_continuation),
+                         ("reversal", v2_reversal)):
+            # rule 1: trending markets get continuations (with the trend),
+            # ranging / exhausted markets get reversals
+            if V2_REGIME_ROUTING and regime:
+                if regime == "trend" and name == "reversal":
+                    continue
+                if regime == "trend" and bias and bias != direction:
+                    continue
+                if regime == "range" and name == "continuation":
+                    continue
+            hit = fn(real, a, es, i, long_) if name == "reversal" \
+                else fn(real, a, ef, es, i, long_)
+            if not hit:
+                continue
+            ext, detail = hit
+            # rule 3: the confirming candle needs participation
+            if V2_VOL_GATE and vavg and (c.get("v") or 0) < V2_VOL_MULT * vavg:
+                log(f"{sym}: {direction} {name} but the confirming candle ran "
+                    f"{(c.get('v') or 0) / vavg:.2f}x average volume "
+                    f"(need {V2_VOL_MULT}x) - skipped")
+                continue
+            if regime:
+                detail += f"; 1h {regime}"
+            if bias and bias != direction:
+                if V2_HTF_REQUIRED:
+                    log(f"{sym}: {direction} {name} but the {V2_HTF} bias is "
+                        f"{bias} - skipped")
+                    return True
+                detail += f" (against the {V2_HTF} bias)"
+            stop = (ext - V2_BUFFER * atr_i) if long_ else (ext + V2_BUFFER * atr_i)
+            risk = (c["c"] - stop) if long_ else (stop - c["c"])
+            if risk <= 0:
+                continue
+            if risk > V2_MAX_STOP * atr_i:
+                log(f"{sym}: {name} stop {risk / atr_i:.2f} ATR "
+                    f"(max {V2_MAX_STOP}) - skipped")
+                continue
+            fire_entry(asset, ast, direction, c, stop, None, None, source,
+                       f"{name} - {detail}", rr=V2_RR,
+                       runner=RUNNER_HALF_AT_TP)
+            if ast.get("trade"):
+                ast["trade"]["mtf"] = True
+                ast["trade"]["hl"] = ext
+            return True
+    return False
+
+
 def process_candle_mtf(asset, ast, real, ha, a, i, source):
     """flip alert -> structure break -> retest -> confirmation -> entry."""
     sym = asset["symbol"]
@@ -1640,6 +1822,8 @@ def process_candle_mtf(asset, ast, real, ha, a, i, source):
 
 
 def process_candle(asset, ast, real, ha, a, k, i, source, rng_cache):
+    if STRATEGY_V2:
+        return process_candle_v2(asset, ast, real, a, i, source)
     if STRATEGY_MTF:
         return process_candle_mtf(asset, ast, real, ha, a, i, source)
     """Walk ONE newly closed 5m candle through the 4h-range engine."""
