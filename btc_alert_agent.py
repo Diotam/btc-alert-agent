@@ -156,6 +156,8 @@ FLIP_TTL = 48                        # candles a flip stays live waiting for
                                      # the structure break (48 x 5m = 4h)
 RETEST_MAX = 12                      # candles allowed for the retest (1h)
 RETEST_TOL_ATR = 0.15                # how far a close may sit beyond the level
+RETEST_VOL_MAX = 1.10                # pullback (median candle) vs the break
+                                     # candle - median ignores one snap-back
 STOP_BUFFER_ATR = 0.15               # buffer under the retest low
 MAX_STOP_ATR = 1.25                  # skip if the stop is wider than this
 RR_TREND = 1.5               # pathway B target (pathway A stays at RR)
@@ -1458,10 +1460,14 @@ def process_candle_mtf(asset, ast, real, ha, a, i, source):
         ha_ok = (ha[i]["c"] > ha[i]["o"]) if long_ else (ha[i]["c"] < ha[i]["o"])
         if not (ok_dir and beyond and past_prev and third and ha_ok):
             return True
-        pb = [v for v in z["pb_vols"][:-1] if v > 0]
-        if pb and z["break_vol"] and sum(pb) / len(pb) >= z["break_vol"]:
-            log(f"{sym}: retest volume was not lighter than the break - skipped")
-            return True
+        pb = sorted(v for v in z["pb_vols"][:-1] if v > 0)
+        if pb and z["break_vol"]:
+            med = pb[len(pb) // 2] if len(pb) % 2 else \
+                (pb[len(pb) // 2 - 1] + pb[len(pb) // 2]) / 2
+            if med > RETEST_VOL_MAX * z["break_vol"]:
+                log(f"{sym}: retest ran at {med / z['break_vol']:.2f}x the "
+                    f"break candle's volume (max {RETEST_VOL_MAX}x) - skipped")
+                return True
         ok, why = htf_permission(asset, z["dir"])
         if not ok:
             log(f"{sym}: higher timeframes turned ({why}) before entry - dropped")
