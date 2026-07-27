@@ -107,7 +107,7 @@ MIN_STOP_PCT = 0.25              # skip entries whose stop sits closer than
 #   SHORT wants HA_CONFIRM_CANDLES consecutive LARGE bearish HA candles with
 #   no UPPER wicks; LONG wants large bullish HA candles with no LOWER wicks.
 HA_MODE = "smoothed"             # "smoothed" = TradingView Smoothed HA
-SHA_PRE, SHA_POST = 10, 10       # the two EMA lengths ("Smoothed Ha Candles 10 10")
+SHA_PRE, SHA_POST = 6, 3         # smoothed HA settings
 HA_CONFIRM_CANDLES = 2
 HA_BODY_MIN_ATR = 0.25           # "large" = HA body at least this x ATR.
                                  # NOTE: smoothed HA bodies are much smaller
@@ -130,14 +130,21 @@ TREND_RUN_MIN = 4            # candles of one colour before the flip counts
 TREND_GROW_MIN = 2           # bodies must grow this many times during the run
 TREND_FADE_MIN = 2           # then shrink this many times before the flip
 ZONE_TTL = 24                # candles the HA support/resistance stays valid
-# volume confirmation: the faded run needs real participation, the pullback
-# into the zone should be quieter than it, and the confirmation candle should
-# not be a dribble
-VOL_GATE = True
-VOL_BASE = 20                # candles used for the baseline average
-VOL_RUN_MULT = 1.20          # run volume vs the baseline before it
-VOL_PULLBACK_MAX = 0.90      # pullback volume vs the run's own average
-VOL_CONFIRM_MULT = 1.00      # confirmation candle vs its recent average
+# --- multi-timeframe engine ------------------------------------------------
+STRATEGY_MTF = True          # False -> fall back to the previous HA engine
+HTF_TF, HTF_EMA = "1h", 200          # permission: price vs a flat/rising 200
+MTF_TF = "15m"                       # structure + VWAP + EMA20/50
+MTF_FAST, MTF_SLOW = 20, 50
+EMA5 = 20                            # 5m EMA used for breaks and the runner
+ATR_PERIOD = 14
+VOL_BASE = 20                        # volume average length
+EXHAUST_MIN = 3                      # consecutive red HA candles before a flip
+BREAK_BODY_ATR = 0.60                # break candle body, x ATR
+BREAK_VOL_MULT = 1.20                # break candle volume, x 20-bar average
+RETEST_MAX = 6                       # candles allowed for the retest
+RETEST_TOL_ATR = 0.15                # how far a close may sit beyond the level
+STOP_BUFFER_ATR = 0.15               # buffer under the retest low
+MAX_STOP_ATR = 1.25                  # skip if the stop is wider than this
 RR_TREND = 1.5               # pathway B target (pathway A stays at RR)
 RUNNER_HALF_AT_TP = True     # half off at 1.5R, stop to breakeven, rest exits
                              # when the smoothed HA flips against the trade
@@ -571,6 +578,125 @@ def avg_vol(candles, lo, hi):
     return sum(vals) / len(vals) if vals else 0.0
 
 
+def session_vwap(candles):
+    """Session VWAP, reset at NY midnight, aligned 1:1 with the candles."""
+    out, pv, vv, day = [], 0.0, 0.0, None
+    for c in candles:
+        d = ny_dt(c["t"]).date()
+        if d != day:
+            day, pv, vv = d, 0.0, 0.0
+        typ = (c["h"] + c["l"] + c["c"]) / 3
+        v = c.get("v") or 0
+        pv += typ * v
+        vv += v
+        out.append(pv / vv if vv else c["c"])
+    return out
+
+
+def pivots(candles, wing=2):
+    """(swing_high_indices, swing_low_indices) confirmed `wing` candles later."""
+    hs, ls = [], []
+    for j in range(wing, len(candles) - wing):
+        h = candles[j]["h"]
+        l = candles[j]["l"]
+        if all(h > candles[j + k]["h"] and h > candles[j - k]["h"]
+               for k in range(1, wing + 1)):
+            hs.append(j)
+        if all(l < candles[j + k]["l"] and l < candles[j - k]["l"]
+               for k in range(1, wing + 1)):
+            ls.append(j)
+    return hs, ls
+
+
+def structure_bullish(candles):
+    """Higher high AND higher low on the last two confirmed swings."""
+    hs, ls = pivots(candles)
+    if len(hs) < 2 or len(ls) < 2:
+        return None
+    hh = candles[hs[-1]]["h"] > candles[hs[-2]]["h"]
+    hl = candles[ls[-1]]["l"] > candles[ls[-2]]["l"]
+    if hh and hl:
+        return "LONG"
+    lh = candles[hs[-1]]["h"] < candles[hs[-2]]["h"]
+    ll = candles[ls[-1]]["l"] < candles[ls[-2]]["l"]
+    if lh and ll:
+        return "SHORT"
+    return None
+
+
+def htf_permission(asset, direction):
+    """1h: price the right side of a 200 EMA that is not moving against us.
+    15m: matching structure, with EMA20/50 and VWAP as a preference.
+    Returns (ok, detail)."""
+    long_ = direction == "LONG"
+    _, h1 = fetch(asset, HTF_TF, HTF_EMA + 60)
+    if not h1 or len(h1) < HTF_EMA + 5:
+        return False, f"no {HTF_TF} data"
+    e200 = _ema_list([c["c"] for c in h1], HTF_EMA)
+    i = len(h1) - 2
+    if e200[i] is None:
+        return False, f"{HTF_TF} EMA{HTF_EMA} not ready"
+    px = h1[i]["c"]
+    if (px <= e200[i]) if long_ else (px >= e200[i]):
+        return False, f"{HTF_TF} price on the wrong side of EMA{HTF_EMA}"
+    slope = e200[i] - (e200[i - 6] if e200[i - 6] is not None else e200[i])
+    if (slope < 0) if long_ else (slope > 0):
+        return False, f"{HTF_TF} EMA{HTF_EMA} sloping against the trade"
+
+    _, m15 = fetch(asset, MTF_TF, 160)
+    if not m15 or len(m15) < MTF_SLOW + 10:
+        return False, f"no {MTF_TF} data"
+    st = structure_bullish(m15[:-1])
+    if st != direction:
+        return False, f"{MTF_TF} structure is {st or 'unclear'}"
+    closes = [c["c"] for c in m15]
+    ef = _ema_list(closes, MTF_FAST)
+    es = _ema_list(closes, MTF_SLOW)
+    vw = session_vwap(m15)
+    j = len(m15) - 2
+    extras = []
+    if ef[j] is not None and es[j] is not None:
+        if (ef[j] > es[j]) if long_ else (ef[j] < es[j]):
+            extras.append(f"EMA{MTF_FAST}/{MTF_SLOW} aligned")
+    if (closes[j] > vw[j]) if long_ else (closes[j] < vw[j]):
+        extras.append("VWAP side")
+    return True, f"{MTF_TF} {direction} structure" + (
+        " + " + " + ".join(extras) if extras else "")
+
+
+def last_lower_high(candles, i, long_):
+    """For a long: the swing high that led to the latest lower low - the last
+    confirmed pivot high before the lowest low of the recent leg."""
+    lo_i = min(range(max(0, i - 60), i + 1),
+               key=lambda n: candles[n]["l"]) if long_ else \
+        max(range(max(0, i - 60), i + 1), key=lambda n: candles[n]["h"])
+    hs, ls = pivots(candles[:i + 1])
+    cand = [j for j in (hs if long_ else ls) if j < lo_i]
+    if not cand:
+        return None
+    j = cand[-1]
+    return candles[j]["h"] if long_ else candles[j]["l"]
+
+
+def ha_exhausted(ha, i, long_):
+    """EXHAUST_MIN candles of the old colour with the last bodies shrinking,
+    and candle i is the flip."""
+    if i < EXHAUST_MIN + 2:
+        return False
+    if ha[i].get("warm"):
+        return False
+    flip_bull = ha[i]["c"] > ha[i]["o"]
+    if flip_bull != long_:
+        return False
+    prev = [ha[i - n] for n in range(1, EXHAUST_MIN + 1)]
+    if any(p.get("warm") for p in prev):
+        return False
+    if any((p["c"] > p["o"]) == long_ for p in prev):
+        return False                      # the run must be the other colour
+    bodies = [abs(p["c"] - p["o"]) for p in prev]      # newest first
+    return bodies[0] < bodies[1]          # the final body shrank
+
+
 def trend_flip(ha, a, i):
     """Did the smoothed HA just flip colour at candle i, after a run that grew
     then faded? Returns (direction, run_start) or (None, None).
@@ -931,6 +1057,51 @@ def process_open_trade(asset, trade, candles, last_closed_t):
             RUN_ALERTS.append(f"{sym} TP HIT ({pnl_pct(trade, tp):+.2f}%)")
             return None, True
 
+        # MTF runner: trail under confirmed higher lows; exit on a close
+        # through the last one, or two red HA candles plus a close past EMA20
+        if trade.get("half") and trade.get("mtf"):
+            n = next((x for x, cc in enumerate(candles) if cc["t"] == c["t"]),
+                     None)
+            if n is not None and n >= 3:
+                long_ = long
+                hs, ls = pivots(candles[:n + 1])
+                swings = ls if long_ else hs
+                if swings:
+                    j = swings[-1]
+                    lvl = candles[j]["l"] if long_ else candles[j]["h"]
+                    better = (lvl > trade.get("hl", -1e18)) if long_ \
+                        else (lvl < trade.get("hl", 1e18))
+                    if better:
+                        trade["hl"] = lvl
+                        log(f"{sym}: trailing level -> ${fmt_px(lvl)}")
+                broke = (c["c"] < trade.get("hl", -1e18)) if long_ \
+                    else (c["c"] > trade.get("hl", 1e18))
+                ha2 = ha_series(candles) if ha_ex is None else ha_ex
+                e20l = _ema_list([x["c"] for x in candles], EMA5)
+                two_red = False
+                if n >= 1 and not ha2[n].get("warm"):
+                    a1 = (ha2[n]["c"] < ha2[n]["o"]) if long_ \
+                        else (ha2[n]["c"] > ha2[n]["o"])
+                    a2 = (ha2[n - 1]["c"] < ha2[n - 1]["o"]) if long_ \
+                        else (ha2[n - 1]["c"] > ha2[n - 1]["o"])
+                    past = (c["c"] < e20l[n]) if (long_ and e20l[n]) else \
+                        ((c["c"] > e20l[n]) if e20l[n] else False)
+                    two_red = a1 and a2 and past
+                if broke or two_red:
+                    why = "closed below the trailing low" if broke else \
+                        f"two red HA candles and a close past EMA{EMA5}"
+                    if ALERT_LIFECYCLE:
+                        send_telegram(lifecycle_message(
+                            asset, "RUNNER", trade, c["c"], c_close_t, why))
+                    log(f"{sym}: RUNNER OUT at ${fmt_px(c['c'])} ({why})")
+                    record_close(sym, trade, c["c"], "RUNNER", c_close_t,
+                                 frac=0.5)
+                    RUN_ALERTS.append(
+                        f"{sym} runner out "
+                        f"({pnl_pct(trade, c['c']) * 0.5:+.2f}%)")
+                    return None, True
+                continue
+
         # runner: out when the smoothed HA flips against the trade
         if trade.get("half") and ha_ex is not None:
             n = next((x for x, cc in enumerate(candles) if cc["t"] == c["t"]),
@@ -1072,7 +1243,168 @@ def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger,
     return True
 
 
+def process_candle_mtf(asset, ast, real, ha, a, i, source):
+    """flip alert -> structure break -> retest -> confirmation -> entry."""
+    sym = asset["symbol"]
+    c = real[i]
+    atr_i = a[i] or 0
+    if not atr_i:
+        return False
+    closes = [x["c"] for x in real]
+    e20 = _ema_list(closes, EMA5)
+    vols = [x.get("v") or 0 for x in real]
+    vavg = sum(vols[max(0, i - VOL_BASE):i]) / max(1, len(vols[max(0, i - VOL_BASE):i]))
+    z = ast.get("zone")
+
+    # ---------- stage 0: exhaustion + colour flip = ALERT only -------------
+    if not z:
+        for long_ in (True, False):
+            if not ha_exhausted(ha, i, long_):
+                continue
+            lvl = last_lower_high(real, i, long_)
+            if lvl is None:
+                continue
+            direction = "LONG" if long_ else "SHORT"
+            ok, why = htf_permission(asset, direction)
+            if not ok:
+                log(f"{sym}: HA flipped {direction} but higher timeframes say "
+                    f"no ({why}) - treated as a relief move")
+                return True
+            ast["zone"] = {"dir": direction, "stage": "flip", "level": lvl,
+                           "flip_t": c["t"],
+                           "extreme": c["l"] if long_ else c["h"],
+                           "expires_t": c["t"] + 24 * MS[TF]}
+            log(f"{sym}: {direction} HA flip after exhaustion, {why}; needs a "
+                f"close beyond ${fmt_px(lvl)} to become a setup")
+            if ALERT_STAGES:
+                send_telegram(stage_message(asset, direction, lvl, c["c"], c["t"]))
+            return True
+        return False
+
+    long_ = z["dir"] == "LONG"
+    lvl = z["level"]
+
+    if c["t"] > z.get("expires_t", 0):
+        log(f"{sym}: setup expired at stage '{z['stage']}'")
+        ast["zone"] = None
+        return True
+    # a new extreme against us kills the idea
+    if (c["l"] < z["extreme"]) if long_ else (c["h"] > z["extreme"]):
+        if z["stage"] != "flip":
+            log(f"{sym}: new {'lower low' if long_ else 'higher high'} after "
+                "the flip - setup dropped")
+            ast["zone"] = None
+            return True
+        z["extreme"] = c["l"] if long_ else c["h"]
+
+    # ---------- stage 1: real structure break ------------------------------
+    if z["stage"] == "flip":
+        body = abs(c["c"] - c["o"])
+        beyond = (c["c"] > lvl) if long_ else (c["c"] < lvl)
+        past_ema = (c["c"] > e20[i]) if (long_ and e20[i]) else \
+            ((c["c"] < e20[i]) if e20[i] else False)
+        if not beyond:
+            return True
+        if body < BREAK_BODY_ATR * atr_i:
+            log(f"{sym}: closed beyond ${fmt_px(lvl)} but the body is "
+                f"{body / atr_i:.2f} ATR (need {BREAK_BODY_ATR}) - not a break")
+            return True
+        if not past_ema:
+            log(f"{sym}: break candle did not close past the {TF} EMA{EMA5}")
+            return True
+        if vavg and (c.get("v") or 0) < BREAK_VOL_MULT * vavg:
+            log(f"{sym}: break volume {(c.get('v') or 0) / vavg:.2f}x average "
+                f"(need {BREAK_VOL_MULT}x) - weak break")
+            return True
+        z.update(stage="broken", break_t=c["t"], break_vol=c.get("v") or 0,
+                 break_ext=c["h"] if long_ else c["l"],
+                 deadline_t=c["t"] + RETEST_MAX * MS[TF],
+                 retest_ext=None, pb_vols=[])
+        log(f"{sym}: STRUCTURE BREAK above ${fmt_px(lvl)} "
+            f"({body / atr_i:.2f} ATR body, "
+            f"{(c.get('v') or 0) / vavg if vavg else 0:.1f}x volume) - "
+            f"waiting up to {RETEST_MAX} candles for the retest")
+        return True
+
+    # ---------- stage 2: the retest -----------------------------------------
+    if z["stage"] == "broken":
+        if c["t"] > z["deadline_t"]:
+            log(f"{sym}: no retest within {RETEST_MAX} candles - setup dropped")
+            ast["zone"] = None
+            return True
+        too_far = (c["c"] < lvl - RETEST_TOL_ATR * atr_i) if long_ \
+            else (c["c"] > lvl + RETEST_TOL_ATR * atr_i)
+        if too_far:
+            log(f"{sym}: closed back through ${fmt_px(lvl)} - break failed")
+            ast["zone"] = None
+            return True
+        z["pb_vols"].append(c.get("v") or 0)
+        near = min(lvl, e20[i] or lvl) if long_ else max(lvl, e20[i] or lvl)
+        touched = (c["l"] <= max(lvl, e20[i] or lvl)) if long_ \
+            else (c["h"] >= min(lvl, e20[i] or lvl))
+        if touched:
+            z["retest_ext"] = min(z["retest_ext"] or c["l"], c["l"]) if long_ \
+                else max(z["retest_ext"] or c["h"], c["h"])
+            z["stage"] = "retest"
+            log(f"{sym}: retesting ${fmt_px(lvl)} / EMA{EMA5} - waiting for the "
+                f"confirmation candle")
+        return True
+
+    # ---------- stage 3: confirmation candle -> entry -----------------------
+    if z["stage"] == "retest":
+        if c["t"] > z["deadline_t"] + RETEST_MAX * MS[TF]:
+            log(f"{sym}: confirmation never came - setup dropped")
+            ast["zone"] = None
+            return True
+        z["retest_ext"] = min(z["retest_ext"] or c["l"], c["l"]) if long_ \
+            else max(z["retest_ext"] or c["h"], c["h"])
+        z["pb_vols"].append(c.get("v") or 0)
+        rng = c["h"] - c["l"]
+        prev = real[i - 1]
+        bull = c["c"] > c["o"]
+        ok_dir = bull if long_ else (not bull)
+        beyond = (c["c"] > lvl) if long_ else (c["c"] < lvl)
+        past_prev = (c["c"] > prev["h"]) if long_ else (c["c"] < prev["l"])
+        third = ((c["c"] - c["l"]) / rng > 2 / 3) if (long_ and rng) else \
+            (((c["h"] - c["c"]) / rng > 2 / 3) if rng else False)
+        ha_ok = (ha[i]["c"] > ha[i]["o"]) if long_ else (ha[i]["c"] < ha[i]["o"])
+        if not (ok_dir and beyond and past_prev and third and ha_ok):
+            return True
+        pb = [v for v in z["pb_vols"][:-1] if v > 0]
+        if pb and z["break_vol"] and sum(pb) / len(pb) >= z["break_vol"]:
+            log(f"{sym}: retest volume was not lighter than the break - skipped")
+            return True
+        ok, why = htf_permission(asset, z["dir"])
+        if not ok:
+            log(f"{sym}: higher timeframes turned ({why}) before entry - dropped")
+            ast["zone"] = None
+            return True
+        swing = z["retest_ext"]
+        stop = swing - STOP_BUFFER_ATR * atr_i if long_ \
+            else swing + STOP_BUFFER_ATR * atr_i
+        risk = (c["c"] - stop) if long_ else (stop - c["c"])
+        if risk <= 0:
+            return True
+        if risk > MAX_STOP_ATR * atr_i:
+            log(f"{sym}: stop would be {risk / atr_i:.2f} ATR wide "
+                f"(max {MAX_STOP_ATR}) - skipped")
+            ast["zone"] = None
+            return True
+        fire_entry(asset, ast, z["dir"], c, stop, None, None, source,
+                   f"{MTF_TF}/{HTF_TF} aligned, HA exhaustion flip, close "
+                   f"beyond ${fmt_px(lvl)} on volume, retest held, "
+                   f"confirmation candle", rr=RR_TREND,
+                   runner=RUNNER_HALF_AT_TP)
+        if ast.get("trade"):
+            ast["trade"]["mtf"] = True
+            ast["trade"]["hl"] = swing        # latest higher low to trail under
+        return True
+    return False
+
+
 def process_candle(asset, ast, real, ha, a, k, i, source, rng_cache):
+    if STRATEGY_MTF:
+        return process_candle_mtf(asset, ast, real, ha, a, i, source)
     """Walk ONE newly closed 5m candle through the 4h-range engine."""
     sym = asset["symbol"]
     c = real[i]
