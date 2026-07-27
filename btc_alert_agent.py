@@ -1602,6 +1602,7 @@ def v2_watch(real, a, ef, es, i, long_):
 
 def process_candle_v2(asset, ast, real, a, i, source):
     if ast.get("trade"):
+        ast["watch"] = None          # a live trade is not a watch
         return False
     sym = asset["symbol"]
     c, atr_i = real[i], a[i] or 0
