@@ -103,7 +103,7 @@ MIN_STOP_PCT = 0.25              # skip entries whose stop sits closer than
 HA_MODE = "smoothed"             # "smoothed" = TradingView Smoothed HA
 SHA_PRE, SHA_POST = 10, 10       # the two EMA lengths ("Smoothed Ha Candles 10 10")
 HA_CONFIRM_CANDLES = 2
-HA_BODY_MIN_ATR = 0.25           # "large" = HA body at least this x ATR.
+HA_BODY_MIN_ATR = 0.50           # "large" = HA body at least this x ATR.
                                  # NOTE: smoothed HA bodies are much smaller
                                  # than raw candles - 0.50 would qualify none
 HA_WICK_MAX_BODY = 0.25          # "no wick" = wick at most this fraction of
