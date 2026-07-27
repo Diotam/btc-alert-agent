@@ -149,6 +149,14 @@ CONT_TREND_MIN = 6           # HA candles of the trend colour inside it
 CONT_PULLBACK_MAX = 6        # candles the pullback may last
 CONT_HA_FLIP_MAX = 2         # more opposite HA candles than this = a reversal,
                              # not a pullback (the other pathway handles those)
+CONT_PULLBACK_TOL_ATR = 0.25       # the pullback must reach within this of
+                                   # the EMA20 (an exact touch is too strict)
+CONT_TRIGGER_HA = True             # the resumption candle needs HA agreement:
+                                   # the slow series still with the trend, or
+                                   # plain HA turned back (momentum flipped)
+CONT_STOP_STRUCTURAL = True        # stop under the pullback extreme when the
+                                   # risk fits, tighten to the trigger candle
+                                   # only when it does not
 
 STRATEGY_MTF = True          # False -> fall back to the previous HA engine
 HTF_TF, HTF_EMA = "1h", 200          # permission: price vs a flat/rising 200
@@ -1360,7 +1368,9 @@ def continuation_signal(real, ha, a, e20, i, long_):
         return False, None, ""                        # trend leg not above/below EMA
 
     pull = real[lo_i:i]                               # the pullback candles
-    touched = any((p["l"] <= e20[j + lo_i]) if long_ else (p["h"] >= e20[j + lo_i])
+    tol = CONT_PULLBACK_TOL_ATR * (a[i] or 0)
+    touched = any((p["l"] <= e20[j + lo_i] + tol) if long_
+                  else (p["h"] >= e20[j + lo_i] - tol)
                   for j, p in enumerate(pull) if e20[j + lo_i] is not None)
     if not touched:
         return False, None, ""                        # never came back to the EMA
@@ -1391,8 +1401,18 @@ def continuation_signal(real, ha, a, e20, i, long_):
         ((c["c"] > prev["h"]) if long_ else (c["c"] < prev["l"]))
     if not ok:
         return False, None, ""
+    # HA must agree at the trigger: either the slow series never left the
+    # trend, or plain (unsmoothed) HA has turned back - momentum has flipped
+    if CONT_TRIGGER_HA:
+        slow_ok = (not ha[i].get("warm")) and \
+            ((ha[i]["c"] > ha[i]["o"]) if long_ else (ha[i]["c"] < ha[i]["o"]))
+        raw = heikin_ashi(real[:i + 1])[i]
+        raw_ok = (raw["c"] > raw["o"]) if long_ else (raw["c"] < raw["o"])
+        if not (slow_ok or raw_ok):
+            return False, None, ""
     return True, ext, (f"{same}/{len(trend)} HA candles with the trend, "
-                       f"pullback to the {TF} EMA{EMA5} held, resumption candle")
+                       f"pullback to the {TF} EMA{EMA5} held, resumption candle "
+                       f"with HA agreeing")
 
 
 def process_candle_mtf(asset, ast, real, ha, a, i, source):
@@ -1421,22 +1441,32 @@ def process_candle_mtf(asset, ast, real, ha, a, i, source):
                 log(f"{sym}: {direction} continuation setup but higher "
                     f"timeframes say no ({why})")
                 break
-            # continuation risk is measured from the RESUMPTION candle, not
-            # the whole pullback: if price falls back through the candle that
-            # restarted the trend, the idea is wrong
-            ref = min(c["l"], ext) if long_ else max(c["h"], ext)
-            ref = c["l"] if long_ else c["h"]
-            stop = ref - STOP_BUFFER_ATR * atr_i if long_ \
-                else ref + STOP_BUFFER_ATR * atr_i
-            risk = (c["c"] - stop) if long_ else (stop - c["c"])
+            # the idea is wrong if price breaks back through the pullback,
+            # so that extreme is the structural stop. When the pullback was
+            # deep enough to blow the risk cap, tighten to the trigger candle
+            # instead of throwing the setup away.
+            buf = STOP_BUFFER_ATR * atr_i
+            struct = (ext - buf) if long_ else (ext + buf)
+            risk = (c["c"] - struct) if long_ else (struct - c["c"])
+            stop, note = struct, "structural"
+            if not CONT_STOP_STRUCTURAL or risk > MAX_STOP_ATR * atr_i:
+                tight = (c["l"] - buf) if long_ else (c["h"] + buf)
+                trisk = (c["c"] - tight) if long_ else (tight - c["c"])
+                if trisk <= 0:
+                    break
+                if trisk > MAX_STOP_ATR * atr_i:
+                    log(f"{sym}: continuation stop {risk / atr_i:.2f} ATR "
+                        f"structural / {trisk / atr_i:.2f} ATR tightened - "
+                        f"both beyond {MAX_STOP_ATR}, skipped")
+                    break
+                log(f"{sym}: pullback stop was {risk / atr_i:.2f} ATR - "
+                    f"tightened to the trigger candle ({trisk / atr_i:.2f} ATR)")
+                stop, risk, note = tight, trisk, "tightened"
             if risk <= 0:
                 break
-            if risk > MAX_STOP_ATR * atr_i:
-                log(f"{sym}: continuation stop would be {risk / atr_i:.2f} ATR "
-                    f"wide (max {MAX_STOP_ATR}) - skipped")
-                break
             fire_entry(asset, ast, direction, c, stop, None, None, source,
-                       f"trend continuation - {detail}; {why}",
+                       f"trend continuation - {detail}; {why} "
+                       f"({note} stop)",
                        rr=RR_TREND, runner=RUNNER_HALF_AT_TP)
             if ast.get("trade"):
                 ast["trade"]["mtf"] = True
