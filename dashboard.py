@@ -170,7 +170,29 @@ def build_data():
                            "tp": tp, "mid": mid, "pnl": pnl, "r": r_now,
                            "opened_t": tr.get("opened_t", 0)})
         zz = ast.get("zone")
-        if zz:
+        if zz and zz.get("stage"):
+            # multi-timeframe engine: flip -> structure break -> retest
+            long_ = zz.get("dir") == "LONG"
+            lvl = zz.get("level")
+            lvl_s = f"{lvl:,.6f}".rstrip("0").rstrip(".") if lvl and lvl < 1 \
+                else (f"{lvl:,.2f}" if lvl else "?")
+            stg = zz.get("stage")
+            step, prog, stage = {
+                "flip": (1, 20.0,
+                         f"HA flip approved \u00b7 needs a close "
+                         f"{'above' if long_ else 'below'} ${lvl_s}"),
+                "broken": (2, 55.0,
+                           f"structure broken at ${lvl_s} \u00b7 waiting for "
+                           "the retest"),
+                "retest": (3, 85.0,
+                           f"retesting ${lvl_s} \u00b7 waiting for the "
+                           f"{'green' if long_ else 'red'} confirmation candle"),
+            }.get(stg, (1, 20.0, stg))
+            zones.append({"sym": sym, "dir": zz.get("dir"),
+                          "lev": ast.get("lev"), "stage": stage,
+                          "mid": mid, "prog": prog, "step": step,
+                          "names": ["HA flip", "break", "retest + confirm"]})
+        elif zz:
             long_ = zz.get("dir") == "LONG"
             top, bot = zz.get("top"), zz.get("bot")
             swing = zz.get("swing")
@@ -361,7 +383,7 @@ function render(d){
   }).join(''):'<div class="card muted">none</div>';
   document.getElementById('zones').innerHTML=d.zones.length?d.zones.map(z=>{
    const cls=z.dir==='LONG'?'long':'short';
-   const names=['HA flip','pullback','confirm candle'];
+   const names=z.names||['HA flip','pullback','confirm candle'];
    const st=z.step||1;
    const chips=names.map((s,n)=>{
      const done=st>n+1, cur=st===n+1;
