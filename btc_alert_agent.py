@@ -103,7 +103,7 @@ RANGE_MIN_ATR = 0.30         # range narrower than this x ATR = untradeable day
 #               trade - leave at 0 to keep skipping via MIN_STOP_PCT
 SL_PAD_ATR = 0.25
 SL_MIN_PCT = 0.0
-MIN_STOP_PCT = 0.25              # skip entries whose stop sits closer than
+MIN_STOP_PCT = 0.80              # skip entries whose stop sits closer than
                                  # this % of price - sub-noise stops just churn
 
 # Heikin Ashi entry confirmation:
@@ -1609,13 +1609,21 @@ def v2_watch(real, a, ef, es, i, long_):
 
 
 def process_candle_v2(asset, ast, real, a, i, source):
+    before = ast.get("watch")
+    def _touched(fired=False):
+        """A changed watch must mark the state dirty, or it never reaches disk
+        and the dashboard shows a frozen list."""
+        now_w = ast.get("watch")
+        key = lambda w: None if not w else (w.get("kind"), w.get("dir"),
+                                            w.get("note"))
+        return True if fired else key(before) != key(now_w)
     if ast.get("trade"):
         ast["watch"] = None          # a live trade is not a watch
-        return False
+        return _touched()
     sym = asset["symbol"]
     c, atr_i = real[i], a[i] or 0
     if not atr_i:
-        return False
+        return _touched()
     closes = [x["c"] for x in real]
     ef = _ema_list(closes, V2_FAST)
     es = _ema_list(closes, V2_SLOW)
@@ -1691,7 +1699,7 @@ def process_candle_v2(asset, ast, real, a, i, source):
         ast["watch"] = {"kind": kind, "dir": direction, "note": note,
                         "regime": regime, "t": c["t"]}
         break
-    return False
+    return _touched()
 
 
 def process_candle_mtf(asset, ast, real, ha, a, i, source):
