@@ -184,7 +184,7 @@ V2_PULLBACK_TOL = 0.35           # how close to the EMA counts as a pullback
 V2_STRETCH_ATR = 2.0             # distance from EMA50 that counts as extended
 V2_BODY_MIN = 0.45               # trigger candle body, x ATR
 V2_BUFFER = 0.15                 # stop buffer, x ATR
-V2_MAX_STOP = 1.50               # skip if the stop is wider, x ATR
+V2_MAX_STOP = 2.50               # skip if the stop is wider, x ATR
 V2_MAX_TRIGGER_RANGE = 1.30      # a trigger candle wider than this leaves the
                                  # entry too far from its own invalidation
 V2_RR = 1.5
