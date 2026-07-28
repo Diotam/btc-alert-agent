@@ -398,7 +398,7 @@ function render(d){
    const rp=showR==null?0:Math.max(0,Math.min(100,(showR+1)/(1+RRT)*100));
    const rc=showR==null?'#8b949e':showR>=0?'#3fb950':'#f85149';
    const rlbl=showR==null?'':t.half
-     ?`${showR.toFixed(2)}R · half booked, stop at entry - trails under each higher low`
+     ?`${showR.toFixed(2)}R · half booked, stop at entry - trails ${t.dir==='LONG'?'under each higher low':'above each lower high'}`
      :tpDone?'TP reached - waiting for the close confirmation'
      :slDone?'Stop traded - waiting for the close confirmation'
      :showR>=0
