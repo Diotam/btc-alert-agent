@@ -71,7 +71,7 @@ ONLY = []                          # trade ONLY these symbols ([] = whole univer
 EXCLUDE = ["PUMP"]                 # never trade these symbols - add coins here
                                    # (matches the base name on any venue)
 MIN_DAY_VOLUME_USD = 5_000_000     # skip markets below $10M 24h notional
-MAX_ASSETS = 100
+MAX_ASSETS = 70
 FETCH_DELAY_S = 0.12
 REQUEST_TIMEOUT_S = 8              # fail fast: a throttled API must not burn 20s
 MAX_ZONES = 20                     # cap concurrently open reversal zones
@@ -175,6 +175,14 @@ CONT_STOP_STRUCTURAL = True        # stop under the pullback extreme when the
 # Both: stop beyond the swing + buffer, TP 1.5R, half off then a trailing
 # runner. One light 1h bias check, no multi-stage state machine.
 # ===========================================================================
+# --- execution (stage 1: DRY RUN - nothing is ever sent) -------------------
+EXEC_DRY_RUN = True          # log the orders that WOULD be placed
+EXEC_LIVE = False            # stage 2, not built - has no effect yet
+EXEC_RISK_USD = 25.0         # dollar risk per trade, fixed
+EXEC_MAX_NOTIONAL_USD = 2500 # cap on position value
+EXEC_MAX_POSITIONS = 4       # refuse a new plan beyond this many open
+# ORDERS_LOG is defined next to trades.log further down
+
 STRATEGY_V2 = True
 V2_FAST, V2_SLOW = 20, 50        # 5m EMAs
 V2_HTF, V2_HTF_EMA = "4h", 50    # higher-timeframe bias and regime
@@ -1097,6 +1105,7 @@ def lifecycle_message(asset, kind, trade, exit_px, event_t, note):
 
 # ---------------------------- trade ledger ---------------------------------
 TRADES_LOG = Path(__file__).parent / "trades.log"
+ORDERS_LOG = Path(__file__).parent / "orders.log"
 
 
 def already_closed(sym, trade, exit_px, kind):
@@ -1191,6 +1200,7 @@ def process_open_trade(asset, trade, candles, last_closed_t):
                         f"stop is now breakeven at ${fmt_px(trade['entry'])}; "
                         "the rest exits when the smoothed HA flips"))
                 log(f"{sym}: HALF CLOSED at ${fmt_px(tp)}, stop -> breakeven")
+                plan_manage_orders(asset, trade, "TP_HALF", tp)
                 record_close(sym, trade, tp, "TP_HALF", c_close_t, frac=0.5)
                 RUN_ALERTS.append(
                     f"{sym} half closed ({pnl_pct(trade, tp) * 0.5:+.2f}%)")
@@ -1243,6 +1253,7 @@ def process_open_trade(asset, trade, candles, last_closed_t):
                         send_telegram(lifecycle_message(
                             asset, "RUNNER", trade, c["c"], c_close_t, why))
                     log(f"{sym}: RUNNER OUT at ${fmt_px(c['c'])} ({why})")
+                    plan_manage_orders(asset, trade, "RUNNER", c["c"])
                     record_close(sym, trade, c["c"], "RUNNER", c_close_t,
                                  frac=0.5)
                     RUN_ALERTS.append(
@@ -1313,6 +1324,7 @@ def process_open_trade(asset, trade, candles, last_closed_t):
                         f"stop is now breakeven at ${fmt_px(trade['entry'])}; "
                         "the rest exits when the smoothed HA flips"))
                 log(f"{sym}: HALF CLOSED at ${fmt_px(tp)}, stop -> breakeven")
+                plan_manage_orders(asset, trade, "TP_HALF", tp)
                 record_close(sym, trade, tp, "TP_HALF", now_t, frac=0.5)
                 RUN_ALERTS.append(
                     f"{sym} half closed ({pnl_pct(trade, tp) * 0.5:+.2f}%)")
@@ -1329,6 +1341,72 @@ def process_open_trade(asset, trade, candles, last_closed_t):
             RUN_ALERTS.append(f"{sym} TP HIT ({pnl_pct(trade, tp):+.2f}%)")
             return None, True
     return trade, changed
+
+
+def log_order(rec):
+    try:
+        with open(ORDERS_LOG, "a") as f:
+            f.write(json.dumps(rec) + "\n")
+    except Exception as e:
+        log(f"orders.log write failed: {type(e).__name__}")
+
+
+def plan_entry_orders(asset, trade, open_count=0):
+    """What a live version WOULD send, sized by fixed dollar risk.
+    Dry run only - nothing leaves this process."""
+    if not EXEC_DRY_RUN:
+        return None
+    sym = asset["symbol"]
+    entry, stop, tp = trade["entry"], trade["stop"], trade["tp"]
+    long_ = trade["verdict"] == "LONG"
+    per_unit = abs(entry - stop)
+    if per_unit <= 0:
+        return None
+    if open_count >= EXEC_MAX_POSITIONS:
+        log(f"{sym}: DRY RUN - would SKIP, {open_count} positions already "
+            f"open (max {EXEC_MAX_POSITIONS})")
+        return None
+    size = EXEC_RISK_USD / per_unit
+    notional = size * entry
+    capped = ""
+    if notional > EXEC_MAX_NOTIONAL_USD:
+        size = EXEC_MAX_NOTIONAL_USD / entry
+        notional = EXEC_MAX_NOTIONAL_USD
+        capped = f" [notional capped, risk now ${size * per_unit:.2f}]"
+    rec = {"t": int(time.time() * 1000), "sym": sym, "mode": "dry-run",
+           "event": "ENTRY", "side": "buy" if long_ else "sell",
+           "size": round(size, 8), "entry": entry, "stop": stop, "tp": tp,
+           "notional_usd": round(notional, 2),
+           "risk_usd": round(size * per_unit, 2),
+           "stop_pct": round(per_unit / entry * 100, 3),
+           "orders": [
+               {"kind": "entry", "type": "market-IOC",
+                "side": "buy" if long_ else "sell", "size": round(size, 8)},
+               {"kind": "stop", "type": "stop-market", "reduce_only": True,
+                "trigger": stop, "size": round(size, 8)},
+               {"kind": "tp_half", "type": "limit", "reduce_only": True,
+                "price": tp, "size": round(size / 2, 8)}]}
+    log_order(rec)
+    log(f"{sym}: DRY RUN - {rec['side']} {size:.6g} @ ${fmt_px(entry)} = "
+        f"${notional:,.0f} notional, ${rec['risk_usd']:.2f} risk "
+        f"({rec['stop_pct']}% stop); stop ${fmt_px(stop)}, TP ${fmt_px(tp)} "
+        f"on half{capped}")
+    return rec
+
+
+def plan_manage_orders(asset, trade, event, price):
+    if not EXEC_DRY_RUN:
+        return
+    action = {"TP_HALF": "half filled at TP -> amend stop to entry, keep runner",
+              "RUNNER": "close remaining size at market",
+              "BE": "stop filled at entry - flat",
+              "STOP": "stop filled - flat"}.get(event)
+    if not action:
+        return
+    log_order({"t": int(time.time() * 1000), "sym": asset["symbol"],
+               "mode": "dry-run", "event": event, "price": price,
+               "action": action})
+    log(f"{asset['symbol']}: DRY RUN - {action}")
 
 
 def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger,
@@ -1390,6 +1468,9 @@ def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger,
                     "rr": rr, "runner": bool(runner), "half": False,
                     "risk0": risk}          # original risk, kept for R maths
                                             # after the stop moves to breakeven
+    plan_entry_orders(asset, ast["trade"],
+                      open_count=sum(1 for v in STATE_VIEW.values()
+                                     if isinstance(v, dict) and v.get("trade")))
     ast["phase"], ast["setup"] = "IN_TRADE", None
     ast["doji"], ast["zone"] = None, None
     return True
@@ -2197,10 +2278,15 @@ def save_state(state):
     STATE_FILE.write_text(json.dumps(state, indent=2) + "\n")
 
 
+STATE_VIEW = {}
+
+
 def check_once():
     RUN_ALERTS.clear()
     RUN_STATUS.clear()
     state = load_state()
+    STATE_VIEW.clear()
+    STATE_VIEW.update(state)
     changed = False
     failures = 0
     start = time.time()
