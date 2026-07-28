@@ -58,7 +58,7 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 # --- Asset universe -------------------------------------------------------
 DISCOVER_ALL = True
 DISCOVER_DEXES = True            # scan builder venues (stocks live there)
-ADMIT_COMMODITIES = False        # stocks yes, metals/energy no              # scan HIP-3 builder dexes too - but only
+ADMIT_COMMODITIES = True         # crypto, stocks and commodities              # scan HIP-3 builder dexes too - but only
                                    # commodity markets are admitted from them
 DEXES = [""]                       # fallback when dex discovery fails
 COMMODITY_TICKERS = ("XAU", "GOLD", "XAG", "SILVER", "XPT", "PLAT",
@@ -2287,11 +2287,115 @@ def run_loop():
         check_once()
 
 
+def debug_symbol(asset):
+    """Print every v2 condition and its verdict for one symbol."""
+    sym = asset["symbol"]
+    tick = lambda ok: "\u2713" if ok else "\u2717"
+    source, cs = fetch(asset, TF, 300)
+    if not cs:
+        print(f"\n=== {sym} === no {TF} candles (fetch failed)")
+        return
+    a = atr(cs)
+    closes = [x["c"] for x in cs]
+    ef = _ema_list(closes, V2_FAST)
+    es = _ema_list(closes, V2_SLOW)
+    i = len(cs) - 2                      # last CLOSED candle
+    c, prev, atr_i = cs[i], cs[i - 1], a[i] or 0
+    bias, regime = htf_context(asset)
+    vols = [x.get("v") or 0 for x in cs]
+    vwin = [v for v in vols[max(0, i - V2_VOL_BASE):i] if v > 0]
+    vavg = sum(vwin) / len(vwin) if vwin else 0.0
+    vr = (c.get("v") or 0) / vavg if vavg else 0.0
+    rng = c["h"] - c["l"]
+    body = abs(c["c"] - c["o"])
+
+    print(f"\n=== {sym} === {source}  close ${fmt_px(c['c'])}  ATR {atr_i:.6g}")
+    print(f"  {V2_HTF} bias {bias or '-'} / regime {regime or 'OFF'}"
+          f"   EMA{V2_FAST} ${fmt_px(ef[i]) if ef[i] else '-'}"
+          f"   EMA{V2_SLOW} ${fmt_px(es[i]) if es[i] else '-'}")
+    print(f"  candle: body {body / atr_i if atr_i else 0:.2f} ATR "
+          f"(need {V2_BODY_MIN}) | range {rng / atr_i if atr_i else 0:.2f} ATR "
+          f"(max {V2_MAX_TRIGGER_RANGE}) | volume {vr:.2f}x (need {V2_VOL_MULT})")
+    if not atr_i or ef[i] is None or es[i] is None:
+        print("  not enough history for the EMAs / ATR")
+        return
+
+    win = cs[max(0, i - V2_LOOKBACK):i]
+    tol = V2_PULLBACK_TOL * atr_i
+    for long_ in (True, False):
+        d = "LONG" if long_ else "SHORT"
+        routed_out = ""
+        if V2_REGIME_ROUTING and regime:
+            if regime == "trend" and bias and bias != d:
+                routed_out = f"(4h {regime}/{bias} blocks {d})"
+        print(f"  -- {d} {routed_out}")
+
+        trend = (ef[i] > es[i] and c["c"] > es[i]) if long_ \
+            else (ef[i] < es[i] and c["c"] < es[i])
+        pulled = any((p["l"] <= ef[i - V2_LOOKBACK + k] + tol) if long_
+                     else (p["h"] >= ef[i - V2_LOOKBACK + k] - tol)
+                     for k, p in enumerate(win))
+        dirn = (c["c"] > c["o"]) if long_ else (c["c"] < c["o"])
+        past = (c["c"] > ef[i]) if long_ else (c["c"] < ef[i])
+        pastp = (c["c"] > prev["h"]) if long_ else (c["c"] < prev["l"])
+        close_pos = ((c["c"] - c["l"]) / rng if long_ else (c["h"] - c["c"]) / rng) \
+            if rng else 0
+        allowed = not (V2_REGIME_ROUTING and regime == "range")
+        print(f"     continuation: {tick(allowed)} routing "
+              f"{tick(trend)} EMA stack  {tick(pulled)} pullback  "
+              f"{tick(dirn)} direction  {tick(past)} past EMA{V2_FAST}  "
+              f"{tick(pastp)} past prev  "
+              f"{tick(body >= V2_BODY_MIN * atr_i)} body  "
+              f"{tick(close_pos >= 0.6)} close {close_pos * 100:.0f}% of range  "
+              f"{tick(vr >= V2_VOL_MULT or not vavg)} volume")
+
+        stretch = (es[i] - min(p["l"] for p in win + [c])) if long_ \
+            else (max(p["h"] for p in win + [c]) - es[i])
+        prior = min(p["l"] for p in win) if long_ else max(p["h"] for p in win)
+        swept = (c["l"] < prior) if long_ else (c["h"] > prior)
+        reclaim = (c["c"] > prior) if long_ else (c["c"] < prior)
+        allowed_r = not (V2_REGIME_ROUTING and regime == "trend")
+        print(f"     reversal:     {tick(allowed_r)} routing "
+              f"{tick(stretch >= V2_STRETCH_ATR * atr_i)} stretch "
+              f"{stretch / atr_i:.1f} ATR (need {V2_STRETCH_ATR})  "
+              f"{tick(swept)} swept ${fmt_px(prior)}  "
+              f"{tick(reclaim)} reclaimed  "
+              f"{tick(dirn)} direction  "
+              f"{tick(body >= V2_BODY_MIN * atr_i)} body  "
+              f"{tick(vr >= V2_VOL_MULT or not vavg)} volume")
+
+    ast = {"phase": "SCAN", "last_candle_t": 0, "setup": None, "trade": None,
+           "doji": None, "zone": None, "watch": None}
+    for long_ in (True, False):
+        w = v2_watch(cs, a, ef, es, i, long_)
+        if w:
+            print(f"  watch: {w[0]} {'LONG' if long_ else 'SHORT'} "
+                  f"({w[2]:.0f}% proximity) - {w[1]}")
+
+
 if __name__ == "__main__":
     if not (TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID):
         print("Missing config: set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID "
               "as environment variables (GitHub repo Secrets).")
         sys.exit(1)
+    if "--debug" in sys.argv:
+        want = [x.upper() for x in sys.argv[1:] if not x.startswith("--")]
+        assets = active_assets()
+        if want:
+            assets = [a for a in assets
+                      if a["symbol"].upper() in want
+                      or base_name(a["symbol"]).upper() in want]
+        else:
+            assets = assets[:8]
+        print(f"v2 debug: TF={TF} HTF={V2_HTF} routing={V2_REGIME_ROUTING} "
+              f"vol={V2_VOL_MULT}x minstop={MIN_STOP_PCT}% maxstop={V2_MAX_STOP} ATR")
+        for a in assets:
+            try:
+                debug_symbol(a)
+            except Exception as e:
+                print(f"\n=== {a['symbol']} === debug failed: {type(e).__name__}: {e}")
+        sys.exit(0)
+
     if "--test" in sys.argv:
         if DISCOVER_ALL:
             watched = (f"all Hyperliquid markets above "
