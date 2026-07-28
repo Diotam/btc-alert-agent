@@ -71,7 +71,7 @@ ONLY = []                          # trade ONLY these symbols ([] = whole univer
 EXCLUDE = ["PUMP"]                 # never trade these symbols - add coins here
                                    # (matches the base name on any venue)
 MIN_DAY_VOLUME_USD = 5_000_000     # skip markets below $10M 24h notional
-MAX_ASSETS = 70
+MAX_ASSETS = 100
 FETCH_DELAY_S = 0.12
 REQUEST_TIMEOUT_S = 8              # fail fast: a throttled API must not burn 20s
 MAX_ZONES = 20                     # cap concurrently open reversal zones
