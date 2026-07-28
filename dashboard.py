@@ -264,6 +264,12 @@ def build_data():
     trades.sort(key=lambda t: t["sym"])
     zones.sort(key=lambda z: z["sym"])
     closed, pnl = closed_trades()
+    # a booked half is realised P&L, but while its runner is still open the
+    # position is not finished - keep it out of the closed LIST (it stays in
+    # the totals) so the same trade is not shown as open and closed at once
+    live = {t["sym"] for t in trades}
+    closed = [c for c in closed
+              if not (c.get("parts") == ["TP_HALF"] and c["sym"] in live)]
     return {"now": time.time(),
             "state_age_s": int(time.time() - mtime) if mtime else None,
             "scanned": scanned, "trades": trades, "zones": zones,
@@ -384,7 +390,7 @@ function render(d){
    const rp=showR==null?0:Math.max(0,Math.min(100,(showR+1)/(1+RRT)*100));
    const rc=showR==null?'#8b949e':showR>=0?'#3fb950':'#f85149';
    const rlbl=showR==null?'':t.half
-     ?`${showR.toFixed(2)}R · half booked, stop at entry - runner exits on the HA flip`
+     ?`${showR.toFixed(2)}R · half booked, stop at entry - trails under each higher low`
      :tpDone?'TP reached - waiting for the close confirmation'
      :slDone?'Stop traded - waiting for the close confirmation'
      :showR>=0
