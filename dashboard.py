@@ -185,9 +185,10 @@ def build_data():
             zones.append({"sym": sym, "dir": w.get("dir"),
                           "lev": ast.get("lev"),
                           "stage": f"{kind} \u00b7 {w.get('note','')}",
-                          "mid": mid, "prog": 70.0 if kind == "continuation" else 45.0,
-                          "step": 1,
-                          "names": [f"{kind} context", "trigger candle", "entry"]})
+                          "mid": mid,
+                          "prog": float(w.get("prox", 40)),
+                          "step": 1, "of": 2,
+                          "names": [f"{kind} context", "trigger candle"]})
         zz = ast.get("zone")
         if zz and zz.get("stage"):
             # multi-timeframe engine: flip -> structure break -> retest
@@ -417,7 +418,7 @@ function render(d){
    }).join(' <span style="color:#30363d">→</span> ');
    const pbar=z.prog==null?`<div class=muted style="margin-top:6px">${chips}</div>`
     :`<div class=bar><div class=fill style="width:${z.prog}%;background:#58a6ff"></div></div>
-      <div class=muted>step ${st} of 3 &nbsp; ${chips}</div>`;
+      <div class=muted>step ${st} of ${z.of||3} &nbsp; ${chips}</div>`;
    return `<div class=card><div class=row>
     <span class=sym>${z.sym} <span class=${cls}>${z.dir}</span>${z.lev?` <span class=lev>${z.lev}x</span>`:''}</span>
     <span class=muted>now <span class=num>$${px(z.mid)}</span></span></div>
