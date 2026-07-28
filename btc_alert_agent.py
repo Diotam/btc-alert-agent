@@ -2131,9 +2131,19 @@ def check_asset(asset, state):
             state[sym] = ast
             return changed
 
-    # ---- scan / armed: process each newly closed candle --------------------
+    # ---- scan: skip the fetch entirely when no new candle can exist --------
+    # 61 markets re-fetched every 5m while candles close every 15m is what
+    # triggers HTTP 429. A symbol with no open trade has nothing new to say
+    # until its next candle closes.
+    if cs is None and not ast["trade"]:
+        boundary = (int(time.time() * 1000) // MS[TF]) * MS[TF] - MS[TF]
+        if ast["last_candle_t"] >= boundary:
+            RUN_STATUS.append(f"{sym} up to date")
+            state[sym] = ast
+            return changed
+
     if not cs:                             # not already fetched above
-        source, cs = fetch(asset, TF, 300) # ~25h of 5m: covers the NY day
+        source, cs = fetch(asset, TF, 300)
     if not cs:
         RUN_STATUS.append(f"{sym} feed failed")
         state[sym] = ast
