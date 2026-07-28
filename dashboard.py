@@ -51,10 +51,11 @@ def _mids_for(dex=None):
 _btc = {"t": 0.0, "px": None, "chg": None, "prev": None}
 
 
-def btc_ticker():
-    """BTC mark price and its 24h change. Cached - one call a minute."""
-    if _btc["px"] is not None and time.time() - _btc["t"] < 45:
-        return {"px": _btc["px"], "chg": _btc["chg"]}
+def btc_prev_close():
+    """Yesterday's BTC price. Changes once a day, so cache it for 10 minutes.
+    The LIVE price comes from allMids, which the dashboard already fetches."""
+    if _btc["prev"] is not None and time.time() - _btc["t"] < 600:
+        return _btc["prev"]
     try:
         req = urllib.request.Request(
             "https://api.hyperliquid.xyz/info",
@@ -65,13 +66,19 @@ def btc_ticker():
         idx = next(i for i, a in enumerate(meta["universe"])
                    if a["name"] == "BTC")
         ctx = ctxs[idx]
-        px = float(ctx.get("markPx") or ctx.get("midPx"))
-        prev = float(ctx.get("prevDayPx") or 0) or None
-        _btc.update(t=time.time(), px=px, prev=prev,
-                    chg=((px - prev) / prev * 100) if prev else None)
+        _btc.update(t=time.time(),
+                    prev=float(ctx.get("prevDayPx") or 0) or None)
     except Exception:
         _btc["t"] = time.time()          # do not hammer on failure
-    return {"px": _btc["px"], "chg": _btc["chg"]}
+    return _btc["prev"]
+
+
+def _btc_now(mids):
+    """Live BTC price straight from the mids we already fetched."""
+    px = mids.get("BTC")
+    prev = btc_prev_close()
+    return {"px": px,
+            "chg": ((px - prev) / prev * 100) if (px and prev) else None}
 
 
 def prices():
@@ -304,7 +311,7 @@ def build_data():
             "state_age_s": int(time.time() - mtime) if mtime else None,
             "scanned": scanned, "trades": trades, "zones": zones,
             "closed": closed, "pnl": pnl, "build": BUILD,
-            "btc": btc_ticker(),
+            "btc": _btc_now(mids),
             "events": journal_events()}
 
 
