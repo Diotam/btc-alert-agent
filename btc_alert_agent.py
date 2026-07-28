@@ -1596,15 +1596,24 @@ def v2_watch(real, a, ef, es, i, long_):
         tol = V2_PULLBACK_TOL * atr_i
         near = (c["l"] <= ef[i] + tol) if long_ else (c["h"] >= ef[i] - tol)
         if near:
+            # how close the close sits to the EMA - the reclaim fires from here
+            gap = abs(c["c"] - ef[i]) / max(tol, 1e-12)
             return ("continuation",
                     f"trend intact, price back at the {TF} EMA{V2_FAST} - "
-                    f"waiting for the reclaim candle")
+                    f"waiting for the reclaim candle",
+                    max(10.0, min(95.0, 95.0 - 45.0 * gap)))
     stretch = (es[i] - min(p["l"] for p in win)) if long_ \
         else (max(p["h"] for p in win) - es[i])
     if stretch >= V2_STRETCH_ATR * atr_i:
+        # the sweep is what is missing: how near price is to the extreme it
+        # must take out
+        prior = min(p["l"] for p in win[:-1]) if long_ \
+            else max(p["h"] for p in win[:-1])
+        away = (abs(c["c"] - prior) / atr_i) if atr_i else 9.0
         return ("reversal",
                 f"{stretch / atr_i:.1f} ATR from the EMA{V2_SLOW} - waiting "
-                f"for a sweep and reclaim")
+                f"for a sweep and reclaim",
+                max(10.0, min(90.0, 90.0 - 60.0 * away)))
     return None
 
 
@@ -1688,7 +1697,7 @@ def process_candle_v2(asset, ast, real, a, i, source):
         w = v2_watch(real, a, ef, es, i, long_)
         if not w:
             continue
-        kind, note = w
+        kind, note, prox = w
         if V2_REGIME_ROUTING and regime:
             if regime == "trend" and kind == "reversal":
                 continue
@@ -1697,7 +1706,7 @@ def process_candle_v2(asset, ast, real, a, i, source):
             if regime == "range" and kind == "continuation":
                 continue
         ast["watch"] = {"kind": kind, "dir": direction, "note": note,
-                        "regime": regime, "t": c["t"]}
+                        "regime": regime, "prox": round(prox), "t": c["t"]}
         break
     return _touched()
 
