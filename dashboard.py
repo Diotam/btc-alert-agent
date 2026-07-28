@@ -48,6 +48,32 @@ def _mids_for(dex=None):
     return out
 
 
+_btc = {"t": 0.0, "px": None, "chg": None, "prev": None}
+
+
+def btc_ticker():
+    """BTC mark price and its 24h change. Cached - one call a minute."""
+    if _btc["px"] is not None and time.time() - _btc["t"] < 45:
+        return {"px": _btc["px"], "chg": _btc["chg"]}
+    try:
+        req = urllib.request.Request(
+            "https://api.hyperliquid.xyz/info",
+            data=json.dumps({"type": "metaAndAssetCtxs"}).encode(),
+            headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=6) as r:
+            meta, ctxs = json.loads(r.read())
+        idx = next(i for i, a in enumerate(meta["universe"])
+                   if a["name"] == "BTC")
+        ctx = ctxs[idx]
+        px = float(ctx.get("markPx") or ctx.get("midPx"))
+        prev = float(ctx.get("prevDayPx") or 0) or None
+        _btc.update(t=time.time(), px=px, prev=prev,
+                    chg=((px - prev) / prev * 100) if prev else None)
+    except Exception:
+        _btc["t"] = time.time()          # do not hammer on failure
+    return {"px": _btc["px"], "chg": _btc["chg"]}
+
+
 def prices():
     if time.time() - _price_cache["t"] < 0.8:
         return _price_cache["mids"]
@@ -278,6 +304,7 @@ def build_data():
             "state_age_s": int(time.time() - mtime) if mtime else None,
             "scanned": scanned, "trades": trades, "zones": zones,
             "closed": closed, "pnl": pnl, "build": BUILD,
+            "btc": btc_ticker(),
             "events": journal_events()}
 
 
@@ -320,6 +347,13 @@ h1{font-size:17px;margin:4px 0 12px}
 </style></head><body>
 <h1>Signal Agent <span id=status class=badge></span>
 <span id=meta class=muted style="font-weight:400;font-size:12px"></span></h1>
+<div id=btcbar class=card style="display:flex;justify-content:space-between;
+     align-items:center;padding:9px 13px;position:sticky;top:0;z-index:20;
+     backdrop-filter:blur(8px);background:rgba(22,27,34,.92)">
+  <span style="font-weight:800;font-size:14px">BTC</span>
+  <span id=btcpx style="font-family:ui-monospace,monospace;font-size:15px">-</span>
+  <span id=btcchg style="font-weight:800;font-size:13px">-</span>
+</div>
 <div class=card>
   <div id=total class=total>-</div>
   <div id=wl class=muted style="text-align:center;margin:-6px 0 10px"></div>
@@ -353,6 +387,14 @@ function px(p){if(p==null)return '-';
  return p>=10000?p.toLocaleString(undefined,{maximumFractionDigits:0})
  :p>=1?p.toFixed(2):p.toFixed(6)}
 function render(d){
+ if(d.btc&&d.btc.px!=null){
+   document.getElementById('btcpx').textContent='$'+d.btc.px.toLocaleString(
+     undefined,{minimumFractionDigits:0,maximumFractionDigits:0});
+   const e=document.getElementById('btcchg');
+   if(d.btc.chg!=null){e.textContent=(d.btc.chg>=0?'+':'')+d.btc.chg.toFixed(2)+'% 24h';
+     e.style.color=d.btc.chg>=0?'#3fb950':'#f85149';}
+   else{e.textContent='';}
+ }
  // the page never reloads on its own - if the server was redeployed, the tab
  // is running stale JavaScript, so refresh it once
  if(d.build){ if(window.__build===undefined){window.__build=d.build;}
