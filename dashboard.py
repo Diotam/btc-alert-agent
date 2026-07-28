@@ -70,6 +70,9 @@ def prices():
     return _price_cache["mids"]
 
 
+BUILD = str(int(os.path.getmtime(__file__)))   # changes on every deploy
+
+
 def read_state():
     try:
         return json.loads(STATE_FILE.read_text()), STATE_FILE.stat().st_mtime
@@ -274,7 +277,7 @@ def build_data():
     return {"now": time.time(),
             "state_age_s": int(time.time() - mtime) if mtime else None,
             "scanned": scanned, "trades": trades, "zones": zones,
-            "closed": closed, "pnl": pnl,
+            "closed": closed, "pnl": pnl, "build": BUILD,
             "events": journal_events()}
 
 
@@ -350,6 +353,10 @@ function px(p){if(p==null)return '-';
  return p>=10000?p.toLocaleString(undefined,{maximumFractionDigits:0})
  :p>=1?p.toFixed(2):p.toFixed(6)}
 function render(d){
+ // the page never reloads on its own - if the server was redeployed, the tab
+ // is running stale JavaScript, so refresh it once
+ if(d.build){ if(window.__build===undefined){window.__build=d.build;}
+              else if(d.build!==window.__build){location.reload();return;} }
   LAST=d;
   const pw=d.pnl?d.pnl[PERIOD]:{pnl:0,w:0,l:0};
   const tot=pw.pnl;
