@@ -177,7 +177,7 @@ CONT_STOP_STRUCTURAL = True        # stop under the pullback extreme when the
 # ===========================================================================
 # --- execution (stage 1: DRY RUN - nothing is ever sent) -------------------
 EXEC_DRY_RUN = True          # log the orders that WOULD be placed
-EXEC_LIVE = False            # stage 2: place real orders. Leave False until
+EXEC_LIVE = True            # stage 2: place real orders. Leave False until
                              # the testnet run has filled correctly.
 EXEC_TESTNET = False         # MAINNET - real money
 EXEC_HALT_FILE = "/opt/btc-agent/EXEC_HALT"   # touch this to stop new entries
