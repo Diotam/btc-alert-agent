@@ -1133,6 +1133,58 @@ def already_closed(sym, trade, exit_px, kind):
     return False
 
 
+def position_size_units(trade):
+    """The unit size a live entry uses, reconstructed from the fixed-risk
+    sizing so a closed trade can be booked in USD. Mirrors plan_entry_orders
+    exactly: risk / original-stop-distance, then the notional cap. Uses
+    `risk0` (the risk at entry) so a stop later moved to breakeven does not
+    corrupt the figure."""
+    entry = trade.get("entry") or 0.0
+    per_unit = trade.get("risk0")
+    if not per_unit:                                 # legacy trade: fall back
+        per_unit = abs(entry - trade.get("stop", entry))
+    if not entry or per_unit <= 0:
+        return 0.0
+    size = EXEC_RISK_USD / per_unit
+    if size * entry > EXEC_MAX_NOTIONAL_USD:
+        size = EXEC_MAX_NOTIONAL_USD / entry
+    return size
+
+
+def realized_usd(trade, exit_px, frac=1.0):
+    """Signed USD P&L of closing `frac` of the position at exit_px."""
+    sign = 1 if trade["verdict"] == "LONG" else -1
+    return sign * (exit_px - trade["entry"]) * position_size_units(trade) * frac
+
+
+def realized_pnl_today_usd():
+    """Sum of today's realised USD P&L from the ledger, on the LOCAL_TZ day
+    boundary the operator reads in the logs. Best-effort: a missing file or a
+    bad line yields 0.0. Rows written before pnl_usd existed are skipped -
+    only closes booked earlier on the upgrade day are unaccounted for."""
+    try:
+        lines = TRADES_LOG.read_text().splitlines()[-1000:]
+    except OSError:
+        return 0.0
+    today = datetime.now(LOCAL_TZ).date()
+    total = 0.0
+    for ln in lines:
+        try:
+            r = json.loads(ln)
+        except json.JSONDecodeError:
+            continue
+        t = r.get("t")
+        if "pnl_usd" not in r or not t:
+            continue
+        try:
+            if datetime.fromtimestamp(t / 1000, LOCAL_TZ).date() != today:
+                continue
+            total += float(r["pnl_usd"])
+        except (TypeError, ValueError, OSError):
+            continue
+    return total
+
+
 def record_close(sym, trade, exit_px, kind, t_event=None, frac=1.0):
     """Append a closed trade to the ledger (best-effort). t_event = the
     actual market time of the exit, so late reconciliations book to the
@@ -1145,7 +1197,9 @@ def record_close(sym, trade, exit_px, kind, t_event=None, frac=1.0):
                                 "kind": kind,
                                 "frac": frac,
                                 "pnl_pct": round(
-                                    pnl_pct(trade, exit_px) * frac, 3)})
+                                    pnl_pct(trade, exit_px) * frac, 3),
+                                "pnl_usd": round(
+                                    realized_usd(trade, exit_px, frac), 4)})
                     + "\n")
     except OSError:
         pass
@@ -1480,16 +1534,19 @@ def log_order(rec):
 
 
 def plan_entry_orders(asset, trade, open_count=0):
-    """What a live version WOULD send, sized by fixed dollar risk.
-    Dry run only - nothing leaves this process."""
+    """Size the entry by fixed dollar risk and log the plan. When EXEC_LIVE
+    is on this plan is handed to place_entry_live right after, so the log is
+    labelled LIVE, not DRY RUN - reading 'DRY RUN' must never coincide with a
+    real order going out."""
     sym = asset["symbol"]
+    mode = "LIVE" if EXEC_LIVE else "DRY RUN"
     entry, stop, tp = trade["entry"], trade["stop"], trade["tp"]
     long_ = trade["verdict"] == "LONG"
     per_unit = abs(entry - stop)
     if per_unit <= 0:
         return None
     if open_count >= EXEC_MAX_POSITIONS:
-        log(f"{sym}: DRY RUN - would SKIP, {open_count} positions already "
+        log(f"{sym}: {mode} - would SKIP, {open_count} positions already "
             f"open (max {EXEC_MAX_POSITIONS})")
         return None
     size = EXEC_RISK_USD / per_unit
@@ -1499,7 +1556,8 @@ def plan_entry_orders(asset, trade, open_count=0):
         size = EXEC_MAX_NOTIONAL_USD / entry
         notional = EXEC_MAX_NOTIONAL_USD
         capped = f" [notional capped, risk now ${size * per_unit:.2f}]"
-    rec = {"t": int(time.time() * 1000), "sym": sym, "mode": "dry-run",
+    rec = {"t": int(time.time() * 1000), "sym": sym,
+           "mode": "live" if EXEC_LIVE else "dry-run",
            "event": "ENTRY", "side": "buy" if long_ else "sell",
            "size": round(size, 8), "entry": entry, "stop": stop, "tp": tp,
            "notional_usd": round(notional, 2),
@@ -1512,10 +1570,10 @@ def plan_entry_orders(asset, trade, open_count=0):
                 "trigger": stop, "size": round(size, 8)},
                {"kind": "tp_half", "type": "limit", "reduce_only": True,
                 "price": tp, "size": round(size / 2, 8)}]}
-    if not EXEC_DRY_RUN:
-        return rec                        # sized, but nothing logged
-    log_order(rec)
-    log(f"{sym}: DRY RUN - {rec['side']} {size:.6g} @ ${fmt_px(entry)} = "
+    if not (EXEC_DRY_RUN or EXEC_LIVE):
+        return rec                        # sized, but neither logged nor sent
+    log_order(rec)                        # a live order is always logged too
+    log(f"{sym}: {mode} - {rec['side']} {size:.6g} @ ${fmt_px(entry)} = "
         f"${notional:,.0f} notional, ${rec['risk_usd']:.2f} risk "
         f"({rec['stop_pct']}% stop); stop ${fmt_px(stop)}, TP ${fmt_px(tp)} "
         f"on half{capped}")
@@ -1600,9 +1658,9 @@ def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger,
                    if isinstance(v, dict) and v.get("trade"))
     plan = plan_entry_orders(asset, ast["trade"], open_count=open_now)
     if EXEC_LIVE and plan:
-        # NOTE: the daily loss limit needs realised USD from the ledger, which
-        # is not tracked yet - the halt file and position cap are enforced.
-        why = exec_blocked(open_now, 0.0)
+        # daily loss limit: realised USD booked to the ledger, summed for the
+        # current LOCAL_TZ day (alongside the halt file and position cap).
+        why = exec_blocked(open_now, realized_pnl_today_usd())
         if why:
             log(f"{asset['symbol']}: live order blocked - {why}")
         else:
