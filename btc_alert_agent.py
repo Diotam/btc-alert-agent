@@ -181,11 +181,11 @@ EXEC_LIVE = True             # stage 2: place real orders. Leave False until
                              # the testnet run has filled correctly.
 EXEC_TESTNET = False         # MAINNET - real money
 EXEC_HALT_FILE = "/opt/btc-agent/EXEC_HALT"   # touch this to stop new entries
-EXEC_DAILY_LOSS_LIMIT_USD = 50.0             # no new entries past this
+EXEC_DAILY_LOSS_LIMIT_USD = 40.0             # no new entries past this
 EXEC_RISK_USD = 2.0          # deliberately tiny for the first live fills;
                              # raise once orders have proven correct
 EXEC_MAX_NOTIONAL_USD = 2500 # cap on position value
-EXEC_MAX_POSITIONS = 3       # one live position at a time to start
+EXEC_MAX_POSITIONS = 1       # one live position at a time to start
 # ORDERS_LOG is defined next to trades.log further down
 
 STRATEGY_V2 = True
@@ -1471,8 +1471,6 @@ def log_order(rec):
 def plan_entry_orders(asset, trade, open_count=0):
     """What a live version WOULD send, sized by fixed dollar risk.
     Dry run only - nothing leaves this process."""
-    if not EXEC_DRY_RUN:
-        return None
     sym = asset["symbol"]
     entry, stop, tp = trade["entry"], trade["stop"], trade["tp"]
     long_ = trade["verdict"] == "LONG"
@@ -1503,6 +1501,8 @@ def plan_entry_orders(asset, trade, open_count=0):
                 "trigger": stop, "size": round(size, 8)},
                {"kind": "tp_half", "type": "limit", "reduce_only": True,
                 "price": tp, "size": round(size / 2, 8)}]}
+    if not EXEC_DRY_RUN:
+        return rec                        # sized, but nothing logged
     log_order(rec)
     log(f"{sym}: DRY RUN - {rec['side']} {size:.6g} @ ${fmt_px(entry)} = "
         f"${notional:,.0f} notional, ${rec['risk_usd']:.2f} risk "
@@ -1585,9 +1585,17 @@ def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger,
                     "rr": rr, "runner": bool(runner), "half": False,
                     "risk0": risk}          # original risk, kept for R maths
                                             # after the stop moves to breakeven
-    plan_entry_orders(asset, ast["trade"],
-                      open_count=sum(1 for v in STATE_VIEW.values()
-                                     if isinstance(v, dict) and v.get("trade")))
+    open_now = sum(1 for v in STATE_VIEW.values()
+                   if isinstance(v, dict) and v.get("trade"))
+    plan = plan_entry_orders(asset, ast["trade"], open_count=open_now)
+    if EXEC_LIVE and plan:
+        # NOTE: the daily loss limit needs realised USD from the ledger, which
+        # is not tracked yet - the halt file and position cap are enforced.
+        why = exec_blocked(open_now, 0.0)
+        if why:
+            log(f"{asset['symbol']}: live order blocked - {why}")
+        else:
+            place_entry_live(asset, ast["trade"], plan)
     ast["phase"], ast["setup"] = "IN_TRADE", None
     ast["doji"], ast["zone"] = None, None
     return True
