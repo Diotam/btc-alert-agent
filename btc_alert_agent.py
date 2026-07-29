@@ -182,7 +182,7 @@ EXEC_LIVE = True            # stage 2: place real orders. Leave False until
 EXEC_TESTNET = False         # MAINNET - real money
 EXEC_HALT_FILE = "/opt/btc-agent/EXEC_HALT"   # touch this to stop new entries
 EXEC_DAILY_LOSS_LIMIT_USD = 20.0             # no new entries past this
-EXEC_RISK_USD = 5.0          # deliberately tiny for the first live fills;
+EXEC_RISK_USD = 4.0          # deliberately tiny for the first live fills;
                              # raise once orders have proven correct
 EXEC_MAX_NOTIONAL_USD = 2500 # cap on position value
 EXEC_MAX_POSITIONS = 1       # one live position at a time to start
