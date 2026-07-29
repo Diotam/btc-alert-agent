@@ -103,7 +103,7 @@ RANGE_MIN_ATR = 0.30         # range narrower than this x ATR = untradeable day
 #               trade - leave at 0 to keep skipping via MIN_STOP_PCT
 SL_PAD_ATR = 0.25
 SL_MIN_PCT = 0.0
-MIN_STOP_PCT = 0.80              # skip entries whose stop sits closer than
+MIN_STOP_PCT = 0.30              # skip entries whose stop sits closer than
                                  # this % of price - sub-noise stops just churn
 
 # Heikin Ashi entry confirmation:
@@ -1914,6 +1914,13 @@ def process_candle_v2(asset, ast, real, a, i, source):
     vols = [x.get("v") or 0 for x in real]
     vwin = [v for v in vols[max(0, i - V2_VOL_BASE):i] if v > 0]
     vavg = sum(vwin) / len(vwin) if vwin else 0.0
+    # the mean is dragged up by a handful of panic bars, which are almost
+    # always down candles - that punishes quiet rallies for no good reason.
+    # the median is the fairer denominator for the participation test.
+    _vs = sorted(vwin)
+    vmed = 0.0 if not _vs else (
+        _vs[len(_vs) // 2] if len(_vs) % 2
+        else (_vs[len(_vs) // 2 - 1] + _vs[len(_vs) // 2]) / 2)
     bias, regime = htf_context(asset) if (V2_REGIME_ROUTING or V2_HTF_REQUIRED) \
         else (None, None)
     for long_ in (True, False):
@@ -1925,8 +1932,6 @@ def process_candle_v2(asset, ast, real, a, i, source):
             if V2_REGIME_ROUTING and regime:
                 if regime == "trend" and name == "reversal":
                     continue
-                if regime == "trend" and bias and bias != direction:
-                    continue
                 if regime == "range" and name == "continuation":
                     continue
             hit = fn(real, a, es, i, long_) if name == "reversal" \
@@ -1935,9 +1940,9 @@ def process_candle_v2(asset, ast, real, a, i, source):
                 continue
             ext, detail = hit
             # rule 3: the confirming candle needs participation
-            if V2_VOL_GATE and vavg and (c.get("v") or 0) < V2_VOL_MULT * vavg:
+            if V2_VOL_GATE and vmed and (c.get("v") or 0) < V2_VOL_MULT * vmed:
                 log(f"{sym}: {direction} {name} but the confirming candle ran "
-                    f"{(c.get('v') or 0) / vavg:.2f}x average volume "
+                    f"{(c.get('v') or 0) / vmed:.2f}x median volume "
                     f"(need {V2_VOL_MULT}x) - skipped")
                 continue
             if regime:
@@ -1946,7 +1951,7 @@ def process_candle_v2(asset, ast, real, a, i, source):
                 if V2_HTF_REQUIRED:
                     log(f"{sym}: {direction} {name} but the {V2_HTF} bias is "
                         f"{bias} - skipped")
-                    return True
+                    continue
                 detail += f" (against the {V2_HTF} bias)"
             stop = (ext - V2_BUFFER * atr_i) if long_ else (ext + V2_BUFFER * atr_i)
             risk = (c["c"] - stop) if long_ else (stop - c["c"])
@@ -1975,8 +1980,6 @@ def process_candle_v2(asset, ast, real, a, i, source):
         kind, note, prox = w
         if V2_REGIME_ROUTING and regime:
             if regime == "trend" and kind == "reversal":
-                continue
-            if regime == "trend" and bias and bias != direction:
                 continue
             if regime == "range" and kind == "continuation":
                 continue
