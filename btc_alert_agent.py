@@ -185,7 +185,7 @@ EXEC_DAILY_LOSS_LIMIT_USD = 50.0             # no new entries past this
 EXEC_RISK_USD = 2.0          # deliberately tiny for the first live fills;
                              # raise once orders have proven correct
 EXEC_MAX_NOTIONAL_USD = 2500 # cap on position value
-EXEC_MAX_POSITIONS = 1       # one live position at a time to start
+EXEC_MAX_POSITIONS = 3       # one live position at a time to start
 # ORDERS_LOG is defined next to trades.log further down
 
 STRATEGY_V2 = True
