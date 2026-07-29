@@ -1159,7 +1159,12 @@ def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger,
 
 HTF_CACHE_S = 900            # the 4h/1h read barely moves inside this window
 HTF_RETRY_S = 120            # after a failure, retry sooner than that
+HTF_MAX_REFRESH = 12         # cold-start guard: HTF reads allowed per run. The
+                             # cache is in-memory, so every restart empties it
+                             # and refetching all ~54 symbols at once is what
+                             # trips the 429s
 _HTF_CACHE = {}
+_HTF_BUDGET = [0]            # refreshes used this run
 
 
 def htf_context(asset):
@@ -1167,14 +1172,25 @@ def htf_context(asset):
     this the extra fetches get rate-limited and routing silently turns off."""
     sym = asset["symbol"]
     hit = _HTF_CACHE.get(sym)
+    good = hit[1] if (hit and hit[1][0]) else None
     if hit:
         age = time.time() - hit[0]
         ttl = HTF_CACHE_S if hit[1][0] else HTF_RETRY_S
         if age < ttl:
             return hit[1]
+    # spread the refreshes out. Symbols that miss the budget keep whatever
+    # they last had rather than dropping to "no routing"
+    if _HTF_BUDGET[0] >= HTF_MAX_REFRESH:
+        return good or (None, None)
+    _HTF_BUDGET[0] += 1
     try:
         _, h = fetch(asset, V2_HTF, V2_HTF_EMA + 30)
         if not h or len(h) < V2_HTF_EMA + 12:
+            if good:                       # a 429 is not a regime change
+                log(f"{sym}: {V2_HTF} fetch failed - keeping the last "
+                    f"read ({good[0]}/{good[1]})")
+                _HTF_CACHE[sym] = (time.time(), good)
+                return good
             log(f"{sym}: {V2_HTF} history too short "
                 f"({0 if not h else len(h)} candles, need {V2_HTF_EMA + 12}) - "
                 "bias and regime routing are OFF for this symbol")
@@ -1184,14 +1200,19 @@ def htf_context(asset):
         ah = atr(h)
         j = len(h) - 2
         if e[j] is None or e[j - 6] is None or not ah[j]:
-            _HTF_CACHE[sym] = (time.time(), (None, None))
-            return None, None
+            _HTF_CACHE[sym] = (time.time(), good or (None, None))
+            return good or (None, None)
         bias = "LONG" if h[j]["c"] > e[j] else "SHORT"
         slope = abs(e[j] - e[j - 6]) / ah[j]
         out = bias, ("trend" if slope >= V2_TREND_SLOPE else "range")
         _HTF_CACHE[sym] = (time.time(), out)
         return out
     except Exception as e:
+        if good:
+            log(f"{sym}: {V2_HTF} context failed ({type(e).__name__}) - "
+                "keeping the last read")
+            _HTF_CACHE[sym] = (time.time(), good)
+            return good
         log(f"{sym}: {V2_HTF} context failed ({type(e).__name__}) - "
             "routing off until the retry")
         _HTF_CACHE[sym] = (time.time(), (None, None))
@@ -1495,6 +1516,7 @@ STATE_VIEW = {}
 def check_once():
     RUN_ALERTS.clear()
     RUN_STATUS.clear()
+    _HTF_BUDGET[0] = 0
     state = load_state()
     STATE_VIEW.clear()
     STATE_VIEW.update(state)
