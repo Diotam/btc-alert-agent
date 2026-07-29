@@ -1,40 +1,32 @@
 #!/usr/bin/env python3
 """
-SMOOTHED-HA TREND-CHANGE AGENT
--------------------------------
-One pathway. On smoothed Heikin Ashi (SHA_PRE/SHA_POST EMAs, TradingView
-"Smoothed Ha Candles 10 10"):
+4-HOUR RANGE AGENT
+------------------
+One strategy, three steps:
 
-  1. a strong run - same-colour HA candles whose bodies GROW, then FADE
-  2. the HA flips colour: red -> green arms a LONG, green -> red a SHORT.
-     No entry yet: those new HA candles become support (or resistance)
-  3. price pulls back INTO the HA candles
-  4. a candle closes in the trade's direction -> ENTER at that close
-        SL = the swing extreme of the run that just ended
-        TP = RR_TREND (1.5) x risk
-  5. at TP: HALF is booked and the stop moves to entry; the runner exits
-     when the smoothed HA flips against the trade
+  1. mark the high and low of the FIRST 4h candle of the New York day
+     (00:00-04:00 NY), once that candle has fully closed
+  2. on 5m, wait for a candle to CLOSE outside that range (wicks never
+     count), then for a candle to CLOSE back inside - both on the same day
+  3. broke the high -> SHORT, broke the low -> LONG.
+     stop  = the exact extreme of the breakout excursion
+     target = RANGE_RR x that distance (2R)
 
-Setups are dropped if the HA turns back, price closes beyond the swing
-extreme, or ZONE_TTL candles pass without a pullback. Entries also need a
-stop at least MIN_STOP_PCT of price away.
+A huge breakout would put the stop far away, so when the excursion travels
+more than RANGE_HUGE_FRACTION of the range width beyond the level, the stop
+moves to the nearest key level inside it - or, failing that, to the broken
+range level itself, which is now resistance (support for longs).
 
-The old 4h-range failed-breakout pathway is retired (RANGE_ENTRY = False);
-its code is still present and can be switched back on, together with
-RANGE_GATE if entries should be confined to the post-range session.
+Everything resets at New York midnight. Alerts go to Telegram; orders can be
+placed on Hyperliquid (EXEC_LIVE) with fixed dollar risk per trade.
 
-Exits carry intrabar detection. An opposite-direction signal replaces an
-open trade; same-direction signals are ignored. Closes are recorded to
-trades.log with a `frac` field so half-closes count as half.
-
-Alerts are delivered to Telegram. Config from environment variables
-(GitHub repo Secrets):
-  TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID
+Config comes from environment variables:
+  TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID / HL_API_KEY / HL_ACCOUNT_ADDRESS
 
 Modes:
-  python3 btc_alert_agent.py           single scan (workflow default)
+  python3 btc_alert_agent.py           single scan
   python3 btc_alert_agent.py --test    send a test message
-  python3 btc_alert_agent.py --loop    run continuously (droplet/PC)
+  python3 btc_alert_agent.py --loop    run continuously
 """
 
 import json
@@ -70,10 +62,11 @@ STOCK_MIN_VOLUME_USD = 5_000_000
 ONLY = []                          # trade ONLY these symbols ([] = whole universe)
 EXCLUDE = ["PUMP"]                 # never trade these symbols - add coins here
                                    # (matches the base name on any venue)
-MIN_DAY_VOLUME_USD = 10_000_000    # skip markets below $10M 24h notional
+MIN_DAY_VOLUME_USD = 5_000_000     # skip markets below $10M 24h notional
 MAX_ASSETS = 70
 FETCH_DELAY_S = 0.12
 REQUEST_TIMEOUT_S = 8              # fail fast: a throttled API must not burn 20s
+MAX_ZONES = 20                     # cap concurrently open reversal zones
 
 ASSETS = [                         # used when DISCOVER_ALL = False / discovery fails
     {"symbol": "BTC", "label": "BTC-PERP", "hl_coin": "BTC",
@@ -81,7 +74,7 @@ ASSETS = [                         # used when DISCOVER_ALL = False / discovery 
 ]
 
 # --- Strategy dials -------------------------------------------------------
-TF = "15m"                    # execution timeframe (the spec is 5m closes)
+TF = "5m"                     # execution timeframe: the spec is 5m closes
 RANGE_TZ = "America/New_York"
 # session windows per asset class (NY h:m start -> h:m end):
 #   crypto & commodities: the first 4h of the NY day (overnight range)
@@ -95,21 +88,38 @@ SESSIONS = {"crypto": (0, 0, 4, 0),
             "commodity": (0, 0, 4, 0),
             "stock": (9, 30, 10, 30)}
 RR = 2.0                     # TP = 2 x the stop distance
+RANGE_MIN_ATR = 0.30         # range narrower than this x ATR = untradeable day
 # stop placement: the raw stop is the swing extreme of the run that faded.
 #   SL_PAD_ATR  pushes it that much further away (breathing room for wicks)
 #   SL_MIN_PCT  widens it to at least this % of price instead of skipping the
 #               trade - leave at 0 to keep skipping via MIN_STOP_PCT
-SL_PAD_ATR = 0.25
-SL_MIN_PCT = 0.0
-MIN_STOP_PCT = 0.30              # skip entries whose stop sits closer than
+# ===========================================================================
+# 4-HOUR RANGE STRATEGY - the only strategy
+#   step 1  mark the high/low of the FIRST 4h candle of the NY day, once it
+#           has fully closed (00:00-04:00 New York)
+#   step 2  on 5m: a candle must CLOSE outside that range (wicks never count),
+#           then price must CLOSE back inside - both on the same NY day
+#   step 3  broke the high -> SHORT, broke the low -> LONG.
+#           stop = the exact extreme of the breakout excursion
+#           target = RANGE_RR x the stop distance
+# A huge breakout would put the stop far away, so when the excursion stop is
+# wider than RANGE_MAX_STOP_ATR the nearest key level inside it is used
+# instead; if there is no such level the trade is skipped.
+# ===========================================================================
+RANGE_STRATEGY = True
+RANGE_RR = 2.0                   # take profit = 2x the stop distance
+RANGE_MIN_ATR = 0.30             # skip days whose range is narrower than this
+RANGE_HUGE_FRACTION = 0.50       # a breakout that travels more than this
+                                 # much of the range width beyond the level
+                                 # counts as "huge"
+RANGE_MAX_STOP_ATR = 3.00        # absolute backstop on stop width, x ATR
+RANGE_KEY_LOOKBACK = 40          # candles searched for the nearest key level
+RANGE_KEY_BUFFER_ATR = 0.10      # placed just beyond that level
+RANGE_ONE_PER_SIDE = True        # one trade per side per day
+
+MIN_STOP_PCT = 0.25              # skip entries whose stop sits closer than
                                  # this % of price - sub-noise stops just churn
 
-# Heikin Ashi entry confirmation:
-#   SHORT wants HA_CONFIRM_CANDLES consecutive LARGE bearish HA candles with
-#   no UPPER wicks; LONG wants large bullish HA candles with no LOWER wicks.
-HA_MODE = "smoothed"             # "smoothed" = TradingView Smoothed HA
-SHA_PRE, SHA_POST = 6, 3         # smoothed HA settings
-HA_CONFIRM_CANDLES = 2
                                  # NOTE: smoothed HA bodies are much smaller
                                  # than raw candles - 0.50 would qualify none
                                  # the candle's own body (scale-free: works on
@@ -118,12 +128,9 @@ HA_CONFIRM_CANDLES = 2
 # second pathway: while price trades INSIDE the range, a doji arms the same
 # HA confirmation in either direction
 # --- the only pathway: smoothed-HA trend-change pullback -------------------
-RANGE_ENTRY = False          # pathway A (4h-range failed breakout) retired
-RANGE_GATE = False           # the trend pathway does not use the 4h range, so
                              # neither the session window nor the width guard
                              # applies - set True to trade only after the
                              # range window closes on a wide-enough range
-ZONE_TTL = 24                # candles the HA support/resistance stays valid
 # --- multi-timeframe engine ------------------------------------------------
 # --- headlines for stock alerts --------------------------------------------
 NEWS_ENABLED = True
@@ -154,42 +161,28 @@ NEWS_URL = ("https://feeds.finance.yahoo.com/rss/2.0/headline"
 # runner. One light 1h bias check, no multi-stage state machine.
 # ===========================================================================
 # --- execution (stage 1: DRY RUN - nothing is ever sent) -------------------
+EXEC_DRY_RUN = True          # log the orders that WOULD be placed
+EXEC_LIVE = True             # stage 2: place real orders. Leave False until
                              # the testnet run has filled correctly.
+EXEC_TESTNET = False         # MAINNET - real money
+EXEC_HALT_FILE = "/opt/btc-agent/EXEC_HALT"   # touch this to stop new entries
+EXEC_DAILY_LOSS_LIMIT_USD = 40.0             # no new entries past this
 EXEC_RISK_USD = 2.0          # deliberately tiny for the first live fills;
                              # raise once orders have proven correct
 EXEC_MAX_NOTIONAL_USD = 2500 # cap on position value
+EXEC_MAX_POSITIONS = 1       # one live position at a time to start
 # ORDERS_LOG is defined next to trades.log further down
 
-STRATEGY_V2 = True
-V2_FAST, V2_SLOW = 20, 50        # 5m EMAs
-V2_HTF, V2_HTF_EMA = "4h", 50    # higher-timeframe bias and regime
-V2_HTF_REQUIRED = False          # True = 1h must agree, False = advisory only
-V2_LOOKBACK = 8                  # candles a pullback / sweep may span
-V2_PULLBACK_TOL = 0.35           # how close to the EMA counts as a pullback
-V2_STRETCH_ATR = 2.0             # distance from EMA50 that counts as extended
-V2_BODY_MIN = 0.45               # trigger candle body, x ATR
-V2_BUFFER = 0.15                 # stop buffer, x ATR
-V2_MAX_STOP = 2.50               # skip if the stop is wider, x ATR
-V2_MAX_TRIGGER_RANGE = 1.30      # a trigger candle wider than this leaves the
                                  # entry too far from its own invalidation
-V2_RR = 1.5
 # rule 3: the confirming candle must carry participation
-V2_VOL_GATE = True
-V2_VOL_BASE = 20                 # bars in the volume average
-V2_VOL_MULT = 1.20               # trigger candle volume vs that average
 # rule 1: the higher timeframe decides WHICH pathway is allowed
-V2_REGIME_ROUTING = True
-V2_TREND_SLOPE = 0.40            # 1h EMA50 move over 6 bars, x 1h ATR,
                                  # above which the market counts as trending
 
-HTF_TF, HTF_EMA = "1h", 200          # permission: price vs a flat/rising 200
-MTF_FAST, MTF_SLOW = 20, 50
-EMA5 = 20                            # 5m EMA used for breaks and the runner
 ATR_PERIOD = 14
                                      # the structure break (48 x 5m = 4h)
                                      # candle - median ignores one snap-back
-RR_TREND = 1.5               # pathway B target (pathway A stays at RR)
-RUNNER_HALF_AT_TP = True     # half off at 1.5R, stop to breakeven, rest exits
+STOP_BUFFER_ATR = 0.15               # buffer under the retest low
+MAX_STOP_ATR = 1.25                  # skip if the stop is wider than this
                              # when the smoothed HA flips against the trade
                                  # (smoothed HA: the flat dashes at the turns)
                                  # HA candles still have to confirm)
@@ -203,15 +196,15 @@ STOCH_OVERSOLD, STOCH_OVERBOUGHT = 20.0, 80.0
 # candles BEFORE the dojis vs the MOM_LOOKBACK before those. Weak when the
 # recent run is smaller than the prior one. The doji candles themselves and
 # the confirmation candles are excluded from the measurement.
-MOM_LOOKBACK = 20
 
-OVERRIDE_ONLY_OPPOSITE = True # only replace when the new signal REVERSES the
                               # open trade - a same-direction signal is churn
 OVERRIDE_ON_NEW_SIGNAL = True # a fresh qualifying reversal REPLACES the open
                               # trade on that symbol (closed at the new entry
                               # price and booked as OVERRIDE)
+ENABLE_SHORTS = True
 
 ALERT_ENTRIES = True
+ALERT_STAGES = False         # pullback-armed alerts (log-only when False)
 ALERT_LIFECYCLE = True       # TP / stop alerts
 
 STATE_FILE = Path(__file__).parent / "btc_agent_state.json"
@@ -487,6 +480,16 @@ def active_assets():
     return ASSETS
 
 
+def sma(values, period):
+    out = [None] * len(values)
+    s = 0.0
+    for i, v in enumerate(values):
+        s += v
+        if i >= period:
+            s -= values[i - period]
+        if i >= period - 1:
+            out[i] = s / period
+    return out
 
 
 def atr(candles, period=None):
@@ -507,6 +510,18 @@ def atr(candles, period=None):
     return out
 
 
+def ema(values, period):
+    k = 2 / (period + 1)
+    out = [None] * len(values)
+    prev = None
+    for i, v in enumerate(values):
+        if i == period - 1:
+            prev = sum(values[:period]) / period
+            out[i] = prev
+        elif i >= period:
+            prev = v * k + prev * (1 - k)
+            out[i] = prev
+    return out
 
 
 # ----------------------------- telegram ------------------------------------
@@ -552,14 +567,10 @@ def stochastic(candles, period=None, smooth=None):
     return _smooth(raw, s)
 
 
-
-
-
-
-
-
-
-
+def avg_vol(candles, lo, hi):
+    vals = [c.get("v") or 0 for c in candles[max(0, lo):max(0, hi)]]
+    vals = [v for v in vals if v > 0]
+    return sum(vals) / len(vals) if vals else 0.0
 
 
 def pivots(candles, wing=2):
@@ -577,19 +588,6 @@ def pivots(candles, wing=2):
     return hs, ls
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-# ------------------------------ heikin ashi --------------------------------
 def _ema_list(vals, n):
     """EMA that tolerates leading Nones."""
     out, prev, k = [], None, 2.0 / (n + 1)
@@ -602,68 +600,6 @@ def _ema_list(vals, n):
     return out
 
 
-def smoothed_heikin_ashi(candles, pre=None, post=None):
-    """TradingView-style Smoothed Heikin Ashi: EMA the OHLC, build HA from
-    that, then EMA the HA series again. Warm-up candles are flagged so the
-    gates ignore them."""
-    p1 = pre or SHA_PRE
-    p2 = post or SHA_POST
-    eo, eh, el, ec = (_ema_list([c[key] for c in candles], p1)
-                      for key in ("o", "h", "l", "c"))
-    ho_l, hc_l, hh_l, hl_l = [], [], [], []
-    prev_o = prev_c = None
-    for i in range(len(candles)):
-        if None in (eo[i], eh[i], el[i], ec[i]):
-            ho_l.append(None), hc_l.append(None)
-            hh_l.append(None), hl_l.append(None)
-            continue
-        hc = (eo[i] + eh[i] + el[i] + ec[i]) / 4
-        ho = (eo[i] + ec[i]) / 2 if prev_o is None else (prev_o + prev_c) / 2
-        ho_l.append(ho)
-        hc_l.append(hc)
-        hh_l.append(max(eh[i], ho, hc))
-        hl_l.append(min(el[i], ho, hc))
-        prev_o, prev_c = ho, hc
-    so, sc, sh, sl = (_ema_list(x, p2) for x in (ho_l, hc_l, hh_l, hl_l))
-    out = []
-    warm = max(p1, p2) * 2
-    for i, c in enumerate(candles):
-        if None in (so[i], sc[i], sh[i], sl[i]) or i < warm:
-            px = c["c"]
-            out.append({"t": c["t"], "o": px, "c": px, "h": px, "l": px,
-                        "warm": True})
-            continue
-        hi = max(sh[i], so[i], sc[i])
-        lo = min(sl[i], so[i], sc[i])
-        out.append({"t": c["t"], "o": so[i], "c": sc[i], "h": hi, "l": lo})
-    return out
-
-
-def ha_series(candles):
-    """The HA series the strategy runs on."""
-    return smoothed_heikin_ashi(candles) if HA_MODE == "smoothed" \
-        else heikin_ashi(candles)
-
-
-def heikin_ashi(candles):
-    """Standard HA series, aligned 1:1 with the input candles."""
-    out = []
-    for c in candles:
-        hc = (c["o"] + c["h"] + c["l"] + c["c"]) / 4
-        ho = (c["o"] + c["c"]) / 2 if not out \
-            else (out[-1]["o"] + out[-1]["c"]) / 2
-        out.append({"t": c["t"], "o": ho, "c": hc,
-                    "h": max(c["h"], ho, hc), "l": min(c["l"], ho, hc)})
-    return out
-
-
-
-
-
-
-
-
-# ----------------------------- 4h range engine ------------------------------
 NY_TZ = ZoneInfo(RANGE_TZ)
 
 
@@ -687,8 +623,36 @@ def window_ms(d, cls):
     return start, start + step
 
 
+def day_range(candles, d, cls):
+    """High/low of 5m candles inside the class's session window on NY
+    date d. Returns (hi, lo, ready)."""
+    start, end = window_ms(d, cls)
+    step = MS[TF]
+    hi = lo = None
+    count = 0
+    end_seen = False
+    for c in candles:
+        if start <= c["t"] and c["t"] + step <= end:
+            hi = c["h"] if hi is None else max(hi, c["h"])
+            lo = c["l"] if lo is None else min(lo, c["l"])
+            count += 1
+            if c["t"] + step == end:
+                end_seen = True
+    expected = max(1, (end - start) // step)
+    ready = count >= expected - max(2, expected // 6) and end_seen
+    return hi, lo, ready
 
 
+def stage_message(asset, direction, level, px, t):
+    e = "\U0001F534" if direction == "SHORT" else "\U0001F7E2"
+    side = "high" if direction == "SHORT" else "low"
+    return "\n".join([
+        f"{e} <b>RANGE BREAK \u00b7 {esc(asset['symbol'])}</b>",
+        f"5m closed {'above' if direction == 'SHORT' else 'below'} the "
+        f"4h-range {side} (${fmt_px(level)}) - a close back inside "
+        f"triggers the {direction}",
+        f"<i>{esc(asset['label'])} \u00b7 {esc(fmt_ts(t))}</i>",
+    ])
 
 
 _NEWS_CACHE = {}
@@ -765,8 +729,7 @@ def entry_message(asset, direction, plan, hi, lo, source, t, trigger):
     cls = asset.get("cls", "crypto")
     s_ms, e_ms = window_ms(ny_dt(t).date(), cls)
     win = f"NY {ny_dt(s_ms):%H:%M}-{ny_dt(e_ms):%H:%M}"
-    kind = "smoothed HA" if not RANGE_ENTRY else \
-        ("opening-range" if cls == "stock" else "first 4h candle")
+    kind = "opening-range" if cls == "stock" else "first 4h candle"
     return "\n".join([
         f"{e} <b>{direction} ENTRY \u00b7 {esc(asset['symbol'])}</b>",
         f"<i>{esc(asset['label'])} \u00b7 {TF} \u00b7 {kind} \u00b7 {esc(fmt_ts(t))}</i>",
@@ -831,32 +794,6 @@ def already_closed(sym, trade, exit_px, kind):
     return False
 
 
-def position_size_units(trade):
-    """The unit size a live entry uses, reconstructed from the fixed-risk
-    sizing so a closed trade can be booked in USD. Mirrors the old executor's
-    exactly: risk / original-stop-distance, then the notional cap. Uses
-    `risk0` (the risk at entry) so a stop later moved to breakeven does not
-    corrupt the figure."""
-    entry = trade.get("entry") or 0.0
-    per_unit = trade.get("risk0")
-    if not per_unit:                                 # legacy trade: fall back
-        per_unit = abs(entry - trade.get("stop", entry))
-    if not entry or per_unit <= 0:
-        return 0.0
-    size = EXEC_RISK_USD / per_unit
-    if size * entry > EXEC_MAX_NOTIONAL_USD:
-        size = EXEC_MAX_NOTIONAL_USD / entry
-    return size
-
-
-def realized_usd(trade, exit_px, frac=1.0):
-    """Signed USD P&L of closing `frac` of the position at exit_px."""
-    sign = 1 if trade["verdict"] == "LONG" else -1
-    return sign * (exit_px - trade["entry"]) * position_size_units(trade) * frac
-
-
-
-
 def record_close(sym, trade, exit_px, kind, t_event=None, frac=1.0):
     """Append a closed trade to the ledger (best-effort). t_event = the
     actual market time of the exit, so late reconciliations book to the
@@ -869,9 +806,7 @@ def record_close(sym, trade, exit_px, kind, t_event=None, frac=1.0):
                                 "kind": kind,
                                 "frac": frac,
                                 "pnl_pct": round(
-                                    pnl_pct(trade, exit_px) * frac, 3),
-                                "pnl_usd": round(
-                                    realized_usd(trade, exit_px, frac), 4)})
+                                    pnl_pct(trade, exit_px) * frac, 3)})
                     + "\n")
     except OSError:
         pass
@@ -889,7 +824,6 @@ def process_open_trade(asset, trade, candles, last_closed_t):
     sym = asset["symbol"]
     long = trade["verdict"] == "LONG"
     tp = trade.get("tp") or trade.get("tp2")     # legacy trades keep working
-    ha_ex = ha_series(candles) if trade.get("runner") else None
     changed = False
     for c in candles:
         if c["t"] <= trade["checked_t"] or c["t"] > last_closed_t:
@@ -931,6 +865,7 @@ def process_open_trade(asset, trade, candles, last_closed_t):
                         f"stop is now breakeven at ${fmt_px(trade['entry'])}; "
                         "the rest exits when the smoothed HA flips"))
                 log(f"{sym}: HALF CLOSED at ${fmt_px(tp)}, stop -> breakeven")
+                plan_manage_orders(asset, trade, "TP_HALF", tp)
                 record_close(sym, trade, tp, "TP_HALF", c_close_t, frac=0.5)
                 RUN_ALERTS.append(
                     f"{sym} half closed ({pnl_pct(trade, tp) * 0.5:+.2f}%)")
@@ -946,69 +881,7 @@ def process_open_trade(asset, trade, candles, last_closed_t):
             RUN_ALERTS.append(f"{sym} TP HIT ({pnl_pct(trade, tp):+.2f}%)")
             return None, True
 
-        # MTF runner: trail under confirmed higher lows; exit on a close
-        # through the last one, or two red HA candles plus a close past EMA20
-        if trade.get("half") and trade.get("mtf"):
-            n = next((x for x, cc in enumerate(candles) if cc["t"] == c["t"]),
-                     None)
-            if n is not None and n >= 3:
-                long_ = long
-                hs, ls = pivots(candles[:n + 1])
-                swings = ls if long_ else hs
-                if swings:
-                    j = swings[-1]
-                    lvl = candles[j]["l"] if long_ else candles[j]["h"]
-                    better = (lvl > trade.get("hl", -1e18)) if long_ \
-                        else (lvl < trade.get("hl", 1e18))
-                    if better:
-                        trade["hl"] = lvl
-                        log(f"{sym}: trailing level -> ${fmt_px(lvl)}")
-                broke = (c["c"] < trade.get("hl", -1e18)) if long_ \
-                    else (c["c"] > trade.get("hl", 1e18))
-                ha2 = ha_series(candles) if ha_ex is None else ha_ex
-                e20l = _ema_list([x["c"] for x in candles], EMA5)
-                two_red = False
-                if n >= 1 and not ha2[n].get("warm"):
-                    a1 = (ha2[n]["c"] < ha2[n]["o"]) if long_ \
-                        else (ha2[n]["c"] > ha2[n]["o"])
-                    a2 = (ha2[n - 1]["c"] < ha2[n - 1]["o"]) if long_ \
-                        else (ha2[n - 1]["c"] > ha2[n - 1]["o"])
-                    past = (c["c"] < e20l[n]) if (long_ and e20l[n]) else \
-                        ((c["c"] > e20l[n]) if e20l[n] else False)
-                    two_red = a1 and a2 and past
-                if broke or two_red:
-                    why = "closed below the trailing low" if broke else \
-                        f"two red HA candles and a close past EMA{EMA5}"
-                    if ALERT_LIFECYCLE:
-                        send_telegram(lifecycle_message(
-                            asset, "RUNNER", trade, c["c"], c_close_t, why))
-                    log(f"{sym}: RUNNER OUT at ${fmt_px(c['c'])} ({why})")
-                    record_close(sym, trade, c["c"], "RUNNER", c_close_t,
-                                 frac=0.5)
-                    RUN_ALERTS.append(
-                        f"{sym} runner out "
-                        f"({pnl_pct(trade, c['c']) * 0.5:+.2f}%)")
-                    return None, True
-                continue
 
-        # runner: out when the smoothed HA flips against the trade
-        if trade.get("half") and ha_ex is not None:
-            n = next((x for x, cc in enumerate(candles) if cc["t"] == c["t"]),
-                     None)
-            if n is not None and not ha_ex[n].get("warm"):
-                flipped = (ha_ex[n]["c"] < ha_ex[n]["o"]) if long \
-                    else (ha_ex[n]["c"] > ha_ex[n]["o"])
-                if flipped:
-                    if ALERT_LIFECYCLE:
-                        send_telegram(lifecycle_message(
-                            asset, "RUNNER", trade, c["c"], c_close_t, ""))
-                    log(f"{sym}: RUNNER OUT at ${fmt_px(c['c'])} (HA flipped)")
-                    record_close(sym, trade, c["c"], "RUNNER", c_close_t,
-                                 frac=0.5)
-                    RUN_ALERTS.append(
-                        f"{sym} runner out "
-                        f"({pnl_pct(trade, c['c']) * 0.5:+.2f}%)")
-                    return None, True
 
     # ---- intrabar check on the LIVE (still forming) candle ------------------
     # A fast move can blow through the stop mid-candle; don't wait for the
@@ -1053,6 +926,7 @@ def process_open_trade(asset, trade, candles, last_closed_t):
                         f"stop is now breakeven at ${fmt_px(trade['entry'])}; "
                         "the rest exits when the smoothed HA flips"))
                 log(f"{sym}: HALF CLOSED at ${fmt_px(tp)}, stop -> breakeven")
+                plan_manage_orders(asset, trade, "TP_HALF", tp)
                 record_close(sym, trade, tp, "TP_HALF", now_t, frac=0.5)
                 RUN_ALERTS.append(
                     f"{sym} half closed ({pnl_pct(trade, tp) * 0.5:+.2f}%)")
@@ -1071,24 +945,193 @@ def process_open_trade(asset, trade, candles, last_closed_t):
     return trade, changed
 
 
+def exec_base_url():
+    return ("https://api.hyperliquid-testnet.xyz" if EXEC_TESTNET
+            else "https://api.hyperliquid.xyz")
 
 
+_EXEC = {"ex": None, "info": None, "addr": None, "meta": None, "err": None}
 
 
+def exec_client():
+    """Lazily build the SDK client. Returns None (with a logged reason) if the
+    SDK, the key, or the network is unavailable - never raises."""
+    if _EXEC["ex"] or _EXEC["err"]:
+        return _EXEC["ex"]
+    key = os.environ.get("HL_API_KEY", "").strip()
+    if not key:
+        _EXEC["err"] = "HL_API_KEY not set"
+    else:
+        try:
+            from eth_account import Account
+            from hyperliquid.exchange import Exchange
+            from hyperliquid.info import Info
+            wallet = Account.from_key(key)
+            addr = os.environ.get("HL_ACCOUNT_ADDRESS", "").strip() or \
+                wallet.address
+            base = exec_base_url()
+            _EXEC.update(
+                ex=Exchange(wallet, base, account_address=addr),
+                info=Info(base, skip_ws=True), addr=addr)
+            _EXEC["meta"] = _EXEC["info"].meta()
+            log(f"execution client ready on "
+                f"{'TESTNET' if EXEC_TESTNET else 'MAINNET'} for {addr[:10]}...")
+        except Exception as e:
+            _EXEC["err"] = f"{type(e).__name__}: {e}"
+    if _EXEC["err"]:
+        log(f"execution client unavailable ({_EXEC['err']}) - dry run only")
+    return _EXEC["ex"]
 
 
+def sz_decimals(sym):
+    """Hyperliquid rejects sizes with too many decimals."""
+    meta = _EXEC.get("meta") or {}
+    for a in meta.get("universe", []):
+        if a.get("name") == base_name(sym) or a.get("name") == sym:
+            return int(a.get("szDecimals", 4))
+    return 4
 
 
+def round_px(px):
+    """Perp prices: max 5 significant figures."""
+    if px <= 0:
+        return px
+    from decimal import Decimal
+    d = Decimal(repr(float(px)))
+    return float(round(d, -d.adjusted() + 4))
 
 
+def exec_blocked(open_count, day_pnl_usd):
+    """Reasons a live entry must not be sent."""
+    if os.path.exists(EXEC_HALT_FILE):
+        return "EXEC_HALT file present"
+    if open_count >= EXEC_MAX_POSITIONS:
+        return f"{open_count} positions already open"
+    if day_pnl_usd <= -abs(EXEC_DAILY_LOSS_LIMIT_USD):
+        return f"daily loss limit hit ({day_pnl_usd:+.2f})"
+    return None
 
 
+def place_entry_live(asset, trade, plan):
+    """Entry, then the protective stop, then the half TP. If the stop cannot
+    be placed the position is closed immediately - never sit unprotected."""
+    if not EXEC_LIVE:
+        return None
+    ex = exec_client()
+    if not ex:
+        return None
+    # builder-venue markets (xyz:NBIS, ...) are not in the main perp meta the
+    # SDK client was built against - it raises KeyError on the asset lookup.
+    # Alert on them, but do not try to trade them.
+    if ":" in asset["symbol"]:
+        log(f"{asset['symbol']}: live execution skipped - builder-venue "
+            "market, not tradable through the main dex client (alert only)")
+        return None
+    sym = base_name(asset["symbol"])
+    if not any(a.get("name") == sym
+               for a in (_EXEC.get("meta") or {}).get("universe", [])):
+        log(f"{sym}: live execution skipped - not in the perp universe")
+        return None
+    long_ = trade["verdict"] == "LONG"
+    size = round(plan["size"], sz_decimals(asset["symbol"]))
+    if size <= 0:
+        log(f"{sym}: size rounds to zero - not sent")
+        return None
+    try:
+        r = ex.market_open(sym, long_, size)
+        log(f"{sym}: LIVE entry sent {r}")
+    except Exception as e:
+        log(f"{sym}: LIVE entry FAILED {type(e).__name__}: {e}")
+        send_telegram(f"\u26a0\ufe0f {esc(sym)} entry order failed - no position")
+        return None
+    try:
+        ex.order(sym, not long_, size, round_px(trade["stop"]),
+                 {"trigger": {"triggerPx": round_px(trade["stop"]),
+                              "isMarket": True, "tpsl": "sl"}},
+                 reduce_only=True)
+        ex.order(sym, not long_, round(size / 2, sz_decimals(asset["symbol"])),
+                 round_px(trade["tp"]),
+                 {"limit": {"tif": "Gtc"}}, reduce_only=True)
+        log(f"{sym}: LIVE stop ${fmt_px(trade['stop'])} and half TP "
+            f"${fmt_px(trade['tp'])} placed")
+    except Exception as e:
+        log(f"{sym}: LIVE protective orders FAILED ({type(e).__name__}) - "
+            "closing the position")
+        try:
+            ex.market_close(sym)
+            send_telegram(f"\u26a0\ufe0f {esc(sym)} stop could not be placed - "
+                          "position closed immediately")
+        except Exception:
+            send_telegram(f"\U0001F6A8 {esc(sym)} UNPROTECTED POSITION - "
+                          "close it manually now")
+        return None
+    return True
 
 
+def log_order(rec):
+    try:
+        with open(ORDERS_LOG, "a") as f:
+            f.write(json.dumps(rec) + "\n")
+    except Exception as e:
+        log(f"orders.log write failed: {type(e).__name__}")
 
 
+def plan_entry_orders(asset, trade, open_count=0):
+    """What a live version WOULD send, sized by fixed dollar risk.
+    Dry run only - nothing leaves this process."""
+    sym = asset["symbol"]
+    entry, stop, tp = trade["entry"], trade["stop"], trade["tp"]
+    long_ = trade["verdict"] == "LONG"
+    per_unit = abs(entry - stop)
+    if per_unit <= 0:
+        return None
+    if open_count >= EXEC_MAX_POSITIONS:
+        log(f"{sym}: DRY RUN - would SKIP, {open_count} positions already "
+            f"open (max {EXEC_MAX_POSITIONS})")
+        return None
+    size = EXEC_RISK_USD / per_unit
+    notional = size * entry
+    capped = ""
+    if notional > EXEC_MAX_NOTIONAL_USD:
+        size = EXEC_MAX_NOTIONAL_USD / entry
+        notional = EXEC_MAX_NOTIONAL_USD
+        capped = f" [notional capped, risk now ${size * per_unit:.2f}]"
+    rec = {"t": int(time.time() * 1000), "sym": sym, "mode": "dry-run",
+           "event": "ENTRY", "side": "buy" if long_ else "sell",
+           "size": round(size, 8), "entry": entry, "stop": stop, "tp": tp,
+           "notional_usd": round(notional, 2),
+           "risk_usd": round(size * per_unit, 2),
+           "stop_pct": round(per_unit / entry * 100, 3),
+           "orders": [
+               {"kind": "entry", "type": "market-IOC",
+                "side": "buy" if long_ else "sell", "size": round(size, 8)},
+               {"kind": "stop", "type": "stop-market", "reduce_only": True,
+                "trigger": stop, "size": round(size, 8)},
+               {"kind": "tp_half", "type": "limit", "reduce_only": True,
+                "price": tp, "size": round(size / 2, 8)}]}
+    if not EXEC_DRY_RUN:
+        return rec                        # sized, but nothing logged
+    log_order(rec)
+    log(f"{sym}: DRY RUN - {rec['side']} {size:.6g} @ ${fmt_px(entry)} = "
+        f"${notional:,.0f} notional, ${rec['risk_usd']:.2f} risk "
+        f"({rec['stop_pct']}% stop); stop ${fmt_px(stop)}, TP ${fmt_px(tp)} "
+        f"on half{capped}")
+    return rec
 
 
+def plan_manage_orders(asset, trade, event, price):
+    if not EXEC_DRY_RUN:
+        return
+    action = {"TP_HALF": "half filled at TP -> amend stop to entry, keep runner",
+              "RUNNER": "close remaining size at market",
+              "BE": "stop filled at entry - flat",
+              "STOP": "stop filled - flat"}.get(event)
+    if not action:
+        return
+    log_order({"t": int(time.time() * 1000), "sym": asset["symbol"],
+               "mode": "dry-run", "event": event, "price": price,
+               "action": action})
+    log(f"{asset['symbol']}: DRY RUN - {action}")
 
 
 def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger,
@@ -1098,16 +1141,6 @@ def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger,
     sym = asset["symbol"]
     short = direction == "SHORT"
     entry = c["c"]
-    raw_stop = stop
-    if SL_PAD_ATR and atr_i:                      # breathing room beyond the swing
-        stop = stop + SL_PAD_ATR * atr_i if short else stop - SL_PAD_ATR * atr_i
-    if SL_MIN_PCT and entry:                      # widen rather than skip
-        need = entry * SL_MIN_PCT / 100
-        stop = max(stop, entry + need) if short else min(stop, entry - need)
-    if stop != raw_stop:
-        log(f"{asset['symbol']}: stop widened ${fmt_px(raw_stop)} -> "
-            f"${fmt_px(stop)} (pad {SL_PAD_ATR} ATR"
-            + (f", min {SL_MIN_PCT}%" if SL_MIN_PCT else "") + ")")
     risk = (stop - entry) if short else (entry - stop)
     if risk <= 0:
         return False
@@ -1121,7 +1154,7 @@ def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger,
     event_t = c["t"] + MS[TF]
 
     old_trade = ast.get("trade")
-    if old_trade and OVERRIDE_ONLY_OPPOSITE \
+    if old_trade  \
             and old_trade["verdict"] == direction:
         log(f"{sym}: {direction} signal matches the open trade's direction "
             "- not replacing it")
@@ -1150,275 +1183,152 @@ def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger,
                     "rr": rr, "runner": bool(runner), "half": False,
                     "risk0": risk}          # original risk, kept for R maths
                                             # after the stop moves to breakeven
+    open_now = sum(1 for v in STATE_VIEW.values()
+                   if isinstance(v, dict) and v.get("trade"))
+    plan = plan_entry_orders(asset, ast["trade"], open_count=open_now)
+    if EXEC_LIVE and plan:
+        # NOTE: the daily loss limit needs realised USD from the ledger, which
+        # is not tracked yet - the halt file and position cap are enforced.
+        why = exec_blocked(open_now, 0.0)
+        if why:
+            log(f"{asset['symbol']}: live order blocked - {why}")
+        else:
+            place_entry_live(asset, ast["trade"], plan)
     ast["phase"], ast["setup"] = "IN_TRADE", None
     ast["doji"], ast["zone"] = None, None
     return True
 
 
-
-
-HTF_CACHE_S = 900            # the 4h/1h read barely moves inside this window
-HTF_RETRY_S = 120            # after a failure, retry sooner than that
-HTF_MAX_REFRESH = 12         # cold-start guard: HTF reads allowed per run. The
-                             # cache is in-memory, so every restart empties it
-                             # and refetching all ~54 symbols at once is what
-                             # trips the 429s
 _HTF_CACHE = {}
-_HTF_BUDGET = [0]            # refreshes used this run
 
 
-def htf_context(asset):
-    """Higher-timeframe read: (bias, regime). Cached per symbol - without
-    this the extra fetches get rate-limited and routing silently turns off."""
+def nearest_key_level(real, i, extreme, entry, long_):
+    """The nearest swing pivot between entry and the excursion extreme - used
+    when a huge breakout would otherwise put the stop miles away."""
+    lo_i = max(0, i - RANGE_KEY_LOOKBACK)
+    hs, ls = pivots(real[lo_i:i + 1])
+    levels = []
+    for j in (ls if long_ else hs):
+        px = real[lo_i + j]["l"] if long_ else real[lo_i + j]["h"]
+        # must sit between the entry and the excursion extreme
+        if (extreme < px < entry) if long_ else (entry < px < extreme):
+            levels.append(px)
+    if not levels:
+        return None
+    return max(levels) if long_ else min(levels)
+
+
+def process_candle(asset, ast, real, a, i, source, rng_cache):
+    return process_candle_range(asset, ast, real, a, i, source, rng_cache)
+
+
+def process_candle_range(asset, ast, real, a, i, source, rng_cache):
+    """4h range -> close outside -> close back inside -> entry."""
     sym = asset["symbol"]
-    hit = _HTF_CACHE.get(sym)
-    good = hit[1] if (hit and hit[1][0]) else None
-    if hit:
-        age = time.time() - hit[0]
-        ttl = HTF_CACHE_S if hit[1][0] else HTF_RETRY_S
-        if age < ttl:
-            return hit[1]
-    # spread the refreshes out. Symbols that miss the budget keep whatever
-    # they last had rather than dropping to "no routing"
-    if _HTF_BUDGET[0] >= HTF_MAX_REFRESH:
-        return good or (None, None)
-    _HTF_BUDGET[0] += 1
-    try:
-        _, h = fetch(asset, V2_HTF, V2_HTF_EMA + 30)
-        if not h or len(h) < V2_HTF_EMA + 12:
-            if good:                       # a 429 is not a regime change
-                log(f"{sym}: {V2_HTF} fetch failed - keeping the last "
-                    f"read ({good[0]}/{good[1]})")
-                _HTF_CACHE[sym] = (time.time(), good)
-                return good
-            log(f"{sym}: {V2_HTF} history too short "
-                f"({0 if not h else len(h)} candles, need {V2_HTF_EMA + 12}) - "
-                "bias and regime routing are OFF for this symbol")
-            _HTF_CACHE[sym] = (time.time(), (None, None))
-            return None, None
-        e = _ema_list([c["c"] for c in h], V2_HTF_EMA)
-        ah = atr(h)
-        j = len(h) - 2
-        if e[j] is None or e[j - 6] is None or not ah[j]:
-            _HTF_CACHE[sym] = (time.time(), good or (None, None))
-            return good or (None, None)
-        bias = "LONG" if h[j]["c"] > e[j] else "SHORT"
-        slope = abs(e[j] - e[j - 6]) / ah[j]
-        out = bias, ("trend" if slope >= V2_TREND_SLOPE else "range")
-        _HTF_CACHE[sym] = (time.time(), out)
-        return out
-    except Exception as e:
-        if good:
-            log(f"{sym}: {V2_HTF} context failed ({type(e).__name__}) - "
-                "keeping the last read")
-            _HTF_CACHE[sym] = (time.time(), good)
-            return good
-        log(f"{sym}: {V2_HTF} context failed ({type(e).__name__}) - "
-            "routing off until the retry")
-        _HTF_CACHE[sym] = (time.time(), (None, None))
-        return None, None
-
-
-
-
-def v2_continuation(real, a, ef, es, i, long_):
-    """Trend -> pullback to the EMAs -> reclaim candle."""
-    if i < V2_SLOW + V2_LOOKBACK or not a[i] or ef[i] is None or es[i] is None:
-        return None
-    c, prev, atr_i = real[i], real[i - 1], a[i]
-    if (c["h"] - c["l"]) > V2_MAX_TRIGGER_RANGE * atr_i:
-        return None
-    trend = (ef[i] > es[i] and c["c"] > es[i]) if long_ \
-        else (ef[i] < es[i] and c["c"] < es[i])
-    if not trend:
-        return None
-    win = real[i - V2_LOOKBACK:i]
-    tol = V2_PULLBACK_TOL * atr_i
-    pulled = any((p["l"] <= ef[i - V2_LOOKBACK + k] + tol) if long_
-                 else (p["h"] >= ef[i - V2_LOOKBACK + k] - tol)
-                 for k, p in enumerate(win))
-    if not pulled:
-        return None
-    body = abs(c["c"] - c["o"])
-    rng = c["h"] - c["l"]
-    trig = ((c["c"] > c["o"]) if long_ else (c["c"] < c["o"])) and \
-        ((c["c"] > ef[i]) if long_ else (c["c"] < ef[i])) and \
-        ((c["c"] > prev["h"]) if long_ else (c["c"] < prev["l"])) and \
-        body >= V2_BODY_MIN * atr_i and \
-        (rng <= 0 or (((c["c"] - c["l"]) / rng if long_ else (c["h"] - c["c"]) / rng) >= 0.6))
-    if not trig:
-        return None
-    near = real[max(0, i - 2):i + 1]          # the immediate swing only
-    ext = min(p["l"] for p in near) if long_ else max(p["h"] for p in near)
-    return ext, (f"pullback to the {TF} EMA{V2_FAST} in an EMA{V2_FAST}/"
-                 f"{V2_SLOW} trend, reclaim candle {body / atr_i:.2f} ATR")
-
-
-def v2_reversal(real, a, es, i, long_):
-    """Stretched from the EMA50 -> sweep of the recent extreme -> reclaim."""
-    if i < V2_SLOW + V2_LOOKBACK or not a[i] or es[i] is None:
-        return None
-    c, prev, atr_i = real[i], real[i - 1], a[i]
-    if (c["h"] - c["l"]) > V2_MAX_TRIGGER_RANGE * atr_i:
-        return None
-    win = real[i - V2_LOOKBACK:i]
-    # extended AWAY from value in the direction we are fading
-    stretch = (es[i] - min(p["l"] for p in win + [c])) if long_ \
-        else (max(p["h"] for p in win + [c]) - es[i])
-    if stretch < V2_STRETCH_ATR * atr_i:
-        return None
-    # liquidity sweep: this candle took the window's extreme, then closed back
-    prior = min(p["l"] for p in win) if long_ else max(p["h"] for p in win)
-    swept = (c["l"] < prior) if long_ else (c["h"] > prior)
-    if not swept:
-        return None
-    body = abs(c["c"] - c["o"])
-    rng = c["h"] - c["l"]
-    reclaim = ((c["c"] > c["o"]) if long_ else (c["c"] < c["o"])) and \
-        ((c["c"] > prior) if long_ else (c["c"] < prior)) and \
-        body >= V2_BODY_MIN * atr_i and \
-        (rng <= 0 or (((c["c"] - c["l"]) / rng if long_ else (c["h"] - c["c"]) / rng) >= 0.6))
-    if not reclaim:
-        return None
-    ext = c["l"] if long_ else c["h"]
-    return ext, (f"price {stretch / atr_i:.1f} ATR from the EMA{V2_SLOW}, swept "
-                 f"the {V2_LOOKBACK}-candle {'low' if long_ else 'high'} and "
-                 f"reclaimed it")
-
-
-def v2_watch(real, a, ef, es, i, long_):
-    """Context is in place but the trigger has not printed yet.
-    Returns (pathway, note) or None."""
-    if not a[i] or ef[i] is None or es[i] is None:
-        return None
-    c, atr_i = real[i], a[i]
-    win = real[max(0, i - V2_LOOKBACK):i + 1]
-    trend = (ef[i] > es[i] and c["c"] > es[i]) if long_ \
-        else (ef[i] < es[i] and c["c"] < es[i])
-    if trend:
-        tol = V2_PULLBACK_TOL * atr_i
-        near = (c["l"] <= ef[i] + tol) if long_ else (c["h"] >= ef[i] - tol)
-        if near:
-            # how close the close sits to the EMA - the reclaim fires from here
-            gap = abs(c["c"] - ef[i]) / max(tol, 1e-12)
-            return ("continuation",
-                    f"trend intact, price back at the {TF} EMA{V2_FAST} - "
-                    f"waiting for the reclaim candle",
-                    max(10.0, min(95.0, 95.0 - 45.0 * gap)))
-    stretch = (es[i] - min(p["l"] for p in win)) if long_ \
-        else (max(p["h"] for p in win) - es[i])
-    if stretch >= V2_STRETCH_ATR * atr_i:
-        # the sweep is what is missing: how near price is to the extreme it
-        # must take out
-        prior = min(p["l"] for p in win[:-1]) if long_ \
-            else max(p["h"] for p in win[:-1])
-        away = (abs(c["c"] - prior) / atr_i) if atr_i else 9.0
-        return ("reversal",
-                f"{stretch / atr_i:.1f} ATR from the EMA{V2_SLOW} - waiting "
-                f"for a sweep and reclaim",
-                max(10.0, min(90.0, 90.0 - 60.0 * away)))
-    return None
-
-
-def process_candle_v2(asset, ast, real, a, i, source):
-    before = ast.get("watch")
-    def _touched(fired=False):
-        """A changed watch must mark the state dirty, or it never reaches disk
-        and the dashboard shows a frozen list."""
-        now_w = ast.get("watch")
-        key = lambda w: None if not w else (w.get("kind"), w.get("dir"),
-                                            w.get("note"))
-        return True if fired else key(before) != key(now_w)
-    if ast.get("trade"):
-        ast["watch"] = None          # a live trade is not a watch
-        return _touched()
-    sym = asset["symbol"]
-    c, atr_i = real[i], a[i] or 0
+    c = real[i]
+    atr_i = a[i] or 0
     if not atr_i:
-        return _touched()
-    closes = [x["c"] for x in real]
-    ef = _ema_list(closes, V2_FAST)
-    es = _ema_list(closes, V2_SLOW)
-    vols = [x.get("v") or 0 for x in real]
-    vwin = [v for v in vols[max(0, i - V2_VOL_BASE):i] if v > 0]
-    vavg = sum(vwin) / len(vwin) if vwin else 0.0
-    # the mean is dragged up by a handful of panic bars, which are almost
-    # always down candles - that punishes quiet rallies for no good reason.
-    # the median is the fairer denominator for the participation test.
-    _vs = sorted(vwin)
-    vmed = 0.0 if not _vs else (
-        _vs[len(_vs) // 2] if len(_vs) % 2
-        else (_vs[len(_vs) // 2 - 1] + _vs[len(_vs) // 2]) / 2)
-    bias, regime = htf_context(asset) if (V2_REGIME_ROUTING or V2_HTF_REQUIRED) \
-        else (None, None)
-    for long_ in (True, False):
-        direction = "LONG" if long_ else "SHORT"
-        for name, fn in (("continuation", v2_continuation),
-                         ("reversal", v2_reversal)):
-            # rule 1: trending markets get continuations (with the trend),
-            # ranging / exhausted markets get reversals
-            if V2_REGIME_ROUTING and regime:
-                if regime == "trend" and name == "reversal":
-                    continue
-                if regime == "range" and name == "continuation":
-                    continue
-            hit = fn(real, a, es, i, long_) if name == "reversal" \
-                else fn(real, a, ef, es, i, long_)
-            if not hit:
-                continue
-            ext, detail = hit
-            # rule 3: the confirming candle needs participation
-            if V2_VOL_GATE and vmed and (c.get("v") or 0) < V2_VOL_MULT * vmed:
-                log(f"{sym}: {direction} {name} but the confirming candle ran "
-                    f"{(c.get('v') or 0) / vmed:.2f}x median volume "
-                    f"(need {V2_VOL_MULT}x) - skipped")
-                continue
-            if regime:
-                detail += f"; 1h {regime}"
-            if bias and bias != direction:
-                if V2_HTF_REQUIRED:
-                    log(f"{sym}: {direction} {name} but the {V2_HTF} bias is "
-                        f"{bias} - skipped")
-                    continue
-                detail += f" (against the {V2_HTF} bias)"
-            stop = (ext - V2_BUFFER * atr_i) if long_ else (ext + V2_BUFFER * atr_i)
-            risk = (c["c"] - stop) if long_ else (stop - c["c"])
-            if risk <= 0:
-                continue
-            if risk > V2_MAX_STOP * atr_i:
-                log(f"{sym}: {name} stop {risk / atr_i:.2f} ATR "
-                    f"(max {V2_MAX_STOP}) - skipped")
-                continue
-            fire_entry(asset, ast, direction, c, stop, None, None, source,
-                       f"{name} - {detail}", rr=V2_RR,
-                       runner=RUNNER_HALF_AT_TP)
-            if ast.get("trade"):
-                ast["trade"]["mtf"] = True
-                ast["trade"]["hl"] = ext
-                ast["watch"] = None
+        return False
+    close_dt = ny_dt(c["t"] + MS[TF])
+    d = close_dt.date()
+
+    # a new NY day wipes everything: the range, the breakout, the done flags
+    if ast.get("day") != str(d):
+        if ast.get("setup"):
+            log(f"{sym}: NY day rolled over - pending breakout cleared")
+        ast["day"] = str(d)
+        ast["setup"] = None
+        ast["done"] = []
+
+    cls = asset.get("cls", "crypto")
+    if d not in rng_cache:
+        rng_cache[d] = day_range(real, d, cls)
+    hi, lo, ready = rng_cache[d]
+
+    # step 1: the first 4h candle must have FULLY closed
+    _, win_end = window_ms(d, cls)
+    if c["t"] + MS[TF] <= win_end or not ready or hi is None:
+        return False
+    if (hi - lo) < RANGE_MIN_ATR * atr_i:
+        return False                       # dead-flat range, not a range
+
+    brk = ast.get("setup")
+
+    # ---- step 2a: a candle CLOSES outside the range ----------------------
+    if c["c"] > hi:
+        if not brk or brk["side"] != "above":
+            if "SHORT" in (ast.get("done") or []) and RANGE_ONE_PER_SIDE:
+                return False
+            ast["setup"] = {"side": "above", "level": hi,
+                            "extreme": c["h"], "t": c["t"]}
+            log(f"{sym}: closed ABOVE the 4h range (${fmt_px(hi)}) - watching "
+                "for a close back inside")
+        else:
+            brk["extreme"] = max(brk["extreme"], c["h"])
+        return True
+    if c["c"] < lo:
+        if not brk or brk["side"] != "below":
+            if "LONG" in (ast.get("done") or []) and RANGE_ONE_PER_SIDE:
+                return False
+            ast["setup"] = {"side": "below", "level": lo,
+                            "extreme": c["l"], "t": c["t"]}
+            log(f"{sym}: closed BELOW the 4h range (${fmt_px(lo)}) - watching "
+                "for a close back inside")
+        else:
+            brk["extreme"] = min(brk["extreme"], c["l"])
+        return True
+
+    if not brk:
+        return False
+
+    # ---- step 2b: price CLOSES back inside the range ---------------------
+    if not (lo <= c["c"] <= hi):
+        return True
+    short = brk["side"] == "above"
+    direction = "SHORT" if short else "LONG"
+    entry = c["c"]
+    stop = brk["extreme"]
+    note = "stop at the breakout extreme"
+
+    # huge breakout: fall back to the nearest key level inside the excursion
+    risk = (stop - entry) if short else (entry - stop)
+    # "huge" is judged against the RANGE, not the entry: the excursion is how
+    # far price travelled beyond the level it broke
+    excursion = (brk["extreme"] - hi) if short else (lo - brk["extreme"])
+    huge = excursion > RANGE_HUGE_FRACTION * (hi - lo) or \
+        risk > RANGE_MAX_STOP_ATR * atr_i
+    if huge:
+        key = nearest_key_level(real, i, brk["extreme"], entry, not short)
+        src_txt = "nearest key level"
+        if key is None:
+            # no swing pivot inside the excursion - fall back to the level the
+            # breakout failed at, which is now resistance (support for longs)
+            key = hi if short else lo
+            src_txt = "the broken range level (now resistance)" if short \
+                else "the broken range level (now support)"
+        stop = key + RANGE_KEY_BUFFER_ATR * atr_i if short \
+            else key - RANGE_KEY_BUFFER_ATR * atr_i
+        risk = (stop - entry) if short else (entry - stop)
+        if risk <= 0:
+            log(f"{sym}: huge breakout but price closed beyond the fallback "
+                "level - skipped")
+            ast["setup"] = None
             return True
+        note = (f"huge breakout (travelled {excursion / (hi - lo):.0%} of the "
+                f"range beyond the level) - stop moved to {src_txt} "
+                f"${fmt_px(key)}")
+        log(f"{sym}: {note}")
+    if risk <= 0:
+        ast["setup"] = None
+        return True
 
-    # nothing triggered - record what we are watching, for the dashboard
-    ast["watch"] = None
-    for long_ in (True, False):
-        direction = "LONG" if long_ else "SHORT"
-        w = v2_watch(real, a, ef, es, i, long_)
-        if not w:
-            continue
-        kind, note, prox = w
-        if V2_REGIME_ROUTING and regime:
-            if regime == "trend" and kind == "reversal":
-                continue
-            if regime == "range" and kind == "continuation":
-                continue
-        ast["watch"] = {"kind": kind, "dir": direction, "note": note,
-                        "regime": regime, "prox": round(prox), "t": c["t"]}
-        break
-    return _touched()
-
-
-
-
+    fire_entry(asset, ast, direction, c, stop, hi, lo, source,
+               f"closed outside the 4h range then back inside; {note}",
+               rr=RANGE_RR)
+    if ast.get("trade"):
+        ast.setdefault("done", []).append(direction)
+    ast["setup"] = None
+    return True
 
 
 def check_asset(asset, state):
@@ -1467,6 +1377,8 @@ def check_asset(asset, state):
         return changed
 
     a = atr(cs)
+    stoch_k = stochastic(cs)
+    rng_cache = {}
 
     last_closed = len(cs) - 2
     cutoff = cs[last_closed]["t"] - REPLAY_CANDLES * MS[TF]
@@ -1475,7 +1387,7 @@ def check_asset(asset, state):
     for i in range(len(cs)):
         if i > last_closed or cs[i]["t"] <= ast["last_candle_t"]:
             continue
-        ch = process_candle_v2(asset, ast, cs, a, i, source)
+        ch = process_candle(asset, ast, cs, a, i, source, rng_cache)
         changed = changed or ch
         ast["last_candle_t"] = cs[i]["t"]
         if ast["trade"] and ast["trade"].get("opened_t") == cs[i]["t"]:
@@ -1516,7 +1428,6 @@ STATE_VIEW = {}
 def check_once():
     RUN_ALERTS.clear()
     RUN_STATUS.clear()
-    _HTF_BUDGET[0] = 0
     state = load_state()
     STATE_VIEW.clear()
     STATE_VIEW.update(state)
@@ -1567,10 +1478,6 @@ def check_once():
             if ast.get("trade") and sym not in scanned_syms:
                 ghost = {"symbol": sym, "hl_coin": sym,
                          "label": f"{sym}-PERP", "fallbacks": []}
-                # this symbol left the universe but still holds a trade, so it
-                # gets scanned and appends a RUN_STATUS row. Count it in the
-                # denominator too, or the summary reads "54 of 53 scanned".
-                RUN_UNIVERSE[0] += 1
                 try:
                     changed = check_asset(ghost, state) or changed
                     if not (state.get(sym) or {}).get("trade"):
@@ -1607,132 +1514,4 @@ def run_loop():
         except KeyboardInterrupt:
             log("Stopped by user.")
             return
-        check_once()
-
-
-def debug_symbol(asset):
-    """Print every v2 condition and its verdict for one symbol."""
-    sym = asset["symbol"]
-    tick = lambda ok: "\u2713" if ok else "\u2717"
-    source, cs = fetch(asset, TF, 300)
-    if not cs:
-        print(f"\n=== {sym} === no {TF} candles (fetch failed)")
-        return
-    a = atr(cs)
-    closes = [x["c"] for x in cs]
-    ef = _ema_list(closes, V2_FAST)
-    es = _ema_list(closes, V2_SLOW)
-    i = len(cs) - 2                      # last CLOSED candle
-    c, prev, atr_i = cs[i], cs[i - 1], a[i] or 0
-    bias, regime = htf_context(asset)
-    vols = [x.get("v") or 0 for x in cs]
-    vwin = [v for v in vols[max(0, i - V2_VOL_BASE):i] if v > 0]
-    vavg = sum(vwin) / len(vwin) if vwin else 0.0
-    vr = (c.get("v") or 0) / vavg if vavg else 0.0
-    rng = c["h"] - c["l"]
-    body = abs(c["c"] - c["o"])
-
-    print(f"\n=== {sym} === {source}  close ${fmt_px(c['c'])}  ATR {atr_i:.6g}")
-    print(f"  {V2_HTF} bias {bias or '-'} / regime {regime or 'OFF'}"
-          f"   EMA{V2_FAST} ${fmt_px(ef[i]) if ef[i] else '-'}"
-          f"   EMA{V2_SLOW} ${fmt_px(es[i]) if es[i] else '-'}")
-    print(f"  candle: body {body / atr_i if atr_i else 0:.2f} ATR "
-          f"(need {V2_BODY_MIN}) | range {rng / atr_i if atr_i else 0:.2f} ATR "
-          f"(max {V2_MAX_TRIGGER_RANGE}) | volume {vr:.2f}x (need {V2_VOL_MULT})")
-    if not atr_i or ef[i] is None or es[i] is None:
-        print("  not enough history for the EMAs / ATR")
-        return
-
-    win = cs[max(0, i - V2_LOOKBACK):i]
-    tol = V2_PULLBACK_TOL * atr_i
-    for long_ in (True, False):
-        d = "LONG" if long_ else "SHORT"
-        routed_out = ""
-        if V2_REGIME_ROUTING and regime:
-            if regime == "trend" and bias and bias != d:
-                routed_out = f"(4h {regime}/{bias} blocks {d})"
-        print(f"  -- {d} {routed_out}")
-
-        trend = (ef[i] > es[i] and c["c"] > es[i]) if long_ \
-            else (ef[i] < es[i] and c["c"] < es[i])
-        pulled = any((p["l"] <= ef[i - V2_LOOKBACK + k] + tol) if long_
-                     else (p["h"] >= ef[i - V2_LOOKBACK + k] - tol)
-                     for k, p in enumerate(win))
-        dirn = (c["c"] > c["o"]) if long_ else (c["c"] < c["o"])
-        past = (c["c"] > ef[i]) if long_ else (c["c"] < ef[i])
-        pastp = (c["c"] > prev["h"]) if long_ else (c["c"] < prev["l"])
-        close_pos = ((c["c"] - c["l"]) / rng if long_ else (c["h"] - c["c"]) / rng) \
-            if rng else 0
-        allowed = not (V2_REGIME_ROUTING and regime == "range")
-        print(f"     continuation: {tick(allowed)} routing "
-              f"{tick(trend)} EMA stack  {tick(pulled)} pullback  "
-              f"{tick(dirn)} direction  {tick(past)} past EMA{V2_FAST}  "
-              f"{tick(pastp)} past prev  "
-              f"{tick(body >= V2_BODY_MIN * atr_i)} body  "
-              f"{tick(close_pos >= 0.6)} close {close_pos * 100:.0f}% of range  "
-              f"{tick(vr >= V2_VOL_MULT or not vavg)} volume")
-
-        stretch = (es[i] - min(p["l"] for p in win + [c])) if long_ \
-            else (max(p["h"] for p in win + [c]) - es[i])
-        prior = min(p["l"] for p in win) if long_ else max(p["h"] for p in win)
-        swept = (c["l"] < prior) if long_ else (c["h"] > prior)
-        reclaim = (c["c"] > prior) if long_ else (c["c"] < prior)
-        allowed_r = not (V2_REGIME_ROUTING and regime == "trend")
-        print(f"     reversal:     {tick(allowed_r)} routing "
-              f"{tick(stretch >= V2_STRETCH_ATR * atr_i)} stretch "
-              f"{stretch / atr_i:.1f} ATR (need {V2_STRETCH_ATR})  "
-              f"{tick(swept)} swept ${fmt_px(prior)}  "
-              f"{tick(reclaim)} reclaimed  "
-              f"{tick(dirn)} direction  "
-              f"{tick(body >= V2_BODY_MIN * atr_i)} body  "
-              f"{tick(vr >= V2_VOL_MULT or not vavg)} volume")
-
-    ast = {"phase": "SCAN", "last_candle_t": 0, "setup": None, "trade": None,
-           "doji": None, "zone": None, "watch": None}
-    for long_ in (True, False):
-        w = v2_watch(cs, a, ef, es, i, long_)
-        if w:
-            print(f"  watch: {w[0]} {'LONG' if long_ else 'SHORT'} "
-                  f"({w[2]:.0f}% proximity) - {w[1]}")
-
-
-if __name__ == "__main__":
-    if not (TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID):
-        print("Missing config: set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID "
-              "as environment variables (GitHub repo Secrets).")
-        sys.exit(1)
-    if "--debug" in sys.argv:
-        want = [x.upper() for x in sys.argv[1:] if not x.startswith("--")]
-        assets = active_assets()
-        if want:
-            assets = [a for a in assets
-                      if a["symbol"].upper() in want
-                      or base_name(a["symbol"]).upper() in want]
-        else:
-            assets = assets[:8]
-        print(f"v2 debug: TF={TF} HTF={V2_HTF} routing={V2_REGIME_ROUTING} "
-              f"vol={V2_VOL_MULT}x minstop={MIN_STOP_PCT}% maxstop={V2_MAX_STOP} ATR")
-        for a in assets:
-            try:
-                debug_symbol(a)
-            except Exception as e:
-                print(f"\n=== {a['symbol']} === debug failed: {type(e).__name__}: {e}")
-        sys.exit(0)
-
-    if "--test" in sys.argv:
-        if DISCOVER_ALL:
-            watched = (f"all Hyperliquid markets above "
-                       f"${MIN_DAY_VOLUME_USD:,.0f} 24h volume, max {MAX_ASSETS}")
-        else:
-            watched = ", ".join(a["symbol"] for a in ASSETS)
-        send_telegram("\u2705 <b>Signal alert agent - test message</b>\n"
-                      f"Your alert pipeline works. Watching: {esc(watched)}.\n"
-                      f"Strategy: smoothed HA ({SHA_PRE}/{SHA_POST}) trend "
-                      f"change on {TF} - fading run, colour flip, pullback to "
-                      f"the HA candles, confirmation candle; SL at the swing "
-                      f"extreme, TP {RR_TREND}R with half off and a runner.")
-        print("Test message sent to Telegram.")
-    elif "--loop" in sys.argv:
-        run_loop()
-    else:
         check_once()
