@@ -177,12 +177,12 @@ CONT_STOP_STRUCTURAL = True        # stop under the pullback extreme when the
 # ===========================================================================
 # --- execution (stage 1: DRY RUN - nothing is ever sent) -------------------
 EXEC_DRY_RUN = True          # log the orders that WOULD be placed
-EXEC_LIVE = True            # stage 2: place real orders. Leave False until
+EXEC_LIVE = True             # stage 2: place real orders. Leave False until
                              # the testnet run has filled correctly.
 EXEC_TESTNET = False         # MAINNET - real money
 EXEC_HALT_FILE = "/opt/btc-agent/EXEC_HALT"   # touch this to stop new entries
-EXEC_DAILY_LOSS_LIMIT_USD = 20.0             # no new entries past this
-EXEC_RISK_USD = 4.0          # deliberately tiny for the first live fills;
+EXEC_DAILY_LOSS_LIMIT_USD = 50.0             # no new entries past this
+EXEC_RISK_USD = 2.0          # deliberately tiny for the first live fills;
                              # raise once orders have proven correct
 EXEC_MAX_NOTIONAL_USD = 2500 # cap on position value
 EXEC_MAX_POSITIONS = 1       # one live position at a time to start
