@@ -181,11 +181,11 @@ EXEC_LIVE = True             # stage 2: place real orders. Leave False until
                              # the testnet run has filled correctly.
 EXEC_TESTNET = False         # MAINNET - real money
 EXEC_HALT_FILE = "/opt/btc-agent/EXEC_HALT"   # touch this to stop new entries
-EXEC_DAILY_LOSS_LIMIT_USD = 40.0             # no new entries past this
+EXEC_DAILY_LOSS_LIMIT_USD = 20.0             # no new entries past this
 EXEC_RISK_USD = 2.0          # deliberately tiny for the first live fills;
                              # raise once orders have proven correct
 EXEC_MAX_NOTIONAL_USD = 2500 # cap on position value
-EXEC_MAX_POSITIONS = 3       # one live position at a time to start
+EXEC_MAX_POSITIONS = 1       # one live position at a time to start
 # ORDERS_LOG is defined next to trades.log further down
 
 STRATEGY_V2 = True
@@ -1423,7 +1423,18 @@ def place_entry_live(asset, trade, plan):
     ex = exec_client()
     if not ex:
         return None
+    # builder-venue markets (xyz:NBIS, ...) are not in the main perp meta the
+    # SDK client was built against - it raises KeyError on the asset lookup.
+    # Alert on them, but do not try to trade them.
+    if ":" in asset["symbol"]:
+        log(f"{asset['symbol']}: live execution skipped - builder-venue "
+            "market, not tradable through the main dex client (alert only)")
+        return None
     sym = base_name(asset["symbol"])
+    if not any(a.get("name") == sym
+               for a in (_EXEC.get("meta") or {}).get("universe", [])):
+        log(f"{sym}: live execution skipped - not in the perp universe")
+        return None
     long_ = trade["verdict"] == "LONG"
     size = round(plan["size"], sz_decimals(asset["symbol"]))
     if size <= 0:
