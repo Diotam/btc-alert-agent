@@ -177,10 +177,15 @@ CONT_STOP_STRUCTURAL = True        # stop under the pullback extreme when the
 # ===========================================================================
 # --- execution (stage 1: DRY RUN - nothing is ever sent) -------------------
 EXEC_DRY_RUN = True          # log the orders that WOULD be placed
-EXEC_LIVE = False            # stage 2, not built - has no effect yet
-EXEC_RISK_USD = 25.0         # dollar risk per trade, fixed
+EXEC_LIVE = False            # stage 2: place real orders. Leave False until
+                             # the testnet run has filled correctly.
+EXEC_TESTNET = False         # MAINNET - real money
+EXEC_HALT_FILE = "/opt/btc-agent/EXEC_HALT"   # touch this to stop new entries
+EXEC_DAILY_LOSS_LIMIT_USD = 20.0             # no new entries past this
+EXEC_RISK_USD = 5.0          # deliberately tiny for the first live fills;
+                             # raise once orders have proven correct
 EXEC_MAX_NOTIONAL_USD = 2500 # cap on position value
-EXEC_MAX_POSITIONS = 4       # refuse a new plan beyond this many open
+EXEC_MAX_POSITIONS = 1       # one live position at a time to start
 # ORDERS_LOG is defined next to trades.log further down
 
 STRATEGY_V2 = True
@@ -1341,6 +1346,118 @@ def process_open_trade(asset, trade, candles, last_closed_t):
             RUN_ALERTS.append(f"{sym} TP HIT ({pnl_pct(trade, tp):+.2f}%)")
             return None, True
     return trade, changed
+
+
+def exec_base_url():
+    return ("https://api.hyperliquid-testnet.xyz" if EXEC_TESTNET
+            else "https://api.hyperliquid.xyz")
+
+
+_EXEC = {"ex": None, "info": None, "addr": None, "meta": None, "err": None}
+
+
+def exec_client():
+    """Lazily build the SDK client. Returns None (with a logged reason) if the
+    SDK, the key, or the network is unavailable - never raises."""
+    if _EXEC["ex"] or _EXEC["err"]:
+        return _EXEC["ex"]
+    key = os.environ.get("HL_API_KEY", "").strip()
+    if not key:
+        _EXEC["err"] = "HL_API_KEY not set"
+    else:
+        try:
+            from eth_account import Account
+            from hyperliquid.exchange import Exchange
+            from hyperliquid.info import Info
+            wallet = Account.from_key(key)
+            addr = os.environ.get("HL_ACCOUNT_ADDRESS", "").strip() or \
+                wallet.address
+            base = exec_base_url()
+            _EXEC.update(
+                ex=Exchange(wallet, base, account_address=addr),
+                info=Info(base, skip_ws=True), addr=addr)
+            _EXEC["meta"] = _EXEC["info"].meta()
+            log(f"execution client ready on "
+                f"{'TESTNET' if EXEC_TESTNET else 'MAINNET'} for {addr[:10]}...")
+        except Exception as e:
+            _EXEC["err"] = f"{type(e).__name__}: {e}"
+    if _EXEC["err"]:
+        log(f"execution client unavailable ({_EXEC['err']}) - dry run only")
+    return _EXEC["ex"]
+
+
+def sz_decimals(sym):
+    """Hyperliquid rejects sizes with too many decimals."""
+    meta = _EXEC.get("meta") or {}
+    for a in meta.get("universe", []):
+        if a.get("name") == base_name(sym) or a.get("name") == sym:
+            return int(a.get("szDecimals", 4))
+    return 4
+
+
+def round_px(px):
+    """Perp prices: max 5 significant figures."""
+    if px <= 0:
+        return px
+    from decimal import Decimal
+    d = Decimal(repr(float(px)))
+    return float(round(d, -d.adjusted() + 4))
+
+
+def exec_blocked(open_count, day_pnl_usd):
+    """Reasons a live entry must not be sent."""
+    if os.path.exists(EXEC_HALT_FILE):
+        return "EXEC_HALT file present"
+    if open_count >= EXEC_MAX_POSITIONS:
+        return f"{open_count} positions already open"
+    if day_pnl_usd <= -abs(EXEC_DAILY_LOSS_LIMIT_USD):
+        return f"daily loss limit hit ({day_pnl_usd:+.2f})"
+    return None
+
+
+def place_entry_live(asset, trade, plan):
+    """Entry, then the protective stop, then the half TP. If the stop cannot
+    be placed the position is closed immediately - never sit unprotected."""
+    if not EXEC_LIVE:
+        return None
+    ex = exec_client()
+    if not ex:
+        return None
+    sym = base_name(asset["symbol"])
+    long_ = trade["verdict"] == "LONG"
+    size = round(plan["size"], sz_decimals(asset["symbol"]))
+    if size <= 0:
+        log(f"{sym}: size rounds to zero - not sent")
+        return None
+    try:
+        r = ex.market_open(sym, long_, size)
+        log(f"{sym}: LIVE entry sent {r}")
+    except Exception as e:
+        log(f"{sym}: LIVE entry FAILED {type(e).__name__}: {e}")
+        send_telegram(f"\u26a0\ufe0f {esc(sym)} entry order failed - no position")
+        return None
+    try:
+        ex.order(sym, not long_, size, round_px(trade["stop"]),
+                 {"trigger": {"triggerPx": round_px(trade["stop"]),
+                              "isMarket": True, "tpsl": "sl"}},
+                 reduce_only=True)
+        ex.order(sym, not long_, round(size / 2, sz_decimals(asset["symbol"])),
+                 round_px(trade["tp"]),
+                 {"limit": {"tif": "Gtc"}}, reduce_only=True)
+        log(f"{sym}: LIVE stop ${fmt_px(trade['stop'])} and half TP "
+            f"${fmt_px(trade['tp'])} placed")
+    except Exception as e:
+        log(f"{sym}: LIVE protective orders FAILED ({type(e).__name__}) - "
+            "closing the position")
+        try:
+            ex.market_close(sym)
+            send_telegram(f"\u26a0\ufe0f {esc(sym)} stop could not be placed - "
+                          "position closed immediately")
+        except Exception:
+            send_telegram(f"\U0001F6A8 {esc(sym)} UNPROTECTED POSITION - "
+                          "close it manually now")
+        return None
+    return True
 
 
 def log_order(rec):
