@@ -2531,6 +2531,10 @@ def check_once():
             if ast.get("trade") and sym not in scanned_syms:
                 ghost = {"symbol": sym, "hl_coin": sym,
                          "label": f"{sym}-PERP", "fallbacks": []}
+                # this symbol left the universe but still holds a trade, so it
+                # gets scanned and appends a RUN_STATUS row. Count it in the
+                # denominator too, or the summary reads "54 of 53 scanned".
+                RUN_UNIVERSE[0] += 1
                 try:
                     changed = check_asset(ghost, state) or changed
                     if not (state.get(sym) or {}).get("trade"):
