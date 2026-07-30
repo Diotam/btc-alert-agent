@@ -54,12 +54,15 @@ DISCOVER_DEXES = True              # scan HIP-3 builder venues. Their symbols
                                    # client is built against, so they ALERT
                                    # ONLY - they are placed by hand
 ADMIT_COMMODITIES = True
+ADMIT_STOCKS = False               # equities out of the universe. The
+                                   # opening-range path stays wired up, so this
+                                   # is one line to flip back
 DEXES = [""]                       # fallback when dex discovery fails
 COMMODITY_TICKERS = ("XAU", "GOLD", "XAG", "SILVER", "XPT", "PLAT",
                      "XPD", "PALLAD", "CL", "OIL", "WTI", "BRENT",
                      "NG", "NATGAS", "HG", "COPPER")
 STOCK_DEXES = ("xyz",)             # TradeXYZ equities venue
-MIN_DAY_VOLUME_USD = 5_000_000     # crypto floor, 24h notional
+MIN_DAY_VOLUME_USD = 2_000_000     # crypto floor, 24h notional
 COMMODITY_MIN_VOLUME_USD = 5_000_000
 STOCK_MIN_VOLUME_USD = 15_000_000
 SESSIONS = {"stock": (9, 30, 10, 30)}   # equities use their cash-session
@@ -359,7 +362,7 @@ def discover_assets():
                         continue
                     cls = "commodity"
                 elif dex in STOCK_DEXES:
-                    if vol < STOCK_MIN_VOLUME_USD:
+                    if not ADMIT_STOCKS or vol < STOCK_MIN_VOLUME_USD:
                         continue
                     cls = "stock"
                 else:
