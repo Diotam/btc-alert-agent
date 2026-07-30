@@ -124,7 +124,7 @@ def journal_events(n=400, keep=25):
     events = []
     for line in out.splitlines():
         if any(k in line for k in ("ALERT SENT", "ENTRY",
-                                   "LIVE", "DRY RUN", "UNPROTECTED",
+                                   "LIVE", "SIZED", "UNPROTECTED",
                                    "order blocked", "execution client",
                                    "huge breakout",
                                    "no 4h candle", "too tight",
