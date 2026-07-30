@@ -126,7 +126,6 @@ def journal_events(n=400, keep=25):
         if any(k in line for k in ("ALERT SENT", "ENTRY",
                                    "LIVE", "DRY RUN", "UNPROTECTED",
                                    "order blocked", "execution client",
-                                   "closed ABOVE", "closed BELOW",
                                    "huge breakout",
                                    "no 4h candle", "too tight",
                                    "REPLACED", "day rolled over",
