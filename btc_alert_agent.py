@@ -22,10 +22,6 @@ more than RANGE_HUGE_FRACTION of the range width beyond the level, the stop
 moves to the nearest swing pivot inside the excursion - or, failing that, to
 the broken range level itself, which is now resistance (support for longs).
 
-A level that price keeps sawing through is not a level: if the close has
-crossed it CHURN_MAX_CROSSINGS times or more within the last CHURN_LOOKBACK
-candles, no setup arms there until the churn falls out of the window.
-
 Everything resets at New York midnight. Alerts go to Telegram; orders can be
 placed on Hyperliquid (EXEC_LIVE) with fixed dollar risk per trade.
 
@@ -94,12 +90,6 @@ RANGE_ONE_PER_SIDE = False         # False = unlimited entries per side per day,
                                    # as long as the setup re-forms against the
                                    # same range. `done` still records which
                                    # sides traded today, for the state file
-CHURN_LOOKBACK = 20                # candles examined when judging a level
-CHURN_MAX_CROSSINGS = 3            # this many CLOSE crossings of the level
-                                   # inside that window means it is being sawed
-                                   # through - refuse to arm there. A clean
-                                   # first break scores 1; a re-arm after a
-                                   # stop-out scores 3. 0 disables the veto
 MIN_STOP_PCT = 0.10                # skip entries whose stop sits closer than
                                    # this % of price - sub-noise stops just churn
 ATR_PERIOD = 14
@@ -532,22 +522,6 @@ def day_range(asset, candles, d):
     return range_4h(asset, d)
 
 
-def level_crossings(candles, i, level, above):
-    """How many times the CLOSE has crossed `level` over the last
-    CHURN_LOOKBACK candles ending at i. A clean first break scores 1. A
-    break, a return, and a second break - the shape that follows a stop-out
-    - scores 3. A level being sawed through scores higher still."""
-    lo_i = max(0, i - CHURN_LOOKBACK + 1)
-    prev = None
-    n = 0
-    for c in candles[lo_i:i + 1]:
-        out = c["c"] > level if above else c["c"] < level
-        if prev is not None and out != prev:
-            n += 1
-        prev = out
-    return n
-
-
 def nearest_key_level(candles, i, extreme, entry, long_):
     """The nearest swing pivot between entry and the excursion extreme -
     used when a huge breakout would otherwise put the stop miles away."""
@@ -733,7 +707,7 @@ def log_order(rec):
 # --------------------------- state -----------------------------------------
 def blank_asset_state():
     return {"phase": "SCAN", "last_candle_t": 0, "day": None,
-            "setup": None, "done": [], "churn": {}, "trade": None}
+            "setup": None, "done": [], "trade": None}
 
 
 def load_state():
@@ -1080,7 +1054,6 @@ def process_candle(asset, ast, candles, a, i, source, rng_cache):
         ast["day"] = str(d)
         ast["setup"] = None
         ast["done"] = []
-        ast["churn"] = {}
 
     if d not in rng_cache:
         rng_cache[d] = day_range(asset, candles, d)
@@ -1106,22 +1079,10 @@ def process_candle(asset, ast, candles, a, i, source, rng_cache):
         if not brk or brk["side"] != side:
             if direction in (ast.get("done") or []) and RANGE_ONE_PER_SIDE:
                 return False
-            crossings = level_crossings(candles, i, level, above)
-            if CHURN_MAX_CROSSINGS and crossings >= CHURN_MAX_CROSSINGS:
-                if (ast.get("churn") or {}).get(side) != crossings:
-                    log(f"{sym}: {fmt_px(level)} crossed {crossings} times in "
-                        f"{CHURN_LOOKBACK} candles - level is churning, "
-                        f"not arming the {direction}")
-                    ast.setdefault("churn", {})[side] = crossings
-                return False
-            if ast.get("churn"):
-                ast["churn"].pop(side, None)
             ast["setup"] = {"side": side, "level": level,
-                            "extreme": c[extreme_key], "t": c["t"],
-                            "crossings": crossings}
+                            "extreme": c[extreme_key], "t": c["t"]}
             log(f"{sym}: closed {side.upper()} the 4h range "
-                f"(${fmt_px(level)}, crossed {crossings}x in "
-                f"{CHURN_LOOKBACK}) - watching for a close back inside")
+                f"(${fmt_px(level)}) - watching for a close back inside")
             if ALERT_STAGES:
                 try:
                     send_telegram(stage_message(asset, direction, level,
