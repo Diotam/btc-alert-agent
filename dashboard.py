@@ -216,19 +216,26 @@ def build_data():
                            "opened_t": tr.get("opened_t", 0)})
 
         # an armed breakout: price has CLOSED outside the range and the agent
-        # is waiting for a close back inside. The bar fills as price travels
-        # from the excursion extreme back toward the level it broke.
+        # is waiting for a close back inside. dist_pct is how far price still
+        # is from the level it has to close back through; the bar fills as
+        # that gap closes, scaled against the width of the range itself so
+        # the reference never moves.
         if setup and not tr:
             lvl = setup.get("level")
             ext = setup.get("extreme")
-            prog = None
-            if mid and lvl is not None and ext is not None and ext != lvl:
-                prog = ((ext - mid) / (ext - lvl) if above
-                        else (mid - ext) / (lvl - ext)) * 100
-                prog = max(0.0, min(100.0, prog))
+            width = None
+            if setup.get("hi") is not None and setup.get("lo") is not None:
+                width = setup["hi"] - setup["lo"]
+            dist = dist_pct = prog = None
+            if mid and lvl:
+                dist = mid - lvl if above else lvl - mid
+                dist_pct = dist / mid * 100
+                if width:
+                    prog = max(0.0, min(100.0, (1 - dist / width) * 100))
             zones.append({"sym": sym, "dir": armed_dir,
                           "lev": ast.get("lev"),
                           "level": lvl, "extreme": ext,
+                          "dist": dist, "dist_pct": dist_pct,
                           "stage": f"closed {'above' if above else 'below'} "
                                    f"${_lvl(lvl)} \u00b7 waiting for a close "
                                    "back inside",
@@ -394,9 +401,13 @@ function render(d){
   }).join(''):'<div class="card muted">none</div>';
   document.getElementById('zones').innerHTML=d.zones.length?d.zones.map(z=>{
    const cls=z.dir==='LONG'?'long':'short';
-   const pbar=z.prog==null?''
-    :`<div class=bar><div class=fill style="width:${z.prog}%;background:#58a6ff"></div></div>
-      <div class=muted>${Math.round(z.prog)}% back from the extreme ($${px(z.extreme)}) to the level</div>`;
+   const near=z.dist_pct!=null&&z.dist_pct<=0;
+   const gap=z.dist_pct==null?''
+    :near?`back inside the range - entry triggers on this candle's close`
+    :`<span class=num>${z.dist_pct.toFixed(2)}%</span> from the range ${z.dir==='SHORT'?'high':'low'} ($${px(z.level)})`;
+   const pbar=z.prog==null?(gap?`<div class=muted style="margin-top:6px">${gap}</div>`:'')
+    :`<div class=bar><div class=fill style="width:${z.prog}%;background:${near?'#3fb950':'#58a6ff'}"></div></div>
+      <div class=muted>${gap}</div>`;
    return `<div class=card><div class=row>
     <span class=sym>${z.sym} <span class=${cls}>${z.dir}</span>${z.lev?` <span class=lev>${z.lev}x</span>`:''}</span>
     <span class=muted>now <span class=num>$${px(z.mid)}</span></span></div>
