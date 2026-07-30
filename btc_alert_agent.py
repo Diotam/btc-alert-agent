@@ -8,8 +8,7 @@ One strategy, three steps:
      straight off the exchange's own 4h candle, wicks included, once that
      candle has fully closed. Exchange 4h candles are UTC-aligned, so the
      candle that opens the NY day is 00:00-04:00 NY under EDT and
-     03:00-07:00 NY under EST. Stocks use their 09:30-10:30 cash-session
-     opening range instead, which is not a 4h candle.
+     03:00-07:00 NY under EST.
   2. on 5m, wait for a candle to CLOSE outside that range (wicks never
      count here), then for a candle to CLOSE back inside - both on the
      same NY day.
@@ -39,8 +38,6 @@ import os
 import sys
 import time
 import urllib.request
-import re
-from email.utils import parsedate_to_datetime
 from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -51,16 +48,15 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 # --- asset universe -------------------------------------------------------
 DISCOVER_ALL = True
-DISCOVER_DEXES = True              # scan builder venues (stocks live there)
+DISCOVER_DEXES = True              # scan builder venues (commodities live
+                                   # there). Equities are not traded at all
 ADMIT_COMMODITIES = True
 DEXES = [""]                       # fallback when dex discovery fails
 COMMODITY_TICKERS = ("XAU", "GOLD", "XAG", "SILVER", "XPT", "PLAT",
                      "XPD", "PALLAD", "CL", "OIL", "WTI", "BRENT",
                      "NG", "NATGAS", "HG", "COPPER")
-STOCK_DEXES = ("xyz",)             # TradeXYZ equities venue
 MIN_DAY_VOLUME_USD = 5_000_000     # crypto floor, 24h notional
 COMMODITY_MIN_VOLUME_USD = 5_000_000
-STOCK_MIN_VOLUME_USD = 5_000_000
 ONLY = []                          # trade ONLY these symbols ([] = whole universe)
 EXCLUDE = ["PUMP"]                 # never trade these (matches the base name
                                    # on any venue)
@@ -74,9 +70,6 @@ ASSETS = [                         # used when DISCOVER_ALL = False, or when
 # --- strategy dials -------------------------------------------------------
 TF = "5m"                          # execution timeframe: the spec is 5m closes
 RANGE_TZ = "America/New_York"
-SESSIONS = {"crypto": (0, 0, 4, 0),        # only the stock entry is read; the
-            "commodity": (0, 0, 4, 0),     # others take the native 4h candle
-            "stock": (9, 30, 10, 30)}
 RANGE_RR = 2.0                     # take profit = 2x the stop distance
 RANGE_MIN_ATR = 0.0                # minimum range width, x ATR. 0 = no filter:
                                    # whatever the two wicks are IS the range
@@ -90,7 +83,7 @@ RANGE_ONE_PER_SIDE = False         # False = unlimited entries per side per day,
                                    # as long as the setup re-forms against the
                                    # same range. `done` still records which
                                    # sides traded today, for the state file
-MIN_STOP_PCT = 0.10                # skip entries whose stop sits closer than
+MIN_STOP_PCT = 0.25                # skip entries whose stop sits closer than
                                    # this % of price - sub-noise stops just churn
 ATR_PERIOD = 14
 OVERRIDE_ON_NEW_SIGNAL = True      # a fresh qualifying signal REPLACES the open
@@ -100,14 +93,6 @@ OVERRIDE_ON_NEW_SIGNAL = True      # a fresh qualifying signal REPLACES the open
 ALERT_ENTRIES = True
 ALERT_STAGES = False               # breakout-armed alerts (log-only when False)
 ALERT_LIFECYCLE = True             # TP / stop / override alerts
-
-# --- headlines for stock alerts -------------------------------------------
-NEWS_ENABLED = True
-NEWS_MAX = 2
-NEWS_TTL_S = 900
-NEWS_RECENT_H = 6
-NEWS_URL = ("https://feeds.finance.yahoo.com/rss/2.0/headline"
-            "?s={t}&region=US&lang=en-US")
 
 # --- execution ------------------------------------------------------------
 EXEC_LIVE = True                   # place real orders
@@ -244,32 +229,10 @@ def fetch_kraken(pair, interval, lookback):
             for k in data["result"][key]]
 
 
-def fetch_yahoo(ticker, interval, lookback):
-    yint = {"5m": "5m", "15m": "15m", "30m": "30m", "1h": "60m"}.get(interval)
-    if not yint:
-        return None                # e.g. 4h - no equivalent, never fake it
-    rng = "5d" if interval == "5m" else "1mo"
-    from urllib.parse import quote
-    data = http_json(
-        f"https://query1.finance.yahoo.com/v8/finance/chart/{quote(ticker)}"
-        f"?interval={yint}&range={rng}")
-    res = data["chart"]["result"][0]
-    ts = res["timestamp"]
-    q = res["indicators"]["quote"][0]
-    out = []
-    for i in range(len(ts)):
-        if q["close"][i] is None:
-            continue
-        out.append({"t": ts[i] * 1000, "o": q["open"][i], "h": q["high"][i],
-                    "l": q["low"][i], "c": q["close"][i],
-                    "v": q["volume"][i] or 0})
-    return out
-
-
 def fetch_fallback(spec, interval, lookback):
     provider, _, ident = spec.partition(":")
-    return {"binance": fetch_binance, "kraken": fetch_kraken,
-            "yahoo": fetch_yahoo}[provider](ident, interval, lookback)
+    return {"binance": fetch_binance,
+            "kraken": fetch_kraken}[provider](ident, interval, lookback)
 
 
 def fetch(asset, interval, min_candles):
@@ -356,12 +319,9 @@ def discover_assets():
                     if not ADMIT_COMMODITIES or vol < COMMODITY_MIN_VOLUME_USD:
                         continue
                     cls = "commodity"
-                elif dex in STOCK_DEXES:
-                    if vol < STOCK_MIN_VOLUME_USD:
-                        continue
-                    cls = "stock"
                 else:
-                    continue                      # unknown venue class: skip
+                    continue                      # equities and unknown venue
+                                                  # classes are not traded
             else:
                 if vol < MIN_DAY_VOLUME_USD:
                     continue
@@ -390,10 +350,8 @@ def active_assets():
     if assets:
         crypto = sum(1 for a in assets if a.get("cls") == "crypto")
         n_com = sum(1 for a in assets if a.get("cls") == "commodity")
-        n_stk = sum(1 for a in assets if a.get("cls") == "stock")
         log(f"Discovered {len(assets)} markets: {crypto} crypto "
-            f"(>= ${MIN_DAY_VOLUME_USD:,.0f}), {n_com} commodities, "
-            f"{n_stk} stocks")
+            f"(>= ${MIN_DAY_VOLUME_USD:,.0f}), {n_com} commodities")
         return assets
     log("Discovery returned nothing - falling back to the manual ASSETS list.")
     return ASSETS
@@ -448,42 +406,15 @@ def ny_dt(ms):
     return datetime.fromtimestamp(ms / 1000, NY_TZ)
 
 
-def window_ms(d, cls):
-    """[start, end) epoch ms of the day's range window on NY date d.
-    Stocks: the cash-session opening range. Everything else: the 4h CANDLE
-    that opens the NY day, i.e. the first UTC-aligned 4h boundary at or
-    after NY midnight (00:00-04:00 NY in EDT, 03:00-07:00 NY in EST)."""
-    if cls == "stock":
-        h1, m1, h2, m2 = SESSIONS["stock"]
-        s = datetime(d.year, d.month, d.day, h1, m1, tzinfo=NY_TZ)
-        e = datetime(d.year, d.month, d.day, h2, m2, tzinfo=NY_TZ)
-        return int(s.timestamp() * 1000), int(e.timestamp() * 1000)
+def window_ms(d):
+    """[start, end) epoch ms of the 4h CANDLE that opens the NY day on date
+    d: the first UTC-aligned 4h boundary at or after NY midnight, which is
+    00:00-04:00 NY under EDT and 03:00-07:00 NY under EST."""
     midnight = int(datetime(d.year, d.month, d.day,
                             tzinfo=NY_TZ).timestamp() * 1000)
     step = MS["4h"]
     start = -(-midnight // step) * step          # first 4h boundary >= midnight
     return start, start + step
-
-
-def stock_open_range(candles, d):
-    """High/low of the TF candles inside the stock opening range on NY date
-    d. Stocks only - 09:30-10:30 is not a 4h candle, so it has to be built
-    from the execution-timeframe series. Returns (hi, lo, ready)."""
-    start, end = window_ms(d, "stock")
-    step = MS[TF]
-    hi = lo = None
-    count = 0
-    end_seen = False
-    for c in candles:
-        if start <= c["t"] and c["t"] + step <= end:
-            hi = c["h"] if hi is None else max(hi, c["h"])
-            lo = c["l"] if lo is None else min(lo, c["l"])
-            count += 1
-            if c["t"] + step == end:
-                end_seen = True
-    expected = max(1, (end - start) // step)
-    ready = end_seen and count >= expected - max(2, expected // 6)
-    return hi, lo, ready
 
 
 _R4_CACHE = {}
@@ -497,7 +428,7 @@ def range_4h(asset, d):
     key = (asset["symbol"], str(d))
     if key in _R4_CACHE:
         return _R4_CACHE[key]
-    start, end = window_ms(d, asset.get("cls", "crypto"))
+    start, end = window_ms(d)
     if now_ms() < end:
         return None, None, False           # the candle has not closed yet
     _, cs = fetch(asset, "4h", 2)
@@ -515,13 +446,6 @@ def range_4h(asset, d):
     return None, None, False
 
 
-def day_range(asset, candles, d):
-    """The day's range for this asset class. Returns (hi, lo, ready)."""
-    if asset.get("cls") == "stock":
-        return stock_open_range(candles, d)
-    return range_4h(asset, d)
-
-
 def nearest_key_level(candles, i, extreme, entry, long_):
     """The nearest swing pivot between entry and the excursion extreme -
     used when a huge breakout would otherwise put the stop miles away."""
@@ -535,74 +459,6 @@ def nearest_key_level(candles, i, extreme, entry, long_):
     if not levels:
         return None
     return max(levels) if long_ else min(levels)
-
-
-# --------------------------- news (stocks) ---------------------------------
-_NEWS_CACHE = {}
-
-
-def parse_news(xml, limit=NEWS_MAX):
-    out = []
-    for item in re.findall(r"<item>(.*?)</item>", xml, re.S)[:limit * 2]:
-        m = re.search(r"<title>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</title>",
-                      item, re.S)
-        if not m:
-            continue
-        title = re.sub(r"\s+", " ", m.group(1)).strip()
-        when = None
-        d = re.search(r"<pubDate>(.*?)</pubDate>", item, re.S)
-        if d:
-            try:
-                when = parsedate_to_datetime(d.group(1).strip())
-            except Exception:
-                when = None
-        out.append((title, when))
-        if len(out) >= limit:
-            break
-    return out
-
-
-def news_for(symbol):
-    """Recent headlines for a stock ticker. Never raises."""
-    if not NEWS_ENABLED:
-        return []
-    ticker = base_name(symbol)
-    hit = _NEWS_CACHE.get(ticker)
-    if hit and time.time() - hit[0] < NEWS_TTL_S:
-        return hit[1]
-    items = []
-    try:
-        req = urllib.request.Request(
-            NEWS_URL.format(t=ticker),
-            headers={"User-Agent": "Mozilla/5.0 (range-agent)"})
-        with urllib.request.urlopen(req, timeout=6) as r:
-            items = parse_news(r.read().decode("utf-8", "replace"))
-    except Exception as e:
-        log(f"{symbol}: news lookup failed ({type(e).__name__})")
-    _NEWS_CACHE[ticker] = (time.time(), items)
-    return items
-
-
-def news_block(asset):
-    if asset.get("cls") != "stock":
-        return ""
-    items = news_for(asset["symbol"])
-    if not items:
-        return ""
-    now = datetime.now(timezone.utc)
-    lines, fresh = [], False
-    for title, when in items:
-        age = ""
-        if when:
-            hrs = (now - when.astimezone(timezone.utc)).total_seconds() / 3600
-            fresh = fresh or hrs <= NEWS_RECENT_H
-            age = f" \u00b7 {hrs:.0f}h ago" if hrs >= 1 else " \u00b7 just now"
-        lines.append(f"\u2022 {esc(title[:110])}{age}")
-    head = "\U0001F4F0 <b>Headlines</b> <i>(Yahoo Finance)</i>"
-    if fresh:
-        head += ("\n\u26A0\ufe0f <i>news in the last few hours - this move may "
-                 "be event-driven, not technical</i>")
-    return "\n\n" + head + "\n" + "\n".join(lines)
 
 
 # --------------------------- messages --------------------------------------
@@ -620,14 +476,12 @@ def stage_message(asset, direction, level, t):
 
 def entry_message(asset, direction, plan, hi, lo, source, t, trigger):
     e = "\U0001F7E2" if direction == "LONG" else "\U0001F534"
-    cls = asset.get("cls", "crypto")
-    s_ms, e_ms = window_ms(ny_dt(t).date(), cls)
+    s_ms, e_ms = window_ms(ny_dt(t).date())
     win = f"NY {ny_dt(s_ms):%H:%M}-{ny_dt(e_ms):%H:%M}"
-    kind = "opening-range" if cls == "stock" else "first 4h candle"
     return "\n".join([
         f"{e} <b>{direction} ENTRY \u00b7 {esc(asset['symbol'])}</b>",
-        f"<i>{esc(asset['label'])} \u00b7 {TF} \u00b7 {kind} \u00b7 "
-        f"{esc(fmt_ts(t))}</i>",
+        f"<i>{esc(asset['label'])} \u00b7 {TF} \u00b7 first 4h candle "
+        f"\u00b7 {esc(fmt_ts(t))}</i>",
         "",
         "\U0001F4CA <b>Setup</b>: "
         + (f"{win} range ${fmt_px(lo)} - ${fmt_px(hi)}; "
@@ -640,7 +494,7 @@ def entry_message(asset, direction, plan, hi, lo, source, t, trigger):
         f"TP:    <code>${fmt_px(plan['tp'])}</code>  "
         f"({RANGE_RR:.0f}x the stop distance)",
         f"<i>data: {esc(source)}</i>",
-    ]) + news_block(asset)
+    ])
 
 
 def lifecycle_message(asset, kind, trade, exit_px, event_t, note):
@@ -741,7 +595,7 @@ def _close_trade(asset, trade, px, kind, event_t, note=""):
     log(f"{sym}: {'TP HIT' if kind == 'TP' else 'STOPPED OUT'} at "
         f"${fmt_px(px)}{' (intrabar)' if note else ''}")
     record_close(sym, trade, px, kind, event_t)
-    plan_manage_orders(asset, trade, kind, px)
+    plan_manage_orders(asset, kind, px)
     RUN_ALERTS.append(f"{sym} {'TP HIT' if kind == 'TP' else 'STOPPED OUT'} "
                       f"({pnl_pct(trade, px):+.2f}%)")
     return None, True
@@ -851,7 +705,7 @@ def exec_blocked(open_count, day_pnl_usd):
     return None
 
 
-def plan_entry_orders(asset, trade, open_count=0):
+def plan_entry_orders(asset, trade):
     """Size the trade by fixed dollar risk and describe the orders. Logged
     to orders.log when EXEC_DRY_RUN. Returns the plan, or None."""
     sym = asset["symbol"]
@@ -890,7 +744,7 @@ def plan_entry_orders(asset, trade, open_count=0):
     return rec
 
 
-def plan_manage_orders(asset, trade, event, price):
+def plan_manage_orders(asset, event, price):
     if not EXEC_DRY_RUN:
         return
     action = {"STOP": "stop filled - flat",
@@ -1005,7 +859,7 @@ def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger):
         log(f"{sym}: trade REPLACED at ${fmt_px(entry)} by a fresh "
             f"{direction} signal")
         record_close(sym, old, entry, "OVERRIDE", event_t)
-        plan_manage_orders(asset, old, "OVERRIDE", entry)
+        plan_manage_orders(asset, "OVERRIDE", entry)
         RUN_ALERTS.append(f"{sym} trade replaced "
                           f"({pnl_pct(old, entry):+.2f}%)")
         ast["trade"] = None
@@ -1019,12 +873,15 @@ def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger):
     log(f"ALERT SENT -> telegram: {sym} {direction} ENTRY @ "
         f"${fmt_px(entry)} ({trigger})")
     RUN_ALERTS.append(f"{sym} {direction} entry @ ${fmt_px(entry)}")
+    # count BEFORE recording the new trade: ast is the same object STATE_VIEW
+    # holds, so counting afterwards makes the trade count itself and a cap of
+    # 1 then blocks every live order that could ever be sent
+    open_now = sum(1 for v in STATE_VIEW.values()
+                   if isinstance(v, dict) and v.get("trade"))
     ast["trade"] = {"verdict": direction, "entry": entry, "stop": stop,
                     "tp": tp, "opened_t": c["t"], "checked_t": c["t"],
                     "rr": RANGE_RR, "risk0": risk}
-    open_now = sum(1 for v in STATE_VIEW.values()
-                   if isinstance(v, dict) and v.get("trade"))
-    order_plan = plan_entry_orders(asset, ast["trade"], open_count=open_now)
+    order_plan = plan_entry_orders(asset, ast["trade"])
     if EXEC_LIVE and order_plan:
         # the daily loss limit needs realised USD from the ledger, which is
         # not tracked yet - only the halt file and the position cap bite
@@ -1056,12 +913,12 @@ def process_candle(asset, ast, candles, a, i, source, rng_cache):
         ast["done"] = []
 
     if d not in rng_cache:
-        rng_cache[d] = day_range(asset, candles, d)
+        rng_cache[d] = range_4h(asset, d)
     hi, lo, ready = rng_cache[d]
 
     # step 1: the range candle must have FULLY closed, and this candle must
     # come after it
-    _, win_end = window_ms(d, asset.get("cls", "crypto"))
+    _, win_end = window_ms(d)
     if c["t"] + MS[TF] <= win_end or not ready or hi is None:
         return False
     if (hi - lo) < RANGE_MIN_ATR * atr_i:
@@ -1276,7 +1133,7 @@ def check_once():
             if ast.get("trade") and sym not in scanned:
                 ghost = {"symbol": sym, "hl_coin": sym,
                          "label": f"{sym}-PERP", "fallbacks": [],
-                         "cls": "stock" if ":" in sym else "crypto"}
+                         "cls": "crypto"}
                 try:
                     changed = check_asset(ghost, state) or changed
                     RUN_UNIVERSE[0] += 1   # it appends a RUN_STATUS row, so the
