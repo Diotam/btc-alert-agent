@@ -48,8 +48,10 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 # --- asset universe -------------------------------------------------------
 DISCOVER_ALL = True
-DISCOVER_DEXES = True              # scan builder venues (commodities live
-                                   # there). Equities are not traded at all
+DISCOVER_DEXES = True              # scan HIP-3 builder venues. Their symbols
+                                   # are absent from the main perp meta the SDK
+                                   # client is built against, so they ALERT
+                                   # ONLY - they are placed by hand
 ADMIT_COMMODITIES = True
 DEXES = [""]                       # fallback when dex discovery fails
 COMMODITY_TICKERS = ("XAU", "GOLD", "XAG", "SILVER", "XPT", "PLAT",
@@ -262,6 +264,13 @@ def base_name(name):
     return name.split(":")[-1].upper().lstrip("K")
 
 
+def executable(symbol):
+    """False for builder-venue markets. They are alert-only: the SDK client is
+    built against the main perp meta, which does not contain them. Nothing
+    that cannot execute may consume the live position budget."""
+    return ":" not in symbol
+
+
 def is_commodity(name):
     base = base_name(name)
     return any(base.startswith(t) for t in COMMODITY_TICKERS)
@@ -318,20 +327,15 @@ def discover_assets():
             if base_name(name) in excluded:
                 continue
             if dex:
-                if is_commodity(name):
-                    if not ADMIT_COMMODITIES or vol < COMMODITY_MIN_VOLUME_USD:
-                        continue
-                    cls = "commodity"
-                else:
+                if not (is_commodity(name) and ADMIT_COMMODITIES) \
+                        or vol < COMMODITY_MIN_VOLUME_USD:
                     continue                      # equities and unknown venue
-                                                  # classes are not traded
-            else:
-                if vol < MIN_DAY_VOLUME_USD:
-                    continue
-                cls = "crypto"
+                    #                               classes are not scanned
+            elif vol < MIN_DAY_VOLUME_USD:
+                continue
             coin = name if (":" in name or not dex) else f"{dex}:{name}"
             found.append({"symbol": coin, "hl_coin": coin, "vol": vol,
-                          "cls": cls, "lev": u.get("maxLeverage"),
+                          "lev": u.get("maxLeverage"),
                           "label": f"{base_name(name)}-PERP"
                                    + (f" ({dex})" if dex else ""),
                           "fallbacks": []})
@@ -351,10 +355,9 @@ def active_assets():
         return [a for a in ASSETS if _not_excluded(a)]
     assets = discover_assets()
     if assets:
-        crypto = sum(1 for a in assets if a.get("cls") == "crypto")
-        n_com = sum(1 for a in assets if a.get("cls") == "commodity")
-        log(f"Discovered {len(assets)} markets: {crypto} crypto "
-            f"(>= ${MIN_DAY_VOLUME_USD:,.0f}), {n_com} commodities")
+        auto = sum(1 for a in assets if executable(a["symbol"]))
+        log(f"Discovered {len(assets)} markets: {auto} main-dex (auto-traded), "
+            f"{len(assets) - auto} builder-venue (alert only, placed by hand)")
         return assets
     log("Discovery returned nothing - falling back to the manual ASSETS list.")
     return ASSETS
@@ -881,8 +884,10 @@ def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger):
     # count BEFORE recording the new trade: ast is the same object STATE_VIEW
     # holds, so counting afterwards makes the trade count itself and a cap of
     # 1 then blocks every live order that could ever be sent
-    open_now = sum(1 for v in STATE_VIEW.values()
-                   if isinstance(v, dict) and v.get("trade"))
+    # only symbols that CAN execute count toward the live cap - builder-venue
+    # trades are placed by hand and must not starve the automated ones
+    open_now = sum(1 for k, v in STATE_VIEW.items()
+                   if isinstance(v, dict) and v.get("trade") and executable(k))
     ast["trade"] = {"verdict": direction, "entry": entry, "stop": stop,
                     "tp": tp, "opened_t": c["t"], "checked_t": c["t"],
                     "rr": RANGE_RR, "risk0": risk}
@@ -1138,8 +1143,7 @@ def check_once():
                 continue
             if ast.get("trade") and sym not in scanned:
                 ghost = {"symbol": sym, "hl_coin": sym,
-                         "label": f"{sym}-PERP", "fallbacks": [],
-                         "cls": "crypto"}
+                         "label": f"{sym}-PERP", "fallbacks": []}
                 try:
                     changed = check_asset(ghost, state) or changed
                     RUN_UNIVERSE[0] += 1   # it appends a RUN_STATUS row, so the
