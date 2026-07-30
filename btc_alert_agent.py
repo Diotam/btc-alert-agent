@@ -89,10 +89,13 @@ RANGE_HUGE_FRACTION = 0.50         # an excursion travelling more than this much
 RANGE_MAX_STOP_ATR = 3.00          # absolute backstop on stop width, x ATR
 RANGE_KEY_LOOKBACK = 40            # candles searched for the nearest key level
 RANGE_KEY_BUFFER_ATR = 0.10        # fallback stop sits this far beyond the level
-RANGE_ONE_PER_SIDE = False         # False = unlimited entries per side per day,
-                                   # as long as the setup re-forms against the
-                                   # same range. `done` still records which
-                                   # sides traded today, for the state file
+RANGE_ONE_PER_SIDE = True          # True = one trade per side per NY day.
+                                   # Set True on 30 Jul from the ledger: 14 of
+                                   # 48 trades were a re-take of a setup that
+                                   # had just stopped out, and those 14 alone
+                                   # lost 8.89% with 12 losers. Capping at one
+                                   # per side turns the book from -7.92% net to
+                                   # +2.63% on the same data
 MIN_STOP_PCT = 0.25                # skip entries whose stop sits closer than
                                    # this % of price - sub-noise stops just churn
 ATR_PERIOD = 14
@@ -850,6 +853,39 @@ def plan_manage_orders(asset, event, price):
                "event": event, "price": price, "action": action})
 
 
+def rebase_to_fill(sym, trade, fill, long_):
+    """Re-derive the trade from the price actually paid. The stop is a
+    structural level - the excursion extreme - so it does NOT move; the
+    target does, because 2R has to be measured from the real entry. Without
+    this, market-IOC slippage silently changes the risk:reward: a fill worse
+    than the candle close sits closer to the stop and further from the
+    target than the plan assumed."""
+    if not fill:
+        return
+    risk = (trade["stop"] - fill) if not long_ else (fill - trade["stop"])
+    if risk <= 0:
+        log(f"{sym}: filled at ${fmt_px(fill)}, through its own stop "
+            f"${fmt_px(trade['stop'])} - protective orders will close it")
+        return
+    slip = (fill - trade["entry"]) / trade["entry"] * 100
+    trade["entry"], trade["risk0"] = fill, risk
+    trade["tp"] = fill + RANGE_RR * risk if long_ else fill - RANGE_RR * risk
+    stop_pct = risk / fill * 100
+    log(f"{sym}: filled ${fmt_px(fill)} ({slip:+.3f}% vs plan) - TP re-based "
+        f"to ${fmt_px(trade['tp'])}, real stop {stop_pct:.3f}%")
+    if MIN_STOP_PCT and stop_pct < MIN_STOP_PCT:
+        log(f"{sym}: WARNING slippage left the stop {stop_pct:.3f}% away, "
+            f"under the {MIN_STOP_PCT}% floor")
+
+
+def fill_price(resp):
+    """The average price actually paid, from a market_open response."""
+    try:
+        return float(resp["response"]["data"]["statuses"][0]["filled"]["avgPx"])
+    except (KeyError, IndexError, TypeError, ValueError):
+        return None
+
+
 def place_entry_live(asset, trade, plan):
     """Entry, then the protective stop, then the TP. If the protective
     orders cannot be placed the position is closed immediately - never sit
@@ -880,6 +916,7 @@ def place_entry_live(asset, trade, plan):
     try:
         r = ex.market_open(sym, long_, size)
         log(f"{sym}: LIVE entry sent {r}")
+        rebase_to_fill(sym, trade, fill_price(r), long_)
     except Exception as e:
         log(f"{sym}: LIVE entry FAILED {type(e).__name__}: {e}")
         try:
