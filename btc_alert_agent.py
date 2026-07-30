@@ -93,8 +93,13 @@ RANGE_ONE_PER_SIDE = False         # False = unlimited entries per side per day,
 MIN_STOP_PCT = 0.25                # skip entries whose stop sits closer than
                                    # this % of price - sub-noise stops just churn
 ATR_PERIOD = 14
-OVERRIDE_ON_NEW_SIGNAL = True      # a fresh qualifying signal REPLACES the open
-                                   # trade on that symbol (booked as OVERRIDE)
+OVERRIDE_ON_NEW_SIGNAL = False     # False: a symbol holding a trade is not
+                                   # evaluated for new setups until it exits.
+                                   # True replaced the open trade at market and
+                                   # booked an OVERRIDE - but that path never
+                                   # closed the live position or cancelled the
+                                   # resting stop and TP, so it left the
+                                   # exchange and the state file disagreeing
 
 # --- alerts ---------------------------------------------------------------
 ALERT_ENTRIES = True
@@ -928,6 +933,13 @@ def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger):
     event_t = c["t"] + MS[TF]
 
     old = ast.get("trade")
+    if old and not OVERRIDE_ON_NEW_SIGNAL:
+        # check_asset already returns early in this case; enforcing it here
+        # too means the flag cannot be defeated by a reordering upstream
+        log(f"{sym}: {direction} signal ignored - {old['verdict']} still open "
+            "and overrides are off")
+        ast["setup"] = None
+        return False
     if old and old["verdict"] == direction:
         log(f"{sym}: {direction} signal matches the open trade's direction "
             "- not replacing it")
