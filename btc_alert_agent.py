@@ -937,7 +937,8 @@ def process_candle(asset, ast, candles, a, i, source, rng_cache):
             if direction in (ast.get("done") or []) and RANGE_ONE_PER_SIDE:
                 return False
             ast["setup"] = {"side": side, "level": level,
-                            "extreme": c[extreme_key], "t": c["t"]}
+                            "extreme": c[extreme_key], "t": c["t"],
+                            "hi": hi, "lo": lo}
             log(f"{sym}: closed {side.upper()} the 4h range "
                 f"(${fmt_px(level)}) - watching for a close back inside")
             if ALERT_STAGES:
