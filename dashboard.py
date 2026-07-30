@@ -241,7 +241,14 @@ def build_data():
                           "mid": mid, "prog": prog})
 
     trades.sort(key=lambda t: t["sym"])
-    zones.sort(key=lambda z: z["sym"])
+    # closest to triggering first: fullest bar at the top. Rebuilt on every
+    # SSE tick, so the order re-shuffles live as prices move. Cards with no
+    # bar (older state without hi/lo) sink to the bottom.
+    zones.sort(key=lambda z: (
+        z["prog"] is None,
+        -(z["prog"] if z["prog"] is not None else 0.0),
+        z["dist_pct"] if z["dist_pct"] is not None else float("inf"),
+        z["sym"]))
     closed, pnl = closed_trades()
     return {"now": time.time(),
             "state_age_s": scan_age_s(state, mtime),
