@@ -37,6 +37,7 @@ import json
 import os
 import sys
 import time
+import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -57,8 +58,12 @@ DEXES = [""]                       # fallback when dex discovery fails
 COMMODITY_TICKERS = ("XAU", "GOLD", "XAG", "SILVER", "XPT", "PLAT",
                      "XPD", "PALLAD", "CL", "OIL", "WTI", "BRENT",
                      "NG", "NATGAS", "HG", "COPPER")
+STOCK_DEXES = ("xyz",)             # TradeXYZ equities venue
 MIN_DAY_VOLUME_USD = 5_000_000     # crypto floor, 24h notional
 COMMODITY_MIN_VOLUME_USD = 5_000_000
+STOCK_MIN_VOLUME_USD = 5_000_000
+SESSIONS = {"stock": (9, 30, 10, 30)}   # equities use their cash-session
+                                        # opening range, not a 4h candle
 ONLY = []                          # trade ONLY these symbols ([] = whole universe)
 EXCLUDE = ["PUMP"]                 # never trade these (matches the base name
                                    # on any venue)
@@ -133,6 +138,11 @@ LOOKBACK = {"5m": 300, "15m": 400, "30m": 400, "1h": 500, "4h": 300}
 
 REQUEST_TIMEOUT_S = 8              # fail fast: a throttled API must not burn 20s
 FETCH_DELAY_S = 0.12
+RETRY_ON_429 = 2                   # retries when the API throttles or 5xxs
+RETRY_BACKOFF_S = 0.8              # doubles each attempt
+DISCOVERY_TTL_S = 1800             # the tradable universe barely moves
+                                   # intraday, so re-listing venues and
+                                   # markets every 5 min is pure API burn
 RUN_BUDGET_S = 480                 # hard per-run budget; the rest resume next
                                    # run via a rotating cursor
 REPLAY_CANDLES = 3                 # candles replayed per run (covers a run gap)
@@ -193,15 +203,27 @@ def write_run_summary():
 
 
 # --------------------------- data sources ----------------------------------
-def http_json(url, payload=None, timeout=None):
+def http_json(url, payload=None, timeout=None, retries=RETRY_ON_429):
+    """One HTTP call, retrying on throttling. A 429 that is simply swallowed
+    is the worst outcome: the caller then behaves as if the data does not
+    exist rather than as if it could not be reached."""
     timeout = timeout or REQUEST_TIMEOUT_S
     headers = {"Content-Type": "application/json",
                "User-Agent": "Mozilla/5.0 (range-agent/1.0)"}
     data = json.dumps(payload).encode() if payload is not None else None
     req = urllib.request.Request(url, data=data, headers=headers,
                                  method="POST" if payload is not None else "GET")
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read().decode())
+    for attempt in range(retries + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return json.loads(r.read().decode())
+        except urllib.error.HTTPError as e:
+            if e.code in (429, 500, 502, 503) and attempt < retries:
+                wait = RETRY_BACKOFF_S * (2 ** attempt)
+                log(f"HTTP {e.code} - backing off {wait:.1f}s and retrying")
+                time.sleep(wait)
+                continue
+            raise
 
 
 def fetch_hyperliquid(coin, interval, lookback):
@@ -327,15 +349,23 @@ def discover_assets():
             if base_name(name) in excluded:
                 continue
             if dex:
-                if not (is_commodity(name) and ADMIT_COMMODITIES) \
-                        or vol < COMMODITY_MIN_VOLUME_USD:
-                    continue                      # equities and unknown venue
-                    #                               classes are not scanned
-            elif vol < MIN_DAY_VOLUME_USD:
-                continue
+                if is_commodity(name):
+                    if not ADMIT_COMMODITIES or vol < COMMODITY_MIN_VOLUME_USD:
+                        continue
+                    cls = "commodity"
+                elif dex in STOCK_DEXES:
+                    if vol < STOCK_MIN_VOLUME_USD:
+                        continue
+                    cls = "stock"
+                else:
+                    continue                      # unknown venue class: skip
+            else:
+                if vol < MIN_DAY_VOLUME_USD:
+                    continue
+                cls = "crypto"
             coin = name if (":" in name or not dex) else f"{dex}:{name}"
             found.append({"symbol": coin, "hl_coin": coin, "vol": vol,
-                          "lev": u.get("maxLeverage"),
+                          "cls": cls, "lev": u.get("maxLeverage"),
                           "label": f"{base_name(name)}-PERP"
                                    + (f" ({dex})" if dex else ""),
                           "fallbacks": []})
@@ -347,17 +377,27 @@ def _not_excluded(a):
     return base_name(a["symbol"]) not in {base_name(x) for x in EXCLUDE}
 
 
+_UNIVERSE = {"t": 0.0, "assets": []}
+
+
 def active_assets():
     if ONLY:
         picked = [a for a in ASSETS if a["symbol"] in ONLY] or ASSETS[:1]
         return [a for a in picked if _not_excluded(a)]
     if not DISCOVER_ALL:
         return [a for a in ASSETS if _not_excluded(a)]
+    if _UNIVERSE["assets"] and \
+            time.time() - _UNIVERSE["t"] < DISCOVERY_TTL_S:
+        return _UNIVERSE["assets"]
     assets = discover_assets()
     if assets:
+        _UNIVERSE.update(t=time.time(), assets=assets)
         auto = sum(1 for a in assets if executable(a["symbol"]))
-        log(f"Discovered {len(assets)} markets: {auto} main-dex (auto-traded), "
-            f"{len(assets) - auto} builder-venue (alert only, placed by hand)")
+        n_com = sum(1 for a in assets if a.get("cls") == "commodity")
+        n_stk = sum(1 for a in assets if a.get("cls") == "stock")
+        log(f"Discovered {len(assets)} markets: {auto} main-dex crypto "
+            f"(auto-traded), {n_com} commodities + {n_stk} equities "
+            f"(alert only, placed by hand)")
         return assets
     log("Discovery returned nothing - falling back to the manual ASSETS list.")
     return ASSETS
@@ -412,15 +452,43 @@ def ny_dt(ms):
     return datetime.fromtimestamp(ms / 1000, NY_TZ)
 
 
-def window_ms(d):
-    """[start, end) epoch ms of the 4h CANDLE that opens the NY day on date
-    d: the first UTC-aligned 4h boundary at or after NY midnight, which is
-    00:00-04:00 NY under EDT and 03:00-07:00 NY under EST."""
+def window_ms(d, cls="crypto"):
+    """[start, end) epoch ms of the day's range window on NY date d.
+    Equities: the 09:30-10:30 cash-session opening range. Everything else:
+    the 4h CANDLE that opens the NY day, i.e. the first UTC-aligned 4h
+    boundary at or after NY midnight, which is 00:00-04:00 NY under EDT and
+    03:00-07:00 NY under EST."""
+    if cls == "stock":
+        h1, m1, h2, m2 = SESSIONS["stock"]
+        a = datetime(d.year, d.month, d.day, h1, m1, tzinfo=NY_TZ)
+        b = datetime(d.year, d.month, d.day, h2, m2, tzinfo=NY_TZ)
+        return int(a.timestamp() * 1000), int(b.timestamp() * 1000)
     midnight = int(datetime(d.year, d.month, d.day,
                             tzinfo=NY_TZ).timestamp() * 1000)
     step = MS["4h"]
     start = -(-midnight // step) * step          # first 4h boundary >= midnight
     return start, start + step
+
+
+def stock_open_range(candles, d):
+    """High/low of the TF candles inside the equities opening range on NY
+    date d. 09:30-10:30 is not a 4h candle, so it has to be built from the
+    execution-timeframe series. Returns (hi, lo, ready)."""
+    start, end = window_ms(d, "stock")
+    step = MS[TF]
+    hi = lo = None
+    count = 0
+    end_seen = False
+    for c in candles:
+        if start <= c["t"] and c["t"] + step <= end:
+            hi = c["h"] if hi is None else max(hi, c["h"])
+            lo = c["l"] if lo is None else min(lo, c["l"])
+            count += 1
+            if c["t"] + step == end:
+                end_seen = True
+    expected = max(1, (end - start) // step)
+    ready = end_seen and count >= expected - max(2, expected // 6)
+    return hi, lo, ready
 
 
 _R4_CACHE = {}
@@ -434,7 +502,7 @@ def range_4h(asset, d):
     key = (asset["symbol"], str(d))
     if key in _R4_CACHE:
         return _R4_CACHE[key]
-    start, end = window_ms(d)
+    start, end = window_ms(d, asset.get("cls", "crypto"))
     if now_ms() < end:
         return None, None, False           # the candle has not closed yet
     _, cs = fetch(asset, "4h", 2)
@@ -450,6 +518,13 @@ def range_4h(asset, d):
     log(f"{asset['symbol']}: no 4h candle opening {fmt_ts(start)} - "
         "no range today")
     return None, None, False
+
+
+def day_range(asset, candles, d):
+    """The day's range for this asset class. Returns (hi, lo, ready)."""
+    if asset.get("cls") == "stock":
+        return stock_open_range(candles, d)
+    return range_4h(asset, d)
 
 
 def nearest_key_level(candles, i, extreme, entry, long_):
@@ -482,11 +557,13 @@ def stage_message(asset, direction, level, t):
 
 def entry_message(asset, direction, plan, hi, lo, source, t, trigger):
     e = "\U0001F7E2" if direction == "LONG" else "\U0001F534"
-    s_ms, e_ms = window_ms(ny_dt(t).date())
+    cls = asset.get("cls", "crypto")
+    s_ms, e_ms = window_ms(ny_dt(t).date(), cls)
     win = f"NY {ny_dt(s_ms):%H:%M}-{ny_dt(e_ms):%H:%M}"
     return "\n".join([
         f"{e} <b>{direction} ENTRY \u00b7 {esc(asset['symbol'])}</b>",
-        f"<i>{esc(asset['label'])} \u00b7 {TF} \u00b7 first 4h candle "
+        f"<i>{esc(asset['label'])} \u00b7 {TF} \u00b7 "
+        f"{'opening range' if cls == 'stock' else 'first 4h candle'} "
         f"\u00b7 {esc(fmt_ts(t))}</i>",
         "",
         "\U0001F4CA <b>Setup</b>: "
@@ -923,12 +1000,12 @@ def process_candle(asset, ast, candles, a, i, source, rng_cache):
         ast["done"] = []
 
     if d not in rng_cache:
-        rng_cache[d] = range_4h(asset, d)
+        rng_cache[d] = day_range(asset, candles, d)
     hi, lo, ready = rng_cache[d]
 
     # step 1: the range candle must have FULLY closed, and this candle must
     # come after it
-    _, win_end = window_ms(d)
+    _, win_end = window_ms(d, asset.get("cls", "crypto"))
     if c["t"] + MS[TF] <= win_end or not ready or hi is None:
         return False
     if (hi - lo) < RANGE_MIN_ATR * atr_i:
@@ -1143,7 +1220,9 @@ def check_once():
                 continue
             if ast.get("trade") and sym not in scanned:
                 ghost = {"symbol": sym, "hl_coin": sym,
-                         "label": f"{sym}-PERP", "fallbacks": []}
+                         "label": f"{sym}-PERP", "fallbacks": [],
+                         "cls": ("commodity" if is_commodity(sym) else "stock")
+                         if ":" in sym else "crypto"}
                 try:
                     changed = check_asset(ghost, state) or changed
                     RUN_UNIVERSE[0] += 1   # it appends a RUN_STATUS row, so the
