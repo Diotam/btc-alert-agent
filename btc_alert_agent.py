@@ -61,7 +61,7 @@ COMMODITY_TICKERS = ("XAU", "GOLD", "XAG", "SILVER", "XPT", "PLAT",
 STOCK_DEXES = ("xyz",)             # TradeXYZ equities venue
 MIN_DAY_VOLUME_USD = 5_000_000     # crypto floor, 24h notional
 COMMODITY_MIN_VOLUME_USD = 5_000_000
-STOCK_MIN_VOLUME_USD = 5_000_000
+STOCK_MIN_VOLUME_USD = 15_000_000
 SESSIONS = {"stock": (9, 30, 10, 30)}   # equities use their cash-session
                                         # opening range, not a 4h candle
 ONLY = []                          # trade ONLY these symbols ([] = whole universe)
