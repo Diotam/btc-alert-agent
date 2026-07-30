@@ -82,8 +82,12 @@ def _btc_now(mids):
             "chg": ((px - prev) / prev * 100) if (px and prev) else None}
 
 
+MIDS_TTL_S = 3.0        # allMids is fetched once per venue, so the SSE tick
+                        # rate used to multiply straight into API calls
+
+
 def prices():
-    if time.time() - _price_cache["t"] < 0.8:
+    if time.time() - _price_cache["t"] < MIDS_TTL_S:
         return _price_cache["mids"]
     mids = {}
     try:
@@ -92,6 +96,7 @@ def prices():
         pass
     # every venue that appears in state (xyz, km, ...) gets its own call
     state, _ = read_state()
+    # venue list changes only when the universe does - no need to re-derive
     dexes = sorted({k.split(":")[0] for k in state
                     if isinstance(k, str) and ":" in k and not k.startswith("_")})
     for dex in dexes:
@@ -104,6 +109,7 @@ def prices():
     return _price_cache["mids"]
 
 
+SSE_TICK_S = 2.0        # how often the stream pushes a fresh snapshot
 BUILD = str(int(os.path.getmtime(__file__)))   # changes on every deploy
 
 
@@ -493,7 +499,7 @@ class Handler(BaseHTTPRequestHandler):
                     payload = json.dumps(build_data())
                     self.wfile.write(f"data: {payload}\n\n".encode())
                     self.wfile.flush()
-                    time.sleep(1)
+                    time.sleep(SSE_TICK_S)
             except (BrokenPipeError, ConnectionResetError, OSError):
                 return
         elif url.path == "/":
