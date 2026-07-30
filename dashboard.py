@@ -12,6 +12,7 @@ import os
 import subprocess
 import time
 import urllib.request
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
@@ -125,12 +126,12 @@ def journal_events(n=400, keep=25):
         if any(k in line for k in ("ALERT SENT", "ENTRY",
                                    "LIVE", "DRY RUN", "UNPROTECTED",
                                    "order blocked", "execution client",
-                                   "HA flip", "STRUCTURE BREAK", "retest",
-                                   "higher timeframes", "not armed",
-                                   "TP HIT", "HALF CLOSED", "RUNNER",
-                                   "STOPPED OUT", "breakeven", "trailing",
-                                   "expired", "dropped", "skipped",
-                                   "SUMMARY")):
+                                   "closed ABOVE", "closed BELOW",
+                                   "churning", "huge breakout",
+                                   "no 4h candle", "too tight",
+                                   "REPLACED", "day rolled over",
+                                   "TP HIT", "STOPPED OUT",
+                                   "skipped", "SUMMARY")):
             events.append(line.strip())
     return events[-keep:][::-1]
 
@@ -139,39 +140,17 @@ def closed_trades(keep=200):
     try:
         lines = TRADES_LOG.read_text().splitlines()[-2000:]
     except OSError:
-        return [], {"d": 0.0, "w": 0.0, "m": 0.0}
+        # must match the shape window() returns below, per period - returning
+        # bare floats here is what used to throw in the browser and show
+        # OFFLINE whenever trades.log was missing
+        empty = {"pnl": 0.0, "w": 0, "l": 0}
+        return [], {"d": dict(empty), "w": dict(empty), "m": dict(empty)}
     rows = []
     for ln in lines:
         try:
             rows.append(json.loads(ln))
         except json.JSONDecodeError:
             continue
-    # a runner books two ledger rows (TP_HALF then RUNNER/BE) - merge them
-    # into ONE closed trade so the list and the W/L counts see a single result
-    merged, index = [], {}
-    for r in rows:
-        key = (r.get("sym"), round(float(r.get("entry") or 0), 10))
-        if r.get("kind") == "TP_HALF":
-            m = dict(r)
-            m["kind"] = "TP"
-            m["parts"] = ["TP_HALF"]
-            merged.append(m)
-            index[key] = m
-            continue
-        if key in index and r.get("kind") in ("RUNNER", "BE", "TP", "STOP"):
-            m = index.pop(key)
-            add = r.get("pnl_pct", 0)
-            if (r.get("frac") or 1.0) >= 1.0:
-                add *= 0.5          # only half the position was still open
-            m["pnl_pct"] = round(m.get("pnl_pct", 0) + add, 3)
-            m["exit"] = r.get("exit")
-            m["t"] = r.get("t", m.get("t"))
-            m["parts"].append(r.get("kind"))
-            m["kind"] = "TP" if m["pnl_pct"] > 0 else "STOP"
-            continue
-        merged.append(dict(r))
-    rows = merged
-
     now_ms = time.time() * 1000
     def window(days):
         cut = now_ms - days * 86400_000
@@ -183,10 +162,29 @@ def closed_trades(keep=200):
     return rows[-keep:][::-1], pnl
 
 
+def _lvl(v):
+    """Level as a display string, tolerant of sub-dollar markets."""
+    if v is None:
+        return "?"
+    return f"{v:,.6f}".rstrip("0").rstrip(".") if v < 1 else f"{v:,.2f}"
+
+
+def scan_age_s(state, mtime):
+    """Seconds since the agent last completed a scan. Prefers the explicit
+    heartbeat the agent writes into _meta; falls back to the file mtime."""
+    last = (state.get("_meta") or {}).get("last_scan_utc")
+    if last:
+        try:
+            return int(time.time() - datetime.fromisoformat(last).timestamp())
+        except (ValueError, TypeError):
+            pass
+    return int(time.time() - mtime) if mtime else None
+
+
 def build_data():
     state, mtime = read_state()
     mids = prices()
-    trades, zones = [], []
+    trades, zones, vetoed = [], [], []
     scanned = 0
     for sym, ast in state.items():
         if sym.startswith("_") or not isinstance(ast, dict):
@@ -194,125 +192,63 @@ def build_data():
         scanned += 1
         mid = mids.get(sym)
         tr = ast.get("trade")
+        setup = ast.get("setup")
+        above = (setup or {}).get("side") == "above"
+        armed_dir = None
+        if setup:
+            armed_dir = "SHORT" if above else "LONG"
+
         if tr:
             sign = 1 if tr["verdict"] == "LONG" else -1
-            tp = tr.get("tp") or tr.get("tp2")
+            tp = tr.get("tp")
             risk = tr.get("risk0") or abs(tr["entry"] - tr["stop"]) or 1
             pnl = r_now = None
             if mid:
                 pnl = sign * (mid - tr["entry"]) / tr["entry"] * 100
                 r_now = sign * (mid - tr["entry"]) / risk
             trades.append({"sym": sym, "dir": tr["verdict"],
-                           "lev": ast.get("lev"),
-                           "half": bool(tr.get("half")),
-                           "risk": risk,
-                           "runner": bool(tr.get("runner")),
+                           "lev": ast.get("lev"), "risk": risk,
                            "entry": tr["entry"], "stop": tr["stop"],
                            "tp": tp, "mid": mid, "pnl": pnl, "r": r_now,
+                           "rr": tr.get("rr"),
+                           "armed": armed_dir if armed_dir != tr["verdict"]
+                           else None,
                            "opened_t": tr.get("opened_t", 0)})
-        w = ast.get("watch")
-        # a watch that has not been refreshed in an hour is stale - the symbol
-        # stopped qualifying, left the universe, or is no longer being scanned
-        if w and (time.time() * 1000 - (w.get("t") or 0)) > 3_600_000:
-            w = None
-        if w and ast.get("trade"):
-            w = None                      # a live trade takes the card instead
-        if w:
-            long_ = w.get("dir") == "LONG"
-            kind = w.get("kind", "setup")
-            zones.append({"sym": sym, "dir": w.get("dir"),
-                          "lev": ast.get("lev"),
-                          "stage": f"{kind} \u00b7 {w.get('note','')}",
-                          "mid": mid,
-                          "prog": float(w.get("prox", 40)),
-                          "step": 1, "of": 2,
-                          "names": [f"{kind} context", "trigger candle"]})
-        zz = ast.get("zone")
-        if zz and zz.get("stage"):
-            # multi-timeframe engine: flip -> structure break -> retest
-            long_ = zz.get("dir") == "LONG"
-            lvl = zz.get("level")
-            lvl_s = f"{lvl:,.6f}".rstrip("0").rstrip(".") if lvl and lvl < 1 \
-                else (f"{lvl:,.2f}" if lvl else "?")
-            stg = zz.get("stage")
-            step, prog, stage = {
-                "flip": (1, 20.0,
-                         f"HA flip approved \u00b7 needs a close "
-                         f"{'above' if long_ else 'below'} ${lvl_s}"),
-                "broken": (2, 55.0,
-                           f"structure broken at ${lvl_s} \u00b7 waiting for "
-                           "the retest"),
-                "retest": (3, 85.0,
-                           f"retesting ${lvl_s} \u00b7 waiting for the "
-                           f"{'green' if long_ else 'red'} confirmation candle"),
-            }.get(stg, (1, 20.0, stg))
-            zones.append({"sym": sym, "dir": zz.get("dir"),
-                          "lev": ast.get("lev"), "stage": stage,
-                          "mid": mid, "prog": prog, "step": step,
-                          "names": ["HA flip", "break", "retest + confirm"]})
-        elif zz:
-            long_ = zz.get("dir") == "LONG"
-            top, bot = zz.get("top"), zz.get("bot")
-            swing = zz.get("swing")
-            edge = top if long_ else bot
-            band = abs(edge - swing) if (edge is not None and swing) else None
-            # step 1: flipped, waiting for the pullback (fill 10-60% by how
-            # close price is)   step 2: pulled back, waiting for the candle
-            step = 2 if zz.get("touched") else 1
-            prog = 10.0
-            if step == 2:
-                prog = 80.0
-            elif mid and edge is not None and band:
-                gap = (mid - edge) if long_ else (edge - mid)
-                approach = max(0.0, min(1.0, 1 - gap / band))
-                prog = 10.0 + 50.0 * approach
-            lvl_s = f"{edge:,.6f}".rstrip("0").rstrip(".") if edge and edge < 1 \
-                else (f"{edge:,.2f}" if edge else "?")
-            stage = ("pulled back into the HA "
-                     + ("support" if long_ else "resistance")
-                     + " \u00b7 waiting for a "
-                     + ("green" if long_ else "red") + " candle") \
-                if zz.get("touched") else \
-                ("HA " + ("support" if long_ else "resistance")
-                 + " armed \u00b7 waiting for the pullback")
-            zones.append({"sym": sym, "dir": zz.get("dir"),
-                          "lev": ast.get("lev"),
-                          "stage": f"${lvl_s} \u00b7 {stage}",
-                          "mid": mid, "prog": prog, "step": step})
-        z = ast.get("setup")
-        if z:
-            lvl = z.get("level")
-            lvl_s = f"{lvl:,.6f}".rstrip("0").rstrip(".") if lvl and lvl < 1 \
-                else (f"{lvl:,.2f}" if lvl else "?")
-            phase = z.get("note") or ("retesting" if z.get("touched")
-                                      else "waiting for retest")
-            # progress from the excursion extreme back to the entry trigger
-            # (the range edge): 0% = at the extreme, 100% = at the level
+
+        # an armed breakout: price has CLOSED outside the range and the agent
+        # is waiting for a close back inside. The bar fills as price travels
+        # from the excursion extreme back toward the level it broke.
+        if setup and not tr:
+            lvl = setup.get("level")
+            ext = setup.get("extreme")
             prog = None
-            ext = z.get("ext")
             if mid and lvl is not None and ext is not None and ext != lvl:
-                if z.get("side") == "HIGH":
-                    prog = (ext - mid) / (ext - lvl) * 100
-                else:
-                    prog = (mid - ext) / (lvl - ext) * 100
+                prog = ((ext - mid) / (ext - lvl) if above
+                        else (mid - ext) / (lvl - ext)) * 100
                 prog = max(0.0, min(100.0, prog))
-            zones.append({"sym": sym, "dir": z["direction"],
+            zones.append({"sym": sym, "dir": armed_dir,
                           "lev": ast.get("lev"),
-                          "stage": f"${lvl_s} \u00b7 {phase}",
+                          "level": lvl, "extreme": ext,
+                          "crossings": setup.get("crossings"),
+                          "stage": f"closed {'above' if above else 'below'} "
+                                   f"${_lvl(lvl)} \u00b7 waiting for a close "
+                                   "back inside",
                           "mid": mid, "prog": prog})
+
+        # levels the churn veto is currently refusing to arm on
+        for side, n in (ast.get("churn") or {}).items():
+            vetoed.append({"sym": sym,
+                           "dir": "SHORT" if side == "above" else "LONG",
+                           "side": side, "n": n})
+
     trades.sort(key=lambda t: t["sym"])
     zones.sort(key=lambda z: z["sym"])
+    vetoed.sort(key=lambda v: v["sym"])
     closed, pnl = closed_trades()
-    # a booked half is realised P&L, but while its runner is still open the
-    # position is not finished - keep it out of the closed LIST (it stays in
-    # the totals) so the same trade is not shown as open and closed at once
-    live = {t["sym"] for t in trades}
-    closed = [c for c in closed
-              if not (c.get("parts") == ["TP_HALF"] and c["sym"] in live)]
     return {"now": time.time(),
-            "state_age_s": int(time.time() - mtime) if mtime else None,
+            "state_age_s": scan_age_s(state, mtime),
             "scanned": scanned, "trades": trades, "zones": zones,
-            "closed": closed, "pnl": pnl, "build": BUILD,
+            "vetoed": vetoed, "closed": closed, "pnl": pnl, "build": BUILD,
             "btc": _btc_now(mids),
             "events": journal_events()}
 
@@ -436,20 +372,19 @@ function render(d){
    // updating even if price wanders back through the level
    const fkey=`${t.sym}:${t.opened_t}`;
    window.__froz=window.__froz||{};
-   if(!t.half&&t.r!=null&&t.r>=RRT)window.__froz[fkey]='tp';
+   if(t.r!=null&&t.r>=RRT)window.__froz[fkey]='tp';
    if(t.r!=null&&t.r<=-1)window.__froz[fkey]='sl';
    const tpDone=window.__froz[fkey]==='tp', slDone=window.__froz[fkey]==='sl';
    const showR=tpDone?RRT:slDone?-1:t.r;
    const showPnl=tpDone?sgn*(t.tp-t.entry)/t.entry*100
      :slDone?sgn*(t.stop-t.entry)/t.entry*100:t.pnl;
-   const badge=t.half?'<span class="badge ok">half booked · runner</span>'
-     :tpDone?'<span class="badge ok">TP hit · closing</span>'
-     :slDone?'<span class="badge warn">stop hit · closing</span>':'';
+   const badge=tpDone?'<span class="badge ok">TP hit · closing</span>'
+     :slDone?'<span class="badge warn">stop hit · closing</span>'
+     :t.armed?`<span class="badge warn">${t.armed} armed · would override</span>`:'';
    // one scale: stop = 0%, entry = 40%, TP = 100% - the fill IS closeness to TP
    const rp=showR==null?0:Math.max(0,Math.min(100,(showR+1)/(1+RRT)*100));
    const rc=showR==null?'#8b949e':showR>=0?'#3fb950':'#f85149';
-   const rlbl=showR==null?'':t.half
-     ?`${showR.toFixed(2)}R · half booked, stop at entry - trails ${t.dir==='LONG'?'under each higher low':'above each lower high'}`
+   const rlbl=showR==null?''
      :tpDone?'TP reached - waiting for the close confirmation'
      :slDone?'Stop traded - waiting for the close confirmation'
      :showR>=0
@@ -465,35 +400,33 @@ function render(d){
     <div class=bar><div class=fill style="width:${rp}%;background:${rc}"></div></div>
     <div class=muted>${rlbl}</div></div>`
   }).join(''):'<div class="card muted">none</div>';
-  document.getElementById('zones').innerHTML=d.zones.length?d.zones.map(z=>{
+  const zcards=d.zones.map(z=>{
    const cls=z.dir==='LONG'?'long':'short';
-   const names=z.names||['HA flip','pullback','confirm candle'];
-   const st=z.step||1;
-   const chips=names.map((s,n)=>{
-     const done=st>n+1, cur=st===n+1;
-     const col=done?'#3fb950':(cur?'#58a6ff':'#484f58');
-     return `<span style="color:${col}">${done?'✓':(cur?'▸':'·')} ${s}</span>`;
-   }).join(' <span style="color:#30363d">→</span> ');
-   const pbar=z.prog==null?`<div class=muted style="margin-top:6px">${chips}</div>`
+   const chip=z.crossings!=null?` <span class=muted style="font-size:10.5px">crossed ${z.crossings}x</span>`:'';
+   const pbar=z.prog==null?''
     :`<div class=bar><div class=fill style="width:${z.prog}%;background:#58a6ff"></div></div>
-      <div class=muted>step ${st} of ${z.of||3} &nbsp; ${chips}</div>`;
+      <div class=muted>${Math.round(z.prog)}% back from the extreme ($${px(z.extreme)}) to the level</div>`;
    return `<div class=card><div class=row>
-    <span class=sym>${z.sym} <span class=${cls}>${z.dir}</span>${z.lev?` <span class=lev>${z.lev}x</span>`:''}</span>
+    <span class=sym>${z.sym} <span class=${cls}>${z.dir}</span>${z.lev?` <span class=lev>${z.lev}x</span>`:''}${chip}</span>
     <span class=muted>now <span class=num>$${px(z.mid)}</span></span></div>
     <div class=row><span class=muted>${z.stage}</span></div>${pbar}</div>`
-  }).join(''):'<div class="card muted">none</div>';
+  });
+  const vcards=(d.vetoed||[]).map(v=>`<div class=card><div class=row>
+    <span class=sym>${v.sym} <span class=muted style="font-weight:400">${v.dir} vetoed</span></span>
+    <span class=muted>level crossed <span class=num>${v.n}x</span> - churning</span></div></div>`);
+  document.getElementById('zones').innerHTML=
+   (zcards.concat(vcards).join(''))||'<div class="card muted">none</div>';
   document.getElementById('csub').textContent=LABEL[PERIOD];
   const cut=Date.now()-DAYS[PERIOD]*86400000;
   const shown=d.closed.filter(c=>c.t>=cut).slice(0,20);
-  const icons={TP:'✅',TP2:'✅',STOP:'❌',RUNNER:'🏃'};
+  const icons={TP:'✅',STOP:'❌',OVERRIDE:'🔄'};
   // OVERRIDE closes have no fixed outcome - the P&L decides the icon
   const iconFor=c=>icons[c.kind]||(c.pnl_pct>=0?'✅':'❌');
   document.getElementById('closed').innerHTML=shown.length?shown.map(c=>{
-   const partLbl=(c.parts&&c.parts.length>1)?' <span class=muted style="font-size:10.5px">half + runner</span>':'';
    const cls=c.dir==='LONG'?'long':'short';
    const when=new Date(c.t).toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
    return `<div class=card><div class=row>
-    <span class=sym>${iconFor(c)} ${c.sym} <span class=${cls}>${c.dir}</span>${partLbl}
+    <span class=sym>${iconFor(c)} ${c.sym} <span class=${cls}>${c.dir}</span>
     <span class=muted style="font-weight:400">${c.kind}</span></span>
     <span class="num ${c.pnl_pct>=0?'pnl-pos':'pnl-neg'}">${(c.pnl_pct>=0?'+':'')+c.pnl_pct.toFixed(2)}%</span></div>
     <div class=row><span class=muted>$${px(c.entry)} → $${px(c.exit)}</span>
@@ -502,7 +435,7 @@ function render(d){
   document.getElementById('events').innerHTML=
    d.events.map(e=>`<div class=event>${e.replace(/</g,'&lt;')}</div>`).join('')||'<div class="card muted">none</div>';
   document.getElementById('n-trades').textContent=d.trades.length;
-  document.getElementById('n-zones').textContent=d.zones.length;
+  document.getElementById('n-zones').textContent=d.zones.length+(d.vetoed||[]).length;
   document.getElementById('n-closed').textContent=shown.length;
   document.getElementById('n-events').textContent=d.events.length;
   applyCollapse();
