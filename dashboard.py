@@ -127,7 +127,7 @@ def journal_events(n=400, keep=25):
                                    "LIVE", "DRY RUN", "UNPROTECTED",
                                    "order blocked", "execution client",
                                    "closed ABOVE", "closed BELOW",
-                                   "churning", "huge breakout",
+                                   "huge breakout",
                                    "no 4h candle", "too tight",
                                    "REPLACED", "day rolled over",
                                    "TP HIT", "STOPPED OUT",
@@ -184,7 +184,7 @@ def scan_age_s(state, mtime):
 def build_data():
     state, mtime = read_state()
     mids = prices()
-    trades, zones, vetoed = [], [], []
+    trades, zones = [], []
     scanned = 0
     for sym, ast in state.items():
         if sym.startswith("_") or not isinstance(ast, dict):
@@ -229,26 +229,18 @@ def build_data():
             zones.append({"sym": sym, "dir": armed_dir,
                           "lev": ast.get("lev"),
                           "level": lvl, "extreme": ext,
-                          "crossings": setup.get("crossings"),
                           "stage": f"closed {'above' if above else 'below'} "
                                    f"${_lvl(lvl)} \u00b7 waiting for a close "
                                    "back inside",
                           "mid": mid, "prog": prog})
 
-        # levels the churn veto is currently refusing to arm on
-        for side, n in (ast.get("churn") or {}).items():
-            vetoed.append({"sym": sym,
-                           "dir": "SHORT" if side == "above" else "LONG",
-                           "side": side, "n": n})
-
     trades.sort(key=lambda t: t["sym"])
     zones.sort(key=lambda z: z["sym"])
-    vetoed.sort(key=lambda v: v["sym"])
     closed, pnl = closed_trades()
     return {"now": time.time(),
             "state_age_s": scan_age_s(state, mtime),
             "scanned": scanned, "trades": trades, "zones": zones,
-            "vetoed": vetoed, "closed": closed, "pnl": pnl, "build": BUILD,
+            "closed": closed, "pnl": pnl, "build": BUILD,
             "btc": _btc_now(mids),
             "events": journal_events()}
 
@@ -400,22 +392,16 @@ function render(d){
     <div class=bar><div class=fill style="width:${rp}%;background:${rc}"></div></div>
     <div class=muted>${rlbl}</div></div>`
   }).join(''):'<div class="card muted">none</div>';
-  const zcards=d.zones.map(z=>{
+  document.getElementById('zones').innerHTML=d.zones.length?d.zones.map(z=>{
    const cls=z.dir==='LONG'?'long':'short';
-   const chip=z.crossings!=null?` <span class=muted style="font-size:10.5px">crossed ${z.crossings}x</span>`:'';
    const pbar=z.prog==null?''
     :`<div class=bar><div class=fill style="width:${z.prog}%;background:#58a6ff"></div></div>
       <div class=muted>${Math.round(z.prog)}% back from the extreme ($${px(z.extreme)}) to the level</div>`;
    return `<div class=card><div class=row>
-    <span class=sym>${z.sym} <span class=${cls}>${z.dir}</span>${z.lev?` <span class=lev>${z.lev}x</span>`:''}${chip}</span>
+    <span class=sym>${z.sym} <span class=${cls}>${z.dir}</span>${z.lev?` <span class=lev>${z.lev}x</span>`:''}</span>
     <span class=muted>now <span class=num>$${px(z.mid)}</span></span></div>
     <div class=row><span class=muted>${z.stage}</span></div>${pbar}</div>`
-  });
-  const vcards=(d.vetoed||[]).map(v=>`<div class=card><div class=row>
-    <span class=sym>${v.sym} <span class=muted style="font-weight:400">${v.dir} vetoed</span></span>
-    <span class=muted>level crossed <span class=num>${v.n}x</span> - churning</span></div></div>`);
-  document.getElementById('zones').innerHTML=
-   (zcards.concat(vcards).join(''))||'<div class="card muted">none</div>';
+  }).join(''):'<div class="card muted">none</div>';
   document.getElementById('csub').textContent=LABEL[PERIOD];
   const cut=Date.now()-DAYS[PERIOD]*86400000;
   const shown=d.closed.filter(c=>c.t>=cut).slice(0,20);
@@ -435,7 +421,7 @@ function render(d){
   document.getElementById('events').innerHTML=
    d.events.map(e=>`<div class=event>${e.replace(/</g,'&lt;')}</div>`).join('')||'<div class="card muted">none</div>';
   document.getElementById('n-trades').textContent=d.trades.length;
-  document.getElementById('n-zones').textContent=d.zones.length+(d.vetoed||[]).length;
+  document.getElementById('n-zones').textContent=d.zones.length;
   document.getElementById('n-closed').textContent=shown.length;
   document.getElementById('n-events').textContent=d.events.length;
   applyCollapse();
