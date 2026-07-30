@@ -96,10 +96,13 @@ ALERT_LIFECYCLE = True             # TP / stop / override alerts
 
 # --- execution ------------------------------------------------------------
 EXEC_LIVE = True                   # place real orders
-EXEC_DRY_RUN = True                # also log intended orders to orders.log
+EXEC_LOG_ORDERS = True             # write every sized order to orders.log.
+                                   # This is an audit trail only - it has never
+                                   # gated execution. EXEC_LIVE alone decides
+                                   # whether real orders are sent
 EXEC_TESTNET = False               # False = MAINNET, real money
 EXEC_HALT_FILE = "/opt/btc-agent/EXEC_HALT"   # touch this to stop new entries
-EXEC_RISK_USD = 20.0               # fixed dollar risk per trade
+EXEC_RISK_USD = 2.0                # fixed dollar risk per trade
 EXEC_MAX_NOTIONAL_USD = 2500       # cap on position value
 EXEC_MAX_POSITIONS = 3             # concurrent live positions
 EXEC_DAILY_LOSS_LIMIT_USD = 40.0   # INERT: needs realised USD from the ledger,
@@ -672,7 +675,8 @@ def exec_client():
         except Exception as e:
             _EXEC["err"] = f"{type(e).__name__}: {e}"
     if _EXEC["err"]:
-        log(f"execution client unavailable ({_EXEC['err']}) - dry run only")
+        log(f"execution client unavailable ({_EXEC['err']}) - "
+            "alerts and order logging only, nothing will be sent")
     return _EXEC["ex"]
 
 
@@ -707,7 +711,7 @@ def exec_blocked(open_count, day_pnl_usd):
 
 def plan_entry_orders(asset, trade):
     """Size the trade by fixed dollar risk and describe the orders. Logged
-    to orders.log when EXEC_DRY_RUN. Returns the plan, or None."""
+    to orders.log. Returns the plan, or None."""
     sym = asset["symbol"]
     entry, stop, tp = trade["entry"], trade["stop"], trade["tp"]
     long_ = trade["verdict"] == "LONG"
@@ -722,7 +726,7 @@ def plan_entry_orders(asset, trade):
         notional = EXEC_MAX_NOTIONAL_USD
         capped = f" [notional capped, risk now ${size * per_unit:.2f}]"
     rec = {"t": now_ms(), "sym": sym,
-           "mode": "dry-run" if EXEC_DRY_RUN else "sized",
+           "mode": "live" if EXEC_LIVE else "sim",
            "event": "ENTRY", "side": "buy" if long_ else "sell",
            "size": round(size, 8), "entry": entry, "stop": stop, "tp": tp,
            "notional_usd": round(notional, 2),
@@ -735,9 +739,9 @@ def plan_entry_orders(asset, trade):
                 "trigger": stop, "size": round(size, 8)},
                {"kind": "tp", "type": "limit", "reduce_only": True,
                 "price": tp, "size": round(size, 8)}]}
-    if EXEC_DRY_RUN:
+    if EXEC_LOG_ORDERS:
         log_order(rec)
-        log(f"{sym}: DRY RUN - {rec['side']} {size:.6g} @ ${fmt_px(entry)} = "
+        log(f"{sym}: SIZED - {rec['side']} {size:.6g} @ ${fmt_px(entry)} = "
             f"${notional:,.0f} notional, ${rec['risk_usd']:.2f} risk "
             f"({rec['stop_pct']}% stop); stop ${fmt_px(stop)}, "
             f"TP ${fmt_px(tp)}{capped}")
@@ -745,7 +749,7 @@ def plan_entry_orders(asset, trade):
 
 
 def plan_manage_orders(asset, event, price):
-    if not EXEC_DRY_RUN:
+    if not EXEC_LOG_ORDERS:
         return
     action = {"STOP": "stop filled - flat",
               "TP": "target filled - flat",
@@ -753,7 +757,8 @@ def plan_manage_orders(asset, event, price):
               }.get(event)
     if not action:
         return
-    log_order({"t": now_ms(), "sym": asset["symbol"], "mode": "dry-run",
+    log_order({"t": now_ms(), "sym": asset["symbol"],
+               "mode": "live" if EXEC_LIVE else "sim",
                "event": event, "price": price, "action": action})
 
 
