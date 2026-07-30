@@ -99,7 +99,7 @@ EXEC_LIVE = True                   # place real orders
 EXEC_DRY_RUN = True                # also log intended orders to orders.log
 EXEC_TESTNET = False               # False = MAINNET, real money
 EXEC_HALT_FILE = "/opt/btc-agent/EXEC_HALT"   # touch this to stop new entries
-EXEC_RISK_USD = 2.0                # fixed dollar risk per trade
+EXEC_RISK_USD = 20.0               # fixed dollar risk per trade
 EXEC_MAX_NOTIONAL_USD = 2500       # cap on position value
 EXEC_MAX_POSITIONS = 3             # concurrent live positions
 EXEC_DAILY_LOSS_LIMIT_USD = 40.0   # INERT: needs realised USD from the ledger,
