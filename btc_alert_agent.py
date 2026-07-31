@@ -79,7 +79,7 @@ ASSETS = [                         # used when DISCOVER_ALL = False, or when
 
 # --- strategy dials -------------------------------------------------------
 TF = "15m"                         # the spec is 15m closes
-SCAN_EVERY = "15m"                 # how often the loop wakes. Aligning it to
+SCAN_EVERY = "5m"                  # how often the loop wakes. Aligning it to
                                    # TF means one scan per candle. A shorter
                                    # pulse costs API calls but reacts sooner:
                                    # symbols with no open trade are skipped
@@ -1312,6 +1312,7 @@ def check_once():
         # dashboard's liveness heartbeat
         state["_meta"] = dict(state.get("_meta") or {},
                               cursor=new_cursor,
+                              scan_every_s=MS[SCAN_EVERY] // 1000,
                               last_scan_utc=datetime.now(timezone.utc)
                               .isoformat(timespec="seconds"))
         save_state(state)
