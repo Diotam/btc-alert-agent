@@ -233,7 +233,8 @@ def build_data():
                 if width:
                     prog = max(0.0, min(100.0, (1 - dist / width) * 100))
             if setup.get("touched"):
-                stage = "pulled back \u00b7 waiting for a confirming candle"
+                stage = ("pulled back \u00b7 zone locked \u00b7 "
+                         "waiting for a confirming candle")
             elif setup.get("departed"):
                 stage = "left the zone \u00b7 waiting for the pullback"
             else:
