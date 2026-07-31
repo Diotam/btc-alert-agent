@@ -360,7 +360,20 @@ function tvSym(sym){
   return encodeURIComponent('HYPERLIQUID:'+sym.toUpperCase()+'USDC.P');
 }
 function tvOpen(sym){
-  window.open(TVBASE+tvSym(sym)+'&interval='+TVINT,'_blank','noopener');
+  // A NAMED window, so clicking a second card reuses the same popup instead
+  // of stacking tabs. TradingView cannot be put in an iframe on the page
+  // itself - the chart sets frame-busting headers, which is why their embed
+  // widgets exist - and the widget cannot load a Pine script like Smoothed
+  // Heiken Ashi. A popup is the closest thing that keeps your indicator.
+  const w=Math.min(1400, Math.round(screen.availWidth*0.72));
+  const h=Math.min(900,  Math.round(screen.availHeight*0.8));
+  const l=Math.round((screen.availWidth-w)/2);
+  const t=Math.round((screen.availHeight-h)/2);
+  const win=window.open(TVBASE+tvSym(sym)+'&interval='+TVINT, 'tvchart',
+    `popup=yes,width=${w},height=${h},left=${l},top=${t},` +
+    'toolbar=no,menubar=no,location=no,status=no');
+  if(win){ win.focus(); }
+  else { window.open(TVBASE+tvSym(sym)+'&interval='+TVINT,'_blank','noopener'); }
 }
 const KEY=new URLSearchParams(location.search).get('key')||'';
 let PERIOD='d', LAST=null;
