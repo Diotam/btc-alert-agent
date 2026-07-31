@@ -132,10 +132,10 @@ def journal_events(n=400, keep=25):
         if any(k in line for k in ("ALERT SENT", "ENTRY",
                                    "LIVE", "SIZED", "UNPROTECTED",
                                    "order blocked", "execution client",
-                                   "huge breakout",
-                                   "no 4h candle", "too tight",
-                                   "REPLACED", "day rolled over",
-                                   "TP HIT", "STOPPED OUT",
+                                   "smoothed HA flipped", "target hit",
+                                   "stop moved to entry", "too tight",
+                                   "HA flipped against", "setup cleared",
+                                   "TP_HALF", "RUNNER", "BE", "STOPPED OUT",
                                    "skipped", "SUMMARY")):
             events.append(line.strip())
     return events[-keep:][::-1]
@@ -198,10 +198,8 @@ def build_data():
         mid = mids.get(sym)
         tr = ast.get("trade")
         setup = ast.get("setup")
-        above = (setup or {}).get("side") == "above"
-        armed_dir = None
-        if setup:
-            armed_dir = "SHORT" if above else "LONG"
+        armed_dir = (setup or {}).get("dir")
+        long_ = armed_dir == "LONG"
 
         if tr:
             sign = 1 if tr["verdict"] == "LONG" else -1
@@ -212,46 +210,49 @@ def build_data():
                 pnl = sign * (mid - tr["entry"]) / tr["entry"] * 100
                 r_now = sign * (mid - tr["entry"]) / risk
             trades.append({"sym": sym, "dir": tr["verdict"],
+                           "half": bool(tr.get("half")),
+                           "left": tr.get("left", 1.0),
                            "lev": ast.get("lev"), "risk": risk,
                            "entry": tr["entry"], "stop": tr["stop"],
                            "tp": tp, "mid": mid, "pnl": pnl, "r": r_now,
                            "rr": tr.get("rr"),
-                           "armed": armed_dir if armed_dir != tr["verdict"]
-                           else None,
                            "opened_t": tr.get("opened_t", 0)})
 
-        # an armed breakout: price has CLOSED outside the range and the agent
-        # is waiting for a close back inside. dist_pct is how far price still
-        # is from the level it has to close back through; the bar fills as
-        # that gap closes, scaled against the width of the range itself so
-        # the reference never moves.
+        # an armed HA setup. Three states, in order: waiting for price to
+        # leave the zone, waiting for it to come back, then waiting for a
+        # confirming candle. dist_pct is how far price is from the zone edge
+        # it has to re-enter; the bar fills as that gap closes.
         if setup and not tr:
-            lvl = setup.get("level")
-            ext = setup.get("extreme")
-            width = None
-            if setup.get("hi") is not None and setup.get("lo") is not None:
-                width = setup["hi"] - setup["lo"]
+            zhi, zlo = setup.get("zhi"), setup.get("zlo")
+            edge = zhi if long_ else zlo
+            width = (zhi - zlo) if (zhi is not None and zlo is not None) else None
             dist = dist_pct = prog = None
-            if mid and lvl:
-                dist = mid - lvl if above else lvl - mid
+            if mid and edge:
+                dist = mid - edge if long_ else edge - mid
                 dist_pct = dist / mid * 100
                 if width:
                     prog = max(0.0, min(100.0, (1 - dist / width) * 100))
-            zones.append({"sym": sym, "dir": armed_dir,
-                          "lev": ast.get("lev"),
-                          "level": lvl, "extreme": ext,
+            if setup.get("touched"):
+                stage = "pulled back \u00b7 waiting for a confirming candle"
+            elif setup.get("departed"):
+                stage = "left the zone \u00b7 waiting for the pullback"
+            else:
+                stage = "flipped \u00b7 waiting for price to leave the zone"
+            zones.append({"sym": sym, "dir": armed_dir, "lev": ast.get("lev"),
+                          "zhi": zhi, "zlo": zlo, "stage": stage,
+                          "touched": bool(setup.get("touched")),
+                          "departed": bool(setup.get("departed")),
                           "dist": dist, "dist_pct": dist_pct,
-                          "stage": f"closed {'above' if above else 'below'} "
-                                   f"${_lvl(lvl)} \u00b7 waiting for a close "
-                                   "back inside",
                           "mid": mid, "prog": prog})
 
     trades.sort(key=lambda t: t["sym"])
     # closest to triggering first: fullest bar at the top. Rebuilt on every
     # SSE tick, so the order re-shuffles live as prices move. Cards with no
     # bar (older state without hi/lo) sink to the bottom.
+    # nearest to firing first: confirmed pullbacks, then departures, then
+    # the fullest bar within each
     zones.sort(key=lambda z: (
-        z["prog"] is None,
+        not z["touched"], not z["departed"], z["prog"] is None,
         -(z["prog"] if z["prog"] is not None else 0.0),
         z["dist_pct"] if z["dist_pct"] is not None else float("inf"),
         z["sym"]))
@@ -389,9 +390,9 @@ function render(d){
    const showR=tpDone?RRT:slDone?-1:t.r;
    const showPnl=tpDone?sgn*(t.tp-t.entry)/t.entry*100
      :slDone?sgn*(t.stop-t.entry)/t.entry*100:t.pnl;
-   const badge=tpDone?'<span class="badge ok">TP hit · closing</span>'
-     :slDone?'<span class="badge warn">stop hit · closing</span>'
-     :t.armed?`<span class="badge warn">${t.armed} armed · would override</span>`:'';
+   const badge=t.half?`<span class="badge ok">${Math.round(t.left*100)}% running · stop at entry</span>`
+     :tpDone?'<span class="badge ok">target hit · booking half</span>'
+     :slDone?'<span class="badge warn">stop hit · closing</span>':'';
    // one scale: stop = 0%, entry = 40%, TP = 100% - the fill IS closeness to TP
    const rp=showR==null?0:Math.max(0,Math.min(100,(showR+1)/(1+RRT)*100));
    const rc=showR==null?'#8b949e':showR>=0?'#3fb950':'#f85149';
@@ -414,9 +415,10 @@ function render(d){
   document.getElementById('zones').innerHTML=d.zones.length?d.zones.map(z=>{
    const cls=z.dir==='LONG'?'long':'short';
    const near=z.dist_pct!=null&&z.dist_pct<=0;
+   const edge=z.dir==='LONG'?z.zhi:z.zlo;
    const gap=z.dist_pct==null?''
-    :near?`back inside the range - entry triggers on this candle's close`
-    :`<span class=num>${z.dist_pct.toFixed(2)}%</span> from the range ${z.dir==='SHORT'?'high':'low'} ($${px(z.level)})`;
+    :near?`inside the HA zone ($${px(z.zlo)} - $${px(z.zhi)})`
+    :`<span class=num>${z.dist_pct.toFixed(2)}%</span> from the HA zone ($${px(edge)})`;
    const pbar=z.prog==null?(gap?`<div class=muted style="margin-top:6px">${gap}</div>`:'')
     :`<div class=bar><div class=fill style="width:${z.prog}%;background:${near?'#3fb950':'#58a6ff'}"></div></div>
       <div class=muted>${gap}</div>`;
@@ -428,14 +430,14 @@ function render(d){
   document.getElementById('csub').textContent=LABEL[PERIOD];
   const cut=Date.now()-DAYS[PERIOD]*86400000;
   const shown=d.closed.filter(c=>c.t>=cut).slice(0,20);
-  const icons={TP:'✅',STOP:'❌',OVERRIDE:'🔄'};
-  // OVERRIDE closes have no fixed outcome - the P&L decides the icon
+  const icons={TP_HALF:'🎯',RUNNER:'✅',BE:'➡️',STOP:'❌',TP:'✅'};
+  // RUNNER and BE outcomes vary, so the P&L decides when there is no icon
   const iconFor=c=>icons[c.kind]||(c.pnl_pct>=0?'✅':'❌');
   document.getElementById('closed').innerHTML=shown.length?shown.map(c=>{
    const cls=c.dir==='LONG'?'long':'short';
    const when=new Date(c.t).toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
    return `<div class=card><div class=row>
-    <span class=sym>${iconFor(c)} ${c.sym} <span class=${cls}>${c.dir}</span>
+    <span class=sym>${iconFor(c)} ${c.sym} <span class=${cls}>${c.dir}</span>${c.frac&&c.frac<1?` <span class=muted style="font-size:10.5px">${Math.round(c.frac*100)}%</span>`:''}
     <span class=muted style="font-weight:400">${c.kind}</span></span>
     <span class="num ${c.pnl_pct>=0?'pnl-pos':'pnl-neg'}">${(c.pnl_pct>=0?'+':'')+c.pnl_pct.toFixed(2)}%</span></div>
     <div class=row><span class=muted>$${px(c.entry)} → $${px(c.exit)}</span>
