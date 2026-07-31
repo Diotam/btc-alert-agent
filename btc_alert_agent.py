@@ -827,6 +827,16 @@ def rebase_to_fill(sym, trade, fill, long_):
             f"under the {MIN_STOP_PCT}% floor")
 
 
+def fill_size(resp):
+    """How much of a market order ACTUALLY filled. A slippage-bounded IOC on
+    a thin book fills partially, and every protective order has to be sized
+    against the real position, not the requested one."""
+    try:
+        return float(resp["response"]["data"]["statuses"][0]["filled"]["totalSz"])
+    except (KeyError, IndexError, TypeError, ValueError):
+        return None
+
+
 def order_oid(resp):
     """The exchange id of a resting order, so it can be cancelled later."""
     try:
@@ -907,6 +917,14 @@ def place_entry_live(asset, trade, plan):
     try:
         r = ex.market_open(sym, long_, size)
         log(f"{sym}: LIVE entry sent {r}")
+        got = fill_size(r)
+        if got is not None and abs(got - size) > 10 ** -dec:
+            log(f"{sym}: PARTIAL FILL - asked {size}, filled {got} "
+                f"({got / size:.0%}); protective orders sized to the fill")
+            size = got
+        if not size:
+            log(f"{sym}: nothing filled - no position to protect")
+            return None
         rebase_to_fill(sym, trade, fill_price(r), long_)
     except Exception as e:
         log(f"{sym}: LIVE entry FAILED {type(e).__name__}: {e}")
@@ -917,6 +935,9 @@ def place_entry_live(asset, trade, plan):
             pass
         return None
     trade["size"] = size
+    per_unit = abs(trade["entry"] - trade["stop"])
+    log(f"{sym}: position {size} units, real risk "
+        f"${size * per_unit:.2f} (planned ${EXEC_RISK_USD:.2f})")
     try:
         r_stop = ex.order(sym, not long_, size, round_px(trade["stop"]),
                           {"trigger": {"triggerPx": round_px(trade["stop"]),
