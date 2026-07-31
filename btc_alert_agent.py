@@ -79,11 +79,26 @@ ASSETS = [                         # used when DISCOVER_ALL = False, or when
 
 # --- strategy dials -------------------------------------------------------
 TF = "15m"                         # the spec is 15m closes
+SCAN_EVERY = "15m"                 # how often the loop wakes. Aligning it to
+                                   # TF means one scan per candle. A shorter
+                                   # pulse costs API calls but reacts sooner:
+                                   # symbols with no open trade are skipped
+                                   # until their candle closes either way, so
+                                   # the extra scans only ever serve OPEN
+                                   # trades - intrabar stop/target detection
+                                   # and moving the stop to entry after the
+                                   # partial fills
 HA_SMOOTH_IN = 5                   # EMA applied to OHLC before building HA
 HA_SMOOTH_OUT = 5                  # EMA applied to the HA output
 HA_TREND_RUN = 3                   # bodies that must expand, then shrink
-HA_SETUP_MAX_CANDLES = 20          # a zone that never gets a pullback expires
-                                   # after this many candles
+HA_ZONE_CANDLES = 3                # the zone is the last N flipped HA candles
+                                   # - the band RIDES UP with the trend, so a
+                                   # pullback hours later still gets a stop
+                                   # just under the band rather than one back
+                                   # at the flip
+HA_SETUP_MAX_CANDLES = 0           # 0 = a setup never times out. It ends when
+                                   # the HA flips back, however long that takes
+                                   # - a trend can be held for days
 HA_RR = 1.5                        # first target = 1.5x the stop distance
 HA_PARTIAL = 0.5                   # fraction booked there; the stop then moves
                                    # to entry and the remainder is held until
@@ -121,9 +136,12 @@ MS = {"5m": 300_000, "15m": 900_000, "30m": 1_800_000, "1h": 3_600_000,
 _TF_ALIASES = {"5min": "5m", "15min": "15m", "30min": "30m",
                "60m": "1h", "60min": "1h", "1hr": "1h"}
 TF = _TF_ALIASES.get(TF.strip().lower(), TF.strip().lower())
-if TF not in MS:
-    raise SystemExit(f"CONFIG ERROR: TF={TF!r} is not a known timeframe - "
-                     f"use one of {sorted(MS)}")
+SCAN_EVERY = _TF_ALIASES.get(SCAN_EVERY.strip().lower(),
+                             SCAN_EVERY.strip().lower())
+for _n, _v in (("TF", TF), ("SCAN_EVERY", SCAN_EVERY)):
+    if _v not in MS:
+        raise SystemExit(f"CONFIG ERROR: {_n}={_v!r} is not a known "
+                         f"timeframe - use one of {sorted(MS)}")
 
 # the fetcher ignores the caller's count and uses this map - a value that is
 # too small silently starves whatever depends on that interval
@@ -447,9 +465,10 @@ def _strictly(bodies, growing):
 
 
 def ha_setup(ha, i, want_long):
-    """Look back from HA candle i for a completed pattern: HA_TREND_RUN
-    bodies expanding in the trend direction, then HA_TREND_RUN shrinking,
-    then a colour flip. Returns the index the flip run starts at, or None.
+    """Look back from HA candle i for a completed pattern: somewhere in the
+    trend run, HA_TREND_RUN bodies expanding; then HA_TREND_RUN shrinking
+    bodies immediately before a colour flip. Returns the index the flip run
+    starts at, or None.
 
     The zone itself is built by the caller, because it stops growing the
     moment the pullback lands."""
@@ -460,16 +479,28 @@ def ha_setup(ha, i, want_long):
     f += 1                                   # first candle of the flip run
     if f > i or f == 0:
         return None
-    if i - f + 1 > HA_SETUP_MAX_CANDLES:
+    if HA_SETUP_MAX_CANDLES and i - f + 1 > HA_SETUP_MAX_CANDLES:
         return None                          # armed too long ago
-    j = f - 1                                # last candle of the old trend
-    if j - 2 * n + 1 < 0:
+    # the whole trend run before the flip, however long it is
+    j = f - 1
+    r = j
+    while r >= 0 and ha_green(ha[r]) != want_long:
+        r -= 1
+    r += 1
+    run = ha[r:j + 1]
+    if len(run) < 2 * n:
         return None
-    run = ha[j - 2 * n + 1:j + 1]
-    if any(ha_green(x) == want_long for x in run):
-        return None                          # the trend run must be one colour
     bodies = [ha_body(x) for x in run]
-    if not _strictly(bodies[:n], True) or not _strictly(bodies[n:], False):
+    # Exhaustion must sit immediately before the flip...
+    if not _strictly(bodies[-n:], False):
+        return None
+    # ...but the expansion can be ANYWHERE earlier in the same run. Smoothed
+    # HA tapers gradually, so the growing leg is rarely the three candles
+    # right before the shrinking one - demanding adjacency rejected every
+    # real trend tested (zero setups armed across four sustained trends,
+    # against 25-40 with this rule).
+    if not any(_strictly(bodies[k:k + n], True)
+               for k in range(0, len(bodies) - n + 1)):
         return None
     return f
 
@@ -1054,8 +1085,11 @@ def process_candle(asset, ast, candles, ha, i):
         departed = touched = False
         for k in range(f, i + 1):
             if not touched:
-                zhi = ha[k]["h"] if zhi is None else max(zhi, ha[k]["h"])
-                zlo = ha[k]["l"] if zlo is None else min(zlo, ha[k]["l"])
+                # a ROLLING band over the most recent flipped HA candles, so
+                # it climbs with the trend exactly as it does on the chart
+                w = ha[max(f, k - HA_ZONE_CANDLES + 1):k + 1]
+                zhi = max(x["h"] for x in w)
+                zlo = min(x["l"] for x in w)
             ck = candles[k]
             if not departed:
                 departed = (ck["h"] > zhi) if want_long else (ck["l"] < zlo)
@@ -1274,8 +1308,8 @@ def check_once():
 
 
 def seconds_to_next_close(buffer_s=15):
-    period = MS["5m"] // 1000     # 5m pulse regardless of TF: heartbeat and
-    return period - (time.time() % period) + buffer_s      # prompt exits
+    period = MS[SCAN_EVERY] // 1000
+    return period - (time.time() % period) + buffer_s
 
 
 def run_loop():
