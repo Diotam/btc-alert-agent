@@ -20,6 +20,13 @@ from urllib.parse import urlparse, parse_qs
 STATE_FILE = Path("/opt/btc-agent/btc_agent_state.json")
 TRADES_LOG = Path("/opt/btc-agent/trades.log")
 DASH_KEY = os.environ.get("DASH_KEY", "")
+# Paste the id from a saved TradingView layout that already has Smoothed
+# Heiken Ashi applied, e.g. the "AbCd1234" in
+# https://www.tradingview.com/chart/AbCd1234/ - cards then open THAT layout
+# with the symbol swapped in, so the indicator comes with it. Indicators
+# cannot be passed as URL parameters; a saved layout is the only free route.
+# Left blank, cards open a plain chart instead.
+TV_LAYOUT = os.environ.get("TV_LAYOUT", "").strip().strip("/")
 PORT = int(os.environ.get("DASH_PORT", "8080"))
 
 _price_cache = {"t": 0.0, "mids": {}}
@@ -278,6 +285,8 @@ h1{font-size:17px;margin:4px 0 12px}
 .badge{display:inline-block;padding:2px 9px;border-radius:10px;font-size:12px;
        font-weight:600;margin-left:8px}
 .ok{background:#12351f;color:#3fb950}.warn{background:#3a2b12;color:#d29922}
+.card.tv{cursor:pointer}
+.card.tv:hover{border-color:#3d444d}
 .card{background:#161b22;border:1px solid #21262d;border-radius:10px;
       padding:11px 13px;margin-bottom:9px}
 .sym{font-weight:700;font-size:15px}
@@ -326,6 +335,22 @@ h1{font-size:17px;margin:4px 0 12px}
 <div class="section shead" onclick="toggle('closed')"><span class=chev id=c-closed>\u25be</span>Closed trades<span class=cnt id=n-closed>0</span> <span id=csub class=muted style="float:right;text-transform:none;letter-spacing:0"></span></div><div id=closed></div>
 <div class="section shead" onclick="toggle('events')"><span class=chev id=c-events>\u25be</span>Recent events<span class=cnt id=n-events>0</span></div><div id=events></div>
 <script>
+const TVINT='15';
+const TVLAYOUT=__TV_LAYOUT__;
+// a saved layout carries its indicators; a bare /chart/ does not
+const TVBASE='https://www.tradingview.com/chart/'+(TVLAYOUT?TVLAYOUT+'/':'')+'?symbol=';
+// inline onclick handlers run in GLOBAL scope, so these must live at the top
+// level - defined inside a render function they are invisible to the cards.
+// Main-dex perps are HYPERLIQUID:<TICKER>USDC.P; builder-venue symbols
+// (xyz:ARM, xyz:CL) are equities and commodities TradingView carries under
+// their own tickers, so the bare name resolves better.
+function tvSym(sym){
+  if(sym.indexOf(':')>=0) return encodeURIComponent(sym.split(':').pop().toUpperCase());
+  return encodeURIComponent('HYPERLIQUID:'+sym.toUpperCase()+'USDC.P');
+}
+function tvOpen(sym){
+  window.open(TVBASE+tvSym(sym)+'&interval='+TVINT,'_blank','noopener');
+}
 const KEY=new URLSearchParams(location.search).get('key')||'';
 let PERIOD='d', LAST=null;
 let COLLAPSED={};
@@ -403,7 +428,7 @@ function render(d){
      :showR>=0
      ?`${showR.toFixed(2)}R · ${Math.round(Math.min(100,showR/RRT*100))}% of the way to TP`
      :`${showR.toFixed(2)}R · ${Math.round(Math.min(100,-showR*100))}% of the way to stop`;
-   return `<div class=card>
+   return `<div class="card tv" onclick="tvOpen('${t.sym}')" title="open ${t.sym} on TradingView">
     <div class=row><span class=sym>${t.sym} <span class=${cls}>${t.dir}</span>${t.lev?` <span class=lev>${t.lev}x</span>`:''} ${badge}</span>
     <span class="num ${showPnl>=0?'pnl-pos':'pnl-neg'}">${showPnl==null?'-':(showPnl>=0?'+':'')+showPnl.toFixed(2)+'%'}</span></div>
     <div class=row><span class=muted>entry <span class=num>$${px(t.entry)}</span></span>
@@ -423,7 +448,7 @@ function render(d){
    const pbar=z.prog==null?(gap?`<div class=muted style="margin-top:6px">${gap}</div>`:'')
     :`<div class=bar><div class=fill style="width:${z.prog}%;background:${near?'#3fb950':'#58a6ff'}"></div></div>
       <div class=muted>${gap}</div>`;
-   return `<div class=card><div class=row>
+   return `<div class="card tv" onclick="tvOpen('${z.sym}')" title="open ${z.sym} on TradingView"><div class=row>
     <span class=sym>${z.sym} <span class=${cls}>${z.dir}</span>${z.lev?` <span class=lev>${z.lev}x</span>`:''}</span>
     <span class=muted>now <span class=num>$${px(z.mid)}</span></span></div>
     <div class=row><span class=muted>${z.stage}</span></div>${pbar}</div>`
@@ -437,7 +462,7 @@ function render(d){
   document.getElementById('closed').innerHTML=shown.length?shown.map(c=>{
    const cls=c.dir==='LONG'?'long':'short';
    const when=new Date(c.t).toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
-   return `<div class=card><div class=row>
+   return `<div class="card tv" onclick="tvOpen('${c.sym}')" title="open ${c.sym} on TradingView"><div class=row>
     <span class=sym>${iconFor(c)} ${c.sym} <span class=${cls}>${c.dir}</span>${c.frac&&c.frac<1?` <span class=muted style="font-size:10.5px">${Math.round(c.frac*100)}%</span>`:''}
     <span class=muted style="font-weight:400">${c.kind}</span></span>
     <span class="num ${c.pnl_pct>=0?'pnl-pos':'pnl-neg'}">${(c.pnl_pct>=0?'+':'')+c.pnl_pct.toFixed(2)}%</span></div>
@@ -506,7 +531,8 @@ class Handler(BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError, OSError):
                 return
         elif url.path == "/":
-            self._send(200, PAGE.encode(), "text/html; charset=utf-8")
+            page = PAGE.replace("__TV_LAYOUT__", json.dumps(TV_LAYOUT))
+            self._send(200, page.encode(), "text/html; charset=utf-8")
         else:
             self._send(404, b"not found", "text/plain")
 
