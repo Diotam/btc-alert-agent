@@ -573,7 +573,7 @@ def log_order(rec):
 # --------------------------- state -----------------------------------------
 def blank_asset_state():
     return {"phase": "SCAN", "last_candle_t": 0, "setup": None,
-            "trade": None}
+            "traded": None, "trade": None}
 
 
 def load_state():
@@ -1011,6 +1011,9 @@ def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger):
     ast["trade"] = {"verdict": direction, "entry": entry, "stop": stop,
                     "tp": tp, "opened_t": c["t"], "checked_t": c["t"],
                     "rr": HA_RR, "risk0": risk, "half": False, "left": 1.0}
+    # remember WHICH setup this came from so it cannot fire a second time
+    if ast.get("setup"):
+        ast["traded"] = {"ft": ast["setup"].get("ft"), "dir": direction}
     order_plan = plan_entry_orders(asset, ast["trade"])
     if EXEC_LIVE and order_plan:
         # the daily loss limit needs realised USD from the ledger, which is
@@ -1064,6 +1067,20 @@ def process_candle(asset, ast, candles, ha, i):
         # series every pass rather than accumulated, so a restart cannot lose
         # half a setup either.
         ft = ha[f]["t"]
+
+        # ONE TRADE PER SETUP. The pattern is re-derived from the series every
+        # scan, which is what makes it restart-proof - but that also means a
+        # setup that already produced a trade still looks valid afterwards and
+        # fires again into the SAME frozen zone, at a slightly different entry
+        # and the identical stop. Seen live 31 Jul on AAVE, CASHCAT, KAITO and
+        # SOL: four duplicate entries, -6.13% of a -14.53% book.
+        # A genuinely new flip carries a new ft, so new setups still trade.
+        done = ast.get("traded") or {}
+        if done.get("ft") == ft and done.get("dir") == direction:
+            if ast.get("setup"):
+                ast["setup"] = None
+            continue
+
         armed = ast.get("setup")
         if not armed or armed.get("dir") != direction or armed.get("ft") != ft:
             log(f"{sym}: smoothed HA flipped {direction} - zone "
