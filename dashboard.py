@@ -359,21 +359,35 @@ function tvSym(sym){
   if(sym.indexOf(':')>=0) return encodeURIComponent(sym.split(':').pop().toUpperCase());
   return encodeURIComponent('HYPERLIQUID:'+sym.toUpperCase()+'USDC.P');
 }
+// iPadOS and iOS have no popup windows - every browser there, Brave included,
+// runs on WebKit. window.open with a feature string is treated as a popup and
+// blocked, and a _blank retry is blocked too because the click gesture is
+// already spent. A synthetic anchor click is ordinary link navigation, which
+// is never blocked, and a named target still reuses a single tab.
+const TOUCH = (navigator.maxTouchPoints || 0) > 1 ||
+              !window.matchMedia('(hover: hover)').matches;
+
 function tvOpen(sym){
-  // A NAMED window, so clicking a second card reuses the same popup instead
-  // of stacking tabs. TradingView cannot be put in an iframe on the page
-  // itself - the chart sets frame-busting headers, which is why their embed
-  // widgets exist - and the widget cannot load a Pine script like Smoothed
-  // Heiken Ashi. A popup is the closest thing that keeps your indicator.
-  const w=Math.min(1400, Math.round(screen.availWidth*0.72));
-  const h=Math.min(900,  Math.round(screen.availHeight*0.8));
-  const l=Math.round((screen.availWidth-w)/2);
-  const t=Math.round((screen.availHeight-h)/2);
-  const win=window.open(TVBASE+tvSym(sym)+'&interval='+TVINT, 'tvchart',
+  const url = TVBASE + tvSym(sym) + '&interval=' + TVINT;
+  if (TOUCH) {
+    const a = document.createElement('a');
+    a.href = url; a.target = 'tvchart'; a.rel = 'noopener';
+    document.body.appendChild(a); a.click(); a.remove();
+    return;
+  }
+  // desktop: a NAMED, sized window, so a second card replaces the chart in
+  // the same popup instead of stacking tabs
+  const w = Math.min(1400, Math.round(screen.availWidth * 0.72));
+  const h = Math.min(900,  Math.round(screen.availHeight * 0.8));
+  const l = Math.round((screen.availWidth - w) / 2);
+  const t = Math.round((screen.availHeight - h) / 2);
+  const win = window.open(url, 'tvchart',
     `popup=yes,width=${w},height=${h},left=${l},top=${t},` +
     'toolbar=no,menubar=no,location=no,status=no');
-  if(win){ win.focus(); }
-  else { window.open(TVBASE+tvSym(sym)+'&interval='+TVINT,'_blank','noopener'); }
+  if (win) { win.focus(); return; }
+  const a = document.createElement('a');       // popup blocked - fall back to
+  a.href = url; a.target = 'tvchart';          // plain link navigation
+  document.body.appendChild(a); a.click(); a.remove();
 }
 const KEY=new URLSearchParams(location.search).get('key')||'';
 let PERIOD='d', LAST=null;
