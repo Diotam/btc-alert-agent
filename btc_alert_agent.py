@@ -105,7 +105,7 @@ EXEC_TESTNET = False               # False = MAINNET, real money
 EXEC_HALT_FILE = "/opt/btc-agent/EXEC_HALT"   # touch this to stop new entries
 EXEC_RISK_USD = 2.0                # fixed dollar risk per trade
 EXEC_MAX_NOTIONAL_USD = 2500       # cap on position value
-EXEC_MAX_POSITIONS = 5             # concurrent live positions
+EXEC_MAX_POSITIONS = 3             # concurrent live positions
 EXEC_DAILY_LOSS_LIMIT_USD = 40.0   # INERT: needs realised USD from the ledger,
                                    # which is not tracked yet
 
@@ -449,10 +449,10 @@ def _strictly(bodies, growing):
 def ha_setup(ha, i, want_long):
     """Look back from HA candle i for a completed pattern: HA_TREND_RUN
     bodies expanding in the trend direction, then HA_TREND_RUN shrinking,
-    then a colour flip. Returns (zone_hi, zone_lo, flip_start) or None.
+    then a colour flip. Returns the index the flip run starts at, or None.
 
-    The zone spans every flipped candle so far, so a longer flip run widens
-    it and pushes the stop further from entry."""
+    The zone itself is built by the caller, because it stops growing the
+    moment the pullback lands."""
     n = HA_TREND_RUN
     f = i
     while f >= 0 and ha_green(ha[f]) == want_long:
@@ -471,8 +471,7 @@ def ha_setup(ha, i, want_long):
     bodies = [ha_body(x) for x in run]
     if not _strictly(bodies[:n], True) or not _strictly(bodies[n:], False):
         return None
-    zone = ha[f:i + 1]
-    return max(x["h"] for x in zone), min(x["l"] for x in zone), f
+    return f
 
 
 # --------------------------- telegram --------------------------------------
@@ -1035,25 +1034,30 @@ def process_candle(asset, ast, candles, ha, i):
     c = candles[i]
 
     for want_long in (True, False):
-        found = ha_setup(ha, i, want_long)
-        if not found:
+        f = ha_setup(ha, i, want_long)
+        if f is None:
             continue
-        zhi, zlo, f = found
         direction = "LONG" if want_long else "SHORT"
 
-        # the pullback is a RETURN, so price must first leave the zone and
-        # only then come back into it. Without the departure leg the flip
-        # candles themselves satisfy the touch, since the zone is built from
-        # them, and every setup would enter immediately.
+        # Walk the setup forward one bar at a time. The zone grows with each
+        # new flipped HA candle, but it FREEZES the moment the pullback lands
+        # - otherwise the stop keeps drifting away between the pullback and
+        # the confirming candle, and the trade would use a different zone
+        # from the one the pullback was measured against.
+        # The pullback is also a RETURN: price must leave the zone first, or
+        # the flip candles themselves satisfy the touch (the zone is built
+        # from them) and every setup fires instantly.
+        zhi = zlo = None
         departed = touched = False
         for k in range(f, i + 1):
+            if not touched:
+                zhi = ha[k]["h"] if zhi is None else max(zhi, ha[k]["h"])
+                zlo = ha[k]["l"] if zlo is None else min(zlo, ha[k]["l"])
             ck = candles[k]
             if not departed:
                 departed = (ck["h"] > zhi) if want_long else (ck["l"] < zlo)
-                continue
-            if (ck["l"] <= zhi) if want_long else (ck["h"] >= zlo):
-                touched = True
-                break
+            elif not touched:
+                touched = (ck["l"] <= zhi) if want_long else (ck["h"] >= zlo)
         # identify the setup by the flip candle's TIMESTAMP, never by its
         # array index - the fetch window rolls, so an index means a different
         # candle on the next scan. departed/touched are recomputed from the
@@ -1065,7 +1069,8 @@ def process_candle(asset, ast, candles, ha, i):
             log(f"{sym}: smoothed HA flipped {direction} - zone "
                 f"${fmt_px(zlo)}-${fmt_px(zhi)}, waiting for a pullback")
         ast["setup"] = {"dir": direction, "zhi": zhi, "zlo": zlo, "ft": ft,
-                        "departed": departed, "touched": touched, "t": c["t"]}
+                        "departed": departed, "touched": touched,
+                        "frozen": touched, "t": c["t"]}
         if not ast["setup"]["touched"]:
             return True
 
