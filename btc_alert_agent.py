@@ -91,6 +91,14 @@ SCAN_EVERY = "15m"                 # how often the loop wakes. Aligning it to
 HA_SMOOTH_IN = 5                   # EMA applied to OHLC before building HA
 HA_SMOOTH_OUT = 5                  # EMA applied to the HA output
 HA_TREND_RUN = 3                   # bodies that must expand, then shrink
+HA_MIN_BODY_PCT = 0.05             # the trend run must contain at least one
+                                   # HA body this big, as a % of price. Without
+                                   # it a FLAT smoothed series satisfies
+                                   # "strictly growing then strictly shrinking"
+                                   # on noise in the fifth decimal and arms a
+                                   # setup with no visible colour flip at all.
+                                   # Measured: near-flat series produce bodies
+                                   # of 0.005-0.034%, normal ones 0.081%+
 HA_ZONE_CANDLES = 3                # the zone is the last N flipped HA candles
                                    # - the band RIDES UP with the trend, so a
                                    # pullback hours later still gets a stop
@@ -501,6 +509,12 @@ def ha_setup(ha, i, want_long):
     # against 25-40 with this rule).
     if not any(_strictly(bodies[k:k + n], True)
                for k in range(0, len(bodies) - n + 1)):
+        return None
+    # the trend has to be VISIBLE. A flat smoothed series wobbles enough to
+    # satisfy the ordering checks above on floating-point noise, which arms
+    # setups with no colour flip you could see on a chart.
+    scale = abs(ha[j]["c"]) or 1.0
+    if HA_MIN_BODY_PCT and max(bodies) < HA_MIN_BODY_PCT / 100.0 * scale:
         return None
     return f
 
