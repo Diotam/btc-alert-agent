@@ -273,6 +273,11 @@ def build_data():
     closed, pnl = closed_trades()
     return {"now": time.time(),
             "state_age_s": scan_age_s(state, mtime),
+            # the agent publishes its own pulse, so the staleness threshold
+            # follows SCAN_EVERY instead of assuming the old 5m loop. Two
+            # missed scans plus a minute of slack before anything is wrong.
+            "stale_after_s": 2 * int((state.get("_meta") or {})
+                                     .get("scan_every_s", 300)) + 60,
             "scanned": scanned, "trades": trades, "zones": zones,
             "closed": closed, "pnl": pnl, "build": BUILD,
             "btc": _btc_now(mids),
@@ -399,7 +404,8 @@ function render(d){
    `<span class=pnl-pos>${pw.w}W</span> · <span class=pnl-neg>${pw.l}L</span> · ${Math.round(pw.w/n*100)}% win rate`
    :'no closed trades yet';
   const st=document.getElementById('status');
-  const fresh=d.state_age_s!=null&&d.state_age_s<480;
+  const limit=d.stale_after_s||480;
+  const fresh=d.state_age_s!=null&&d.state_age_s<limit;
   st.textContent=fresh?'LIVE':'STALE '+(d.state_age_s==null?'':Math.round(d.state_age_s/60)+'m');
   const age=d.state_age_s==null?'':' · scan '+(d.state_age_s<60?d.state_age_s+'s':Math.round(d.state_age_s/60)+'m')+' ago';
   st.className='badge '+(fresh?'ok':'warn');
