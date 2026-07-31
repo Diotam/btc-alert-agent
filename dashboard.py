@@ -27,6 +27,12 @@ DASH_KEY = os.environ.get("DASH_KEY", "")
 # cannot be passed as URL parameters; a saved layout is the only free route.
 # Left blank, cards open a plain chart instead.
 TV_LAYOUT = os.environ.get("TV_LAYOUT", "").strip().strip("/")
+# The agent's HA zone is now a rolling band over the last few flipped candles,
+# so it is far narrower than the old pinned zone. Scaling the approach bar to
+# the band width would leave it empty until price was almost touching. Scale
+# it to a fixed percentage of price instead: the bar fills over the final
+# APPROACH_PCT of the move back toward the band.
+APPROACH_PCT = 2.0
 PORT = int(os.environ.get("DASH_PORT", "8080"))
 
 _price_cache = {"t": 0.0, "mids": {}}
@@ -226,19 +232,19 @@ def build_data():
                            "opened_t": tr.get("opened_t", 0)})
 
         # an armed HA setup. Three states, in order: waiting for price to
-        # leave the zone, waiting for it to come back, then waiting for a
-        # confirming candle. dist_pct is how far price is from the zone edge
-        # it has to re-enter; the bar fills as that gap closes.
+        # leave the band, waiting for it to come back, then waiting for a
+        # confirming candle. dist_pct is how far price is from the band edge
+        # it has to re-enter; the bar fills over the last APPROACH_PCT of that
+        # gap, which stays readable however narrow the band is.
         if setup and not tr:
             zhi, zlo = setup.get("zhi"), setup.get("zlo")
             edge = zhi if long_ else zlo
-            width = (zhi - zlo) if (zhi is not None and zlo is not None) else None
             dist = dist_pct = prog = None
             if mid and edge:
                 dist = mid - edge if long_ else edge - mid
                 dist_pct = dist / mid * 100
-                if width:
-                    prog = max(0.0, min(100.0, (1 - dist / width) * 100))
+                prog = max(0.0, min(100.0,
+                                    (1 - dist_pct / APPROACH_PCT) * 100))
             if setup.get("touched"):
                 stage = ("pulled back \u00b7 zone locked \u00b7 "
                          "waiting for a confirming candle")
@@ -443,8 +449,8 @@ function render(d){
    const near=z.dist_pct!=null&&z.dist_pct<=0;
    const edge=z.dir==='LONG'?z.zhi:z.zlo;
    const gap=z.dist_pct==null?''
-    :near?`inside the HA zone ($${px(z.zlo)} - $${px(z.zhi)})`
-    :`<span class=num>${z.dist_pct.toFixed(2)}%</span> from the HA zone ($${px(edge)})`;
+    :near?`inside the HA band ($${px(z.zlo)} - $${px(z.zhi)})`
+    :`<span class=num>${z.dist_pct.toFixed(2)}%</span> from the HA band ($${px(edge)})`;
    const pbar=z.prog==null?(gap?`<div class=muted style="margin-top:6px">${gap}</div>`:'')
     :`<div class=bar><div class=fill style="width:${z.prog}%;background:${near?'#3fb950':'#58a6ff'}"></div></div>
       <div class=muted>${gap}</div>`;
