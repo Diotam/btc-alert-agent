@@ -495,9 +495,9 @@ function render(d){
   document.getElementById('csub').textContent=LABEL[PERIOD];
   const cut=Date.now()-DAYS[PERIOD]*86400000;
   const shown=d.closed.filter(c=>c.t>=cut).slice(0,20);
-  const icons={TP_HALF:'🎯',RUNNER:'✅',BE:'➡️',STOP:'❌',TP:'✅'};
-  // RUNNER and BE outcomes vary, so the P&L decides when there is no icon
-  const iconFor=c=>icons[c.kind]||(c.pnl_pct>=0?'✅':'❌');
+  // outcome, not event type: anything closed in profit gets a checkmark.
+  // BE keeps its own mark because breakeven is neither.
+  const iconFor=c=>c.kind==='BE'?'➡️':(c.pnl_pct>=0?'✅':'❌');
   document.getElementById('closed').innerHTML=shown.length?shown.map(c=>{
    const cls=c.dir==='LONG'?'long':'short';
    const when=new Date(c.t).toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
