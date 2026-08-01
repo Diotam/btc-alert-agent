@@ -451,8 +451,17 @@ function render(d){
    // updating even if price wanders back through the level
    const fkey=`${t.sym}:${t.opened_t}`;
    window.__froz=window.__froz||{};
-   if(t.r!=null&&t.r>=RRT)window.__froz[fkey]='tp';
-   if(t.r!=null&&t.r<=-1)window.__froz[fkey]='sl';
+   // A trade that has booked its partial is a LIVE RUNNER and must never
+   // freeze. Reaching the target no longer closes the position - it books
+   // HA_PARTIAL and moves the stop to entry - so the card has to keep
+   // showing the live price and the live P&L, both measured from the
+   // ORIGINAL entry. The freeze only covers the seconds between price
+   // touching a level and the agent booking it.
+   if(t.half){ delete window.__froz[fkey]; }
+   else {
+     if(t.r!=null&&t.r>=RRT)window.__froz[fkey]='tp';
+     if(t.r!=null&&t.r<=-1)window.__froz[fkey]='sl';
+   }
    const tpDone=window.__froz[fkey]==='tp', slDone=window.__froz[fkey]==='sl';
    const showR=tpDone?RRT:slDone?-1:t.r;
    const showPnl=tpDone?sgn*(t.tp-t.entry)/t.entry*100
@@ -466,6 +475,9 @@ function render(d){
    const rlbl=showR==null?''
      :tpDone?'TP reached - waiting for the close confirmation'
      :slDone?'Stop traded - waiting for the close confirmation'
+     :t.half
+     ?`${showR.toFixed(2)}R from entry \u00b7 ${Math.round(t.left*100)}% running, `
+      + `risk-free \u00b7 closes when the HA flips`
      :showR>=0
      ?`${showR.toFixed(2)}R · ${Math.round(Math.min(100,showR/RRT*100))}% of the way to TP`
      :`${showR.toFixed(2)}R · ${Math.round(Math.min(100,-showR*100))}% of the way to stop`;
