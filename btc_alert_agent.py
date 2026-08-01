@@ -129,7 +129,11 @@ EXEC_LOG_ORDERS = True             # write every sized order to orders.log.
                                    # gated execution. EXEC_LIVE alone decides
                                    # whether real orders are sent
 EXEC_TESTNET = False               # False = MAINNET, real money
-EXEC_HALT_FILE = "/opt/btc-agent/EXEC_HALT"   # touch this to stop new entries
+EXEC_HALT_FILE = "/opt/btc-agent/EXEC_HALT"
+CLOSE_REQ_DIR = Path(__file__).parent / "close_requests"   # the dashboard
+#   drops one marker file per symbol here; the agent closes that position on
+#   its next scan and removes the file. A directory of markers rather than a
+#   shared JSON file, so the two processes never write the same bytes   # touch this to stop new entries
 EXEC_RISK_USD = 2.0                # fixed dollar risk per trade
 EXEC_MAX_NOTIONAL_USD = 2500       # cap on position value
 EXEC_MAX_POSITIONS = 3             # concurrent live positions
@@ -560,6 +564,8 @@ def lifecycle_message(asset, kind, trade, exit_px, event_t, note):
         "BE": ("\u27a1\ufe0f", "STOPPED AT ENTRY",
                "the runner came back to breakeven"),
         "STOP": ("\u274c", "STOPPED OUT", "stop level hit"),
+        "MANUAL": ("\u270b", "CLOSED BY HAND",
+                   "closed from the dashboard at market"),
         "TP": ("\u2705", "TAKE PROFIT HIT", "target reached"),
     }[kind]
     pnl = pnl_pct(trade, exit_px)
@@ -837,6 +843,7 @@ def plan_manage_orders(asset, event, price):
               "TP_HALF": f"target filled - {HA_PARTIAL:.0%} booked, "
                          "stop to entry",
               "RUNNER": "HA flipped - runner closed at market",
+              "MANUAL": "closed by hand from the dashboard",
               "BE": "runner stopped at entry - flat",
               }.get(event)
     if not action:
@@ -879,6 +886,69 @@ def fill_size(resp):
         return float(resp["response"]["data"]["statuses"][0]["filled"]["totalSz"])
     except (KeyError, IndexError, TypeError, ValueError):
         return None
+
+
+def _req_file(sym):
+    safe = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in sym)
+    return CLOSE_REQ_DIR / (safe + ".req")
+
+
+def close_requested(sym):
+    """The dashboard's close request for this symbol, or None.
+
+    `done: True` means the DASHBOARD already closed it on the exchange and
+    already booked the ledger row - all that is left is clearing state, and
+    the agent must NOT close or book again.
+    """
+    try:
+        f = _req_file(sym)
+        if not f.exists():
+            return None
+        return json.loads(f.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}          # unreadable marker still means "close this"
+
+
+def clear_close_request(sym):
+    try:
+        _req_file(sym).unlink()
+    except OSError:
+        pass
+
+
+def close_position_live(asset, trade):
+    """Close whatever is left at market, then cancel the resting orders.
+
+    Closes FIRST: if the market order fails the protective stop is still on
+    the book, so the position is never left naked by this path.
+    """
+    if not EXEC_LIVE or not executable(asset["symbol"]) or not trade.get("size"):
+        return
+    ex = exec_client()
+    if not ex:
+        return
+    sym = base_name(asset["symbol"])
+    try:
+        r = ex.market_close(sym)
+        log(f"{sym}: LIVE manual close sent {r}")
+    except Exception as e:
+        log(f"{sym}: LIVE manual close FAILED {type(e).__name__}: {e}")
+        try:
+            send_telegram(f"\u26a0\ufe0f {esc(sym)} manual close FAILED - "
+                          "the position is still open, close it by hand")
+        except Exception:
+            pass
+        return
+    for label, oid in (("stop", trade.get("stop_oid")),
+                       ("TP", trade.get("tp_oid"))):
+        if not oid:
+            continue
+        try:
+            ex.cancel(sym, oid)
+        except Exception as e:
+            log(f"{sym}: could not cancel the resting {label} "
+                f"({type(e).__name__}) - it is reduce-only, so harmless "
+                "with no position, but it will linger in the order book")
 
 
 def order_oid(resp):
@@ -991,8 +1061,9 @@ def place_entry_live(asset, trade, plan):
         # the target only takes HA_PARTIAL of the position - the rest runs
         # until the HA flips, so it must NOT be resting at the target
         part = round(size * HA_PARTIAL, dec)
-        ex.order(sym, not long_, part, round_px(trade["tp"]),
-                 {"limit": {"tif": "Gtc"}}, reduce_only=True)
+        r_tp = ex.order(sym, not long_, part, round_px(trade["tp"]),
+                        {"limit": {"tif": "Gtc"}}, reduce_only=True)
+        trade["tp_oid"] = order_oid(r_tp)
         log(f"{sym}: LIVE stop ${fmt_px(trade['stop'])} (full size) and TP "
             f"${fmt_px(trade['tp'])} ({HA_PARTIAL:.0%}) placed")
     except Exception as e:
@@ -1149,6 +1220,27 @@ def check_asset(asset, state):
     # ---- IN_TRADE: watch stop / TP first ---------------------------------
     if ast["trade"]:
         source, cs = fetch(asset, TF, 60)
+        # a manual close from the dashboard beats everything else, including
+        # the stop and target watch - the request is only cleared once the
+        # position is actually flat, so a failed close is retried next scan
+        req = close_requested(sym)
+        if req is not None:
+            if req.get("done"):
+                # the dashboard already closed it and booked the row
+                log(f"{sym}: manually closed from the dashboard at "
+                    f"${fmt_px(req.get('exit') or 0)} - clearing state")
+            else:
+                px = cs[-1]["c"] if cs else ast["trade"]["entry"]
+                log(f"{sym}: manual close requested from the dashboard")
+                close_position_live(asset, ast["trade"])
+                _close_trade(asset, ast["trade"], px, "MANUAL", now_ms(),
+                             "closed by hand from the dashboard")
+            ast["trade"] = None
+            ast["phase"] = "SCAN"
+            clear_close_request(sym)
+            RUN_STATUS.append(f"{sym} manually closed")
+            state[sym] = ast
+            return True
         if cs:
             trade, ch = process_open_trade(asset, ast["trade"], cs,
                                            smoothed_ha(cs), cs[-2]["t"])
@@ -1288,6 +1380,7 @@ def check_once():
                               cursor=new_cursor,
                               scan_every_s=MS[SCAN_EVERY] // 1000,
                               tf=TF,
+                              tz=TIMEZONE,
                               last_scan_utc=datetime.now(timezone.utc)
                               .isoformat(timespec="seconds"))
         save_state(state)
