@@ -451,30 +451,28 @@ function render(d){
    // updating even if price wanders back through the level
    const fkey=`${t.sym}:${t.opened_t}`;
    window.__froz=window.__froz||{};
-   // A trade that has booked its partial is a LIVE RUNNER and must never
-   // freeze. Reaching the target no longer closes the position - it books
-   // HA_PARTIAL and moves the stop to entry - so the card has to keep
-   // showing the live price and the live P&L, both measured from the
-   // ORIGINAL entry. The freeze only covers the seconds between price
-   // touching a level and the agent booking it.
-   if(t.half){ delete window.__froz[fkey]; }
-   else {
-     if(t.r!=null&&t.r>=RRT)window.__froz[fkey]='tp';
-     if(t.r!=null&&t.r<=-1)window.__froz[fkey]='sl';
-   }
-   const tpDone=window.__froz[fkey]==='tp', slDone=window.__froz[fkey]==='sl';
-   const showR=tpDone?RRT:slDone?-1:t.r;
-   const showPnl=tpDone?sgn*(t.tp-t.entry)/t.entry*100
-     :slDone?sgn*(t.stop-t.entry)/t.entry*100:t.pnl;
+   // There is NO target freeze any more. Reaching the target never closes
+   // the position under this engine - it books HA_PARTIAL and the rest
+   // runs - so latching the card at the target price stopped the live
+   // price and P&L updating for the whole life of the runner. Only the
+   // STOP still fully closes a trade, and only before the partial: after
+   // it the stop sits at entry, so hitting it is a breakeven close.
+   if(window.__froz[fkey]==='tp') delete window.__froz[fkey];   // stale latch
+   if(!t.half && t.r!=null && t.r<=-1) window.__froz[fkey]='sl';
+   const slDone=window.__froz[fkey]==='sl';
+   const showR=slDone?-1:t.r;
+   const showPnl=slDone?sgn*(t.stop-t.entry)/t.entry*100:t.pnl;
+   // "target reached" is now computed LIVE, never latched
+   const atTarget=!t.half && t.r!=null && t.r>=RRT;
    const badge=t.half?`<span class="badge ok">${Math.round(t.left*100)}% running · stop at entry</span>`
-     :tpDone?'<span class="badge ok">target hit · booking half</span>'
+     :atTarget?'<span class="badge ok">target reached · booking half</span>'
      :slDone?'<span class="badge warn">stop hit · closing</span>':'';
    // one scale: stop = 0%, entry = 40%, TP = 100% - the fill IS closeness to TP
    const rp=showR==null?0:Math.max(0,Math.min(100,(showR+1)/(1+RRT)*100));
    const rc=showR==null?'#8b949e':showR>=0?'#3fb950':'#f85149';
    const rlbl=showR==null?''
-     :tpDone?'TP reached - waiting for the close confirmation'
      :slDone?'Stop traded - waiting for the close confirmation'
+     :atTarget?`${showR.toFixed(2)}R \u00b7 target reached, booking half`
      :t.half
      ?`${showR.toFixed(2)}R from entry \u00b7 ${Math.round(t.left*100)}% running, `
       + `risk-free \u00b7 closes when the HA flips`
@@ -485,7 +483,7 @@ function render(d){
     <div class=row><span class=sym>${t.sym} <span class=${cls}>${t.dir}</span>${t.lev?` <span class=lev>${t.lev}x</span>`:''} ${badge}</span>
     <span class="num ${showPnl>=0?'pnl-pos':'pnl-neg'}">${showPnl==null?'-':(showPnl>=0?'+':'')+showPnl.toFixed(2)+'%'}</span></div>
     <div class=row><span class=muted>entry <span class=num>$${px(t.entry)}</span></span>
-    <span class=muted>${tpDone||slDone?'exit':'now'} <span class=num>$${px(tpDone?t.tp:slDone?t.stop:t.mid)}</span></span></div>
+    <span class=muted>${slDone?'exit':'now'} <span class=num>$${px(slDone?t.stop:t.mid)}</span></span></div>
     <div class=row><span class=muted>stop <span class=num>$${px(t.stop)}</span></span>
     <span class=muted>TP <span class=num>$${px(t.tp)}</span></span></div>
     <div class=bar><div class=fill style="width:${rp}%;background:${rc}"></div></div>
