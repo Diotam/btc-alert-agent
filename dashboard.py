@@ -148,6 +148,40 @@ def journal_events(n=400, keep=25):
     return events[-keep:][::-1]
 
 
+def merge_partials(raw):
+    """One TRADE, one row. A partial books TP_HALF and the remainder books
+    RUNNER or BE later, so a single trade writes two ledger lines - and
+    counting them separately double-counts the wins and the trade total.
+
+    There is no trade id in the ledger, so rows are paired on
+    (symbol, direction, entry). The pnl_pct values are already weighted by
+    `frac`, so summing them gives the whole trade's return. The merged row
+    is dated and priced by the FINAL close.
+    """
+    out, index = [], {}
+    for r in raw:
+        key = (r.get("sym"), r.get("dir"), round(r.get("entry", 0), 10))
+        prev = index.get(key)
+        # only merge into a trade that is still incomplete - once the frac
+        # reaches 1.0 the next TP_HALF on the same symbol and price is a
+        # genuinely new trade
+        if prev is not None and prev["frac"] < 0.999:
+            prev["pnl_pct"] = round(prev["pnl_pct"] + r.get("pnl_pct", 0), 3)
+            prev["frac"] = round(prev["frac"] + r.get("frac", 1.0), 6)
+            prev["exit"] = r.get("exit", prev["exit"])
+            prev["t"] = max(prev.get("t", 0), r.get("t", 0))
+            prev["kind"] = ("TP_RUNNER" if r.get("kind") == "RUNNER"
+                            else "TP_BE" if r.get("kind") == "BE"
+                            else r.get("kind", prev["kind"]))
+            continue
+        row = dict(r)
+        row["frac"] = r.get("frac", 1.0)
+        row["pnl_pct"] = r.get("pnl_pct", 0)
+        out.append(row)
+        index[key] = row
+    return out
+
+
 def closed_trades(keep=200):
     try:
         lines = TRADES_LOG.read_text().splitlines()[-2000:]
@@ -157,12 +191,13 @@ def closed_trades(keep=200):
         # OFFLINE whenever trades.log was missing
         empty = {"pnl": 0.0, "w": 0, "l": 0}
         return [], {"d": dict(empty), "w": dict(empty), "m": dict(empty)}
-    rows = []
+    raw = []
     for ln in lines:
         try:
-            rows.append(json.loads(ln))
+            raw.append(json.loads(ln))
         except json.JSONDecodeError:
             continue
+    rows = merge_partials(raw)
     now_ms = time.time() * 1000
     def window(days):
         cut = now_ms - days * 86400_000
@@ -474,6 +509,11 @@ function render(d){
   document.getElementById('csub').textContent=LABEL[PERIOD];
   const cut=Date.now()-DAYS[PERIOD]*86400000;
   const shown=d.closed.filter(c=>c.t>=cut).slice(0,20);
+  // a partial and its runner are merged server-side into ONE trade, so
+  // these compound kinds appear in place of the raw ledger events
+  const KINDS={TP_RUNNER:'target + runner', TP_BE:'target, runner to BE',
+               TP_HALF:'target hit', RUNNER:'runner', BE:'breakeven',
+               STOP:'stopped'};
   // outcome, not event type: anything closed in profit gets a checkmark.
   // BE keeps its own mark because breakeven is neither.
   const iconFor=c=>c.kind==='BE'?'➡️':(c.pnl_pct>=0?'✅':'❌');
@@ -481,8 +521,8 @@ function render(d){
    const cls=c.dir==='LONG'?'long':'short';
    const when=new Date(c.t).toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
    return `<div class="card tv" onclick="tvOpen('${c.sym}')" title="open ${c.sym} on TradingView"><div class=row>
-    <span class=sym>${iconFor(c)} ${c.sym} <span class=${cls}>${c.dir}</span>${c.frac&&c.frac<1?` <span class=muted style="font-size:10.5px">${Math.round(c.frac*100)}%</span>`:''}
-    <span class=muted style="font-weight:400">${c.kind}</span></span>
+    <span class=sym>${iconFor(c)} ${c.sym} <span class=${cls}>${c.dir}</span>
+    <span class=muted style="font-weight:400">${KINDS[c.kind]||c.kind}</span>${c.frac&&c.frac<1?` <span class=muted style="font-size:10.5px">${Math.round(c.frac*100)}% closed</span>`:''}</span>
     <span class="num ${c.pnl_pct>=0?'pnl-pos':'pnl-neg'}">${(c.pnl_pct>=0?'+':'')+c.pnl_pct.toFixed(2)}%</span></div>
     <div class=row><span class=muted>$${px(c.entry)} → $${px(c.exit)}</span>
     <span class=muted>${when}</span></div></div>`
