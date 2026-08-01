@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SMOOTHED HEIKIN ASHI AGENT (15m)
+SMOOTHED HEIKIN ASHI DOJI AGENT
 --------------------------------
 One strategy, long side described; shorts mirror it exactly.
 
@@ -13,14 +13,17 @@ One strategy, long side described; shorts mirror it exactly.
   3. ENTER on the doji, in the direction opposite the trend that led into
      it. Price does NOT have to come back and retest anything.
 
-  stop   = the doji's own level - its low for a long, its high for a short
+  stop   = the REAL candle's extreme at the doji - its low for a long, its
+           high for a short. Not the HA level: HA highs and lows are EMA
+           averages that need never have printed
   target = HA_RR x that distance. HA_PARTIAL of the position is booked there
            and the stop moves to entry; the remainder is held until the
            smoothed HA flips back against the trade.
 
 The HA series is a derived band: EMA the OHLC, build Heikin Ashi on that,
-then EMA the result. Its highs and lows are averages and need never have
-printed, so the stop is a computed level rather than a price that traded.
+then EMA the result. It decides WHEN to trade; the real candles decide at
+what price, so every level the agent sends to the exchange is one the market
+actually traded.
 
 Config comes from environment variables:
   TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID / HL_API_KEY / HL_ACCOUNT_ADDRESS
@@ -73,7 +76,7 @@ ASSETS = [                         # used when DISCOVER_ALL = False, or when
 ]
 
 # --- strategy dials -------------------------------------------------------
-TF = "15m"                         # the spec is 15m closes
+TF = "30m"                         # execution timeframe
 SCAN_EVERY = "5m"                  # how often the loop wakes. Aligning it to
                                    # TF means one scan per candle. A shorter
                                    # pulse costs API calls but reacts sooner:
@@ -83,8 +86,8 @@ SCAN_EVERY = "5m"                  # how often the loop wakes. Aligning it to
                                    # trades - intrabar stop/target detection
                                    # and moving the stop to entry after the
                                    # partial fills
-HA_SMOOTH_IN = 6                   # EMA applied to OHLC before building HA
-HA_SMOOTH_OUT = 3                  # EMA applied to the HA output
+HA_SMOOTH_IN = 10                  # EMA applied to OHLC before building HA
+HA_SMOOTH_OUT = 10                 # EMA applied to the HA output
 HA_TREND_RUN = 3                   # bodies that must expand, then shrink
 HA_MIN_BODY_PCT = 0.05             # the trend run must contain at least one
                                    # HA body this big, as a % of price. Without
@@ -1089,24 +1092,32 @@ def process_candle(asset, ast, candles, ha, i):
         if done.get("ft") == dt and done.get("dir") == direction:
             continue
 
-        # the stop is the doji's own level: its low for a long, high for a
-        # short. That is the level the turn happened at.
-        stop = hd["l"] if want_long else hd["h"]
+        # The doji marks WHERE the turn happened, but the stop is taken from
+        # the REAL candle at that point, not the HA one. HA highs and lows
+        # are EMA averages that need never have printed, so an HA-derived
+        # stop is a price the market may never trade to. The real candle's
+        # extreme is a level that actually exists on the book.
+        # It also guarantees positive risk: for a long, low <= close always.
+        stop = c["l"] if want_long else c["h"]
         entry = c["c"]
         risk = (entry - stop) if want_long else (stop - entry)
         if risk <= 0:
-            log(f"{sym}: {direction} doji but price closed through its own "
-                f"level (${fmt_px(stop)}) - skipped")
+            log(f"{sym}: {direction} doji but the candle closed at its own "
+                f"{'low' if want_long else 'high'} - no risk distance, "
+                "skipped")
             continue
 
-        ast["setup"] = {"dir": direction, "zhi": hd["h"], "zlo": hd["l"],
+        ast["setup"] = {"dir": direction, "zhi": c["h"], "zlo": c["l"],
                         "ft": dt, "departed": True, "touched": True,
                         "frozen": True, "t": c["t"]}
-        log(f"{sym}: HA DOJI - turning {direction}, stop at the doji "
-            f"{'low' if want_long else 'high'} ${fmt_px(stop)}")
-        fire_entry(asset, ast, direction, c, stop, hd["h"], hd["l"], "HA",
+        log(f"{sym}: HA DOJI - turning {direction}, stop at the real candle "
+            f"{'low' if want_long else 'high'} ${fmt_px(stop)} "
+            f"(HA {'low' if want_long else 'high'} was "
+            f"${fmt_px(hd['l'] if want_long else hd['h'])})")
+        fire_entry(asset, ast, direction, c, stop, c["h"], c["l"], "HA",
                    f"HA doji after a {'down' if want_long else 'up'}trend - "
-                   f"stop at the doji {'low' if want_long else 'high'}")
+                   f"stop at the real candle "
+                   f"{'low' if want_long else 'high'}")
         return True
 
     if ast.get("setup"):
@@ -1267,6 +1278,7 @@ def check_once():
         state["_meta"] = dict(state.get("_meta") or {},
                               cursor=new_cursor,
                               scan_every_s=MS[SCAN_EVERY] // 1000,
+                              tf=TF,
                               last_scan_utc=datetime.now(timezone.utc)
                               .isoformat(timespec="seconds"))
         save_state(state)
