@@ -363,6 +363,11 @@ def build_data():
             # browser's - otherwise a phone in another zone shows closed
             # trades at times that do not match the agent's own logs
             "tz": (state.get("_meta") or {}).get("tz", "America/Chicago"),
+            # opened_t is the candle's OPEN time but the entry happens at its
+            # CLOSE, so the age needs one candle added to be honest
+            "tf_ms": {"5m": 300_000, "15m": 900_000, "30m": 1_800_000,
+                      "1h": 3_600_000, "4h": 14_400_000}.get(
+                (state.get("_meta") or {}).get("tf", "15m"), 900_000),
             "tv_interval": {"5m": "5", "15m": "15", "30m": "30",
                             "1h": "60", "4h": "240"}.get(
                 (state.get("_meta") or {}).get("tf", "15m"), "15"),
@@ -521,6 +526,18 @@ const TVBASE='https://www.tradingview.com/chart/'+(TVLAYOUT?TVLAYOUT+'/':'')+'?s
 // Main-dex perps are HYPERLIQUID:<TICKER>USDC.P; builder-venue symbols
 // (xyz:ARM, xyz:CL) are equities and commodities TradingView carries under
 // their own tickers, so the bare name resolves better.
+function age(openedT){
+  // how long the position has been on. opened_t is the candle open, the fill
+  // is at its close, so add one candle.
+  if(!openedT) return '';
+  var ms = Date.now() - (openedT + (window.__tfms||900000));
+  if(ms < 0) return 'just now';
+  var m = Math.floor(ms/60000), h = Math.floor(m/60), dd = Math.floor(h/24);
+  if(dd >= 1) return dd + 'd ' + (h%24) + 'h';
+  if(h >= 1)  return h + 'h ' + (m%60) + 'm';
+  return m + 'm';
+}
+
 function tvSym(sym){
   if(sym.indexOf(':')>=0) return encodeURIComponent(sym.split(':').pop().toUpperCase());
   return encodeURIComponent('HYPERLIQUID:'+sym.toUpperCase()+'USDC.P');
@@ -617,6 +634,7 @@ function render(d){
   step('r-start');
   if(d.tv_interval) TVINT=d.tv_interval;
   if(d.tz) TZ=d.tz;
+  if(d.tf_ms) window.__tfms=d.tf_ms;
   const limit=d.stale_after_s||480;
   const fresh=d.state_age_s!=null&&d.state_age_s<limit;
   st.textContent=fresh?'LIVE':'STALE '+(d.state_age_s==null?'':Math.round(d.state_age_s/60)+'m');
@@ -663,7 +681,7 @@ function render(d){
      ?`${showR.toFixed(2)}R · ${Math.round(Math.min(100,showR/RRT*100))}% of the way to TP`
      :`${showR.toFixed(2)}R · ${Math.round(Math.min(100,-showR*100))}% of the way to stop`;
    return `<div class="card tv" onclick="tvOpen('${t.sym}')" title="open ${t.sym} on TradingView">
-    <div class=row><span class=sym>${t.sym} <span class=${cls}>${t.dir}</span>${t.lev?` <span class=lev>${t.lev}x</span>`:''} ${badge}</span>
+    <div class=row><span class=sym>${t.sym} <span class=${cls}>${t.dir}</span>${t.lev?` <span class=lev>${t.lev}x</span>`:''}${t.opened_t?` <span class=muted style="font-size:11px;font-weight:400">${age(t.opened_t)}</span>`:''} ${badge}</span>
     <span class="num ${showPnl>=0?'pnl-pos':'pnl-neg'}">${showPnl==null?'-':(showPnl>=0?'+':'')+showPnl.toFixed(2)+'%'}</span></div>
     <div class=row><span class=muted>entry <span class=num>$${px(t.entry)}</span></span>
     <span class=muted>${slDone?'exit':'now'} <span class=num>$${px(slDone?t.stop:t.mid)}</span></span></div>
@@ -684,7 +702,7 @@ function render(d){
    const rp=R==null?0:Math.max(0,Math.min(100,(R/(t.rr*2))*100));
    const peak=R!=null&&R>=t.rr*2;
    return `<div class="card tv" onclick="tvOpen('${t.sym}')" title="open ${t.sym} on TradingView">
-    <div class=row><span class=sym>${t.sym} <span class=${cls}>${t.dir}</span>${t.lev?` <span class=lev>${t.lev}x</span>`:''} <span class="badge ok">${Math.round(t.left*100)}% running</span></span>
+    <div class=row><span class=sym>${t.sym} <span class=${cls}>${t.dir}</span>${t.lev?` <span class=lev>${t.lev}x</span>`:''}${t.opened_t?` <span class=muted style="font-size:11px;font-weight:400">${age(t.opened_t)}</span>`:''} <span class="badge ok">${Math.round(t.left*100)}% running</span></span>
     <span class="num ${t.pnl>=0?'pnl-pos':'pnl-neg'}">${t.pnl==null?'-':(t.pnl>=0?'+':'')+t.pnl.toFixed(2)+'%'}</span></div>
     <div class=row><span class=muted>entry <span class=num>$${px(t.entry)}</span></span>
     <span class=muted>now <span class=num>$${px(t.mid)}</span></span></div>
