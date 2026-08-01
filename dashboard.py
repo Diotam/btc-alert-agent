@@ -302,7 +302,13 @@ def closed_trades(keep=200):
                 "w": sum(1 for r in sub if r.get("pnl_pct", 0) > 0),
                 "l": sum(1 for r in sub if r.get("pnl_pct", 0) < 0)}
     pnl = {"d": window(1), "w": window(7), "m": window(30)}
-    return rows[-keep:][::-1], pnl
+    # Sort by the CLOSE time, newest first. File order is not close order:
+    # merge_partials folds a RUNNER into the TP_HALF row that came before it,
+    # and that row keeps its original position in the file. So a trade whose
+    # partial booked hours ago and whose runner just closed would sit buried
+    # in the middle of the list instead of at the top where it belongs.
+    rows.sort(key=lambda r: r.get("t", 0), reverse=True)
+    return rows[:keep], pnl
 
 
 def _lvl(v):
