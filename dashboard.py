@@ -244,6 +244,41 @@ def journal_events(n=400, keep=25):
     return events[-keep:][::-1]
 
 
+_TALLY = {"t": 0.0, "v": None}
+TALLY_TTL_S = 120.0          # one journalctl call every 2 min, not every tick
+
+
+def signal_tally(hours=24):
+    """How many doji signals fired, how many were TAKEN, and why the rest
+    were refused. The question this answers is whether MIN_STOP_PCT is
+    protecting the account or starving it - and the event log alone cannot
+    say, because you would have to scroll and count.
+    """
+    now = time.time()
+    if _TALLY["v"] is not None and now - _TALLY["t"] < TALLY_TTL_S:
+        return _TALLY["v"]
+    taken = tight = norisk = 0
+    try:
+        out = subprocess.run(
+            ["journalctl", "-u", "btc-agent", "--since", f"{hours} hours ago",
+             "--no-pager", "-o", "cat"],
+            capture_output=True, text=True, timeout=8).stdout
+        for line in out.splitlines():
+            if "SIZED -" in line:
+                taken += 1
+            elif "too tight to be worth fees" in line:
+                tight += 1
+            elif "no risk distance" in line:
+                norisk += 1
+    except Exception:
+        return _TALLY["v"] or {"signals": 0, "taken": 0, "tight": 0,
+                               "norisk": 0, "hours": hours}
+    v = {"signals": taken + tight + norisk, "taken": taken, "tight": tight,
+         "norisk": norisk, "hours": hours}
+    _TALLY["t"], _TALLY["v"] = now, v
+    return v
+
+
 def merge_partials(raw):
     """One TRADE, one row. A partial books TP_HALF and the remainder books
     RUNNER or BE later, so a single trade writes two ledger lines - and
@@ -399,6 +434,7 @@ def build_data():
             "stale_after_s": 2 * int((state.get("_meta") or {})
                                      .get("scan_every_s", 300)) + 60,
             "scanned": scanned, "trades": trades, "runners": runners,
+            "tally": signal_tally(),
             "closed": closed, "pnl": pnl, "build": BUILD,
             "btc": _btc_now(mids),
             "events": journal_events()}
@@ -511,6 +547,7 @@ h1{font-size:17px;margin:4px 0 12px}
 </style></head><body>
 <h1>Signal Agent <span id=status class=badge></span>
 <span id=meta class=muted style="font-weight:400;font-size:12px"></span></h1>
+<div id=tally class=muted style="font-size:12px;margin:-4px 0 10px 2px"></div>
 <div id=jstrace style="display:none;background:#161b22;
  border:0.5px solid #30363d;color:#8b949e;border-radius:12px;
  padding:8px 12px;margin-bottom:8px;font:11px ui-monospace,Menlo,monospace;
@@ -674,6 +711,22 @@ function render(d){
   const age=d.state_age_s==null?'':' · scan '+(d.state_age_s<60?d.state_age_s+'s':Math.round(d.state_age_s/60)+'m')+' ago';
   st.className='badge '+(fresh?'ok':'warn');
   document.getElementById('meta').textContent=d.scanned+' markets'+age;
+  // signal tally: is MIN_STOP_PCT protecting the account or starving it?
+  const tl=d.tally;
+  const tb=document.getElementById('tally');
+  if(tb){
+    if(!tl||!tl.signals){ tb.textContent='no doji signals in the last '
+        +((tl&&tl.hours)||24)+'h'; }
+    else {
+      const pct=Math.round(tl.taken/tl.signals*100);
+      let why=[];
+      if(tl.tight)  why.push(tl.tight+' too tight');
+      if(tl.norisk) why.push(tl.norisk+' no risk distance');
+      tb.textContent=tl.signals+' signals \u00b7 '+tl.taken+' taken ('+pct+'%)'
+        +(why.length?' \u00b7 '+why.join(', '):'')
+        +' \u00b7 last '+tl.hours+'h';
+    }
+  }
   step('r-hdr');
   document.getElementById('trades').innerHTML=d.trades.length?d.trades.map(t=>{
    const cls=t.dir==='LONG'?'long':'short';
