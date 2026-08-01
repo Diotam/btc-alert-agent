@@ -679,7 +679,17 @@ class Handler(BaseHTTPRequestHandler):
     def _send(self, code, body, ctype):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
-        self.send_header("Cache-Control", "no-store")
+        # iOS WebKit (Safari, and Brave/Chrome which are WebKit underneath)
+        # will happily re-serve a cached document on no-store alone, which
+        # meant a deploy that fixed broken page JS still showed the broken
+        # page. Belt and braces: the full no-cache set, an explicitly stale
+        # Expires, and an ETag that changes on every deploy so a conditional
+        # request can never be answered from cache.
+        self.send_header("Cache-Control",
+                         "no-store, no-cache, must-revalidate, max-age=0")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
+        self.send_header("ETag", f'"{BUILD}"')
         self.end_headers()
         self.wfile.write(body)
 
