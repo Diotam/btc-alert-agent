@@ -4,28 +4,23 @@ SMOOTHED HEIKIN ASHI AGENT (15m)
 --------------------------------
 One strategy, long side described; shorts mirror it exactly.
 
-  1. STRENGTH - HA_TREND_RUN consecutive red HA bodies, each larger than the
-     last. The market is trending down with growing momentum.
-  2. EXHAUSTION - HA_TREND_RUN consecutive red bodies, each smaller than the
-     last. Momentum is draining.
-  3. FLIP - the HA turns green. Do NOT enter. The green HA candles become a
-     support zone; it widens as more of them print.
-  4. PULLBACK - wait for a REAL candle to trade back down into that zone.
-  5. CONFIRMATION - wait for a REAL green candle to close. That close is the
-     entry.
+  1. TREND - a run of red HA candles with real momentum in it: at least
+     HA_TREND_RUN consecutive bodies expanding somewhere in the run, and the
+     biggest body at least HA_MIN_BODY_PCT of price so a flat series cannot
+     qualify.
+  2. DOJI - an HA body no more than HA_DOJI_FRACTION of the biggest body in
+     that run. The smoothed HA has stalled, and that stall IS the turn.
+  3. ENTER on the doji, in the direction opposite the trend that led into
+     it. Price does NOT have to come back and retest anything.
 
-  stop   = the low of the HA zone
+  stop   = the doji's own level - its low for a long, its high for a short
   target = HA_RR x that distance. HA_PARTIAL of the position is booked there
            and the stop moves to entry; the remainder is held until the
            smoothed HA flips back against the trade.
 
 The HA series is a derived band: EMA the OHLC, build Heikin Ashi on that,
 then EMA the result. Its highs and lows are averages and need never have
-printed, so the zone and the stop are computed levels rather than prices
-that traded.
-
-A setup resets if the HA flips back before entry, or expires after
-HA_SETUP_MAX_CANDLES without a pullback.
+printed, so the stop is a computed level rather than a price that traded.
 
 Config comes from environment variables:
   TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID / HL_API_KEY / HL_ACCOUNT_ADDRESS
@@ -88,8 +83,8 @@ SCAN_EVERY = "5m"                  # how often the loop wakes. Aligning it to
                                    # trades - intrabar stop/target detection
                                    # and moving the stop to entry after the
                                    # partial fills
-HA_SMOOTH_IN = 5                   # EMA applied to OHLC before building HA
-HA_SMOOTH_OUT = 5                  # EMA applied to the HA output
+HA_SMOOTH_IN = 6                   # EMA applied to OHLC before building HA
+HA_SMOOTH_OUT = 3                  # EMA applied to the HA output
 HA_TREND_RUN = 3                   # bodies that must expand, then shrink
 HA_MIN_BODY_PCT = 0.05             # the trend run must contain at least one
                                    # HA body this big, as a % of price. Without
@@ -99,14 +94,13 @@ HA_MIN_BODY_PCT = 0.05             # the trend run must contain at least one
                                    # setup with no visible colour flip at all.
                                    # Measured: near-flat series produce bodies
                                    # of 0.005-0.034%, normal ones 0.081%+
-HA_ZONE_CANDLES = 3                # the zone is the last N flipped HA candles
-                                   # - the band RIDES UP with the trend, so a
-                                   # pullback hours later still gets a stop
-                                   # just under the band rather than one back
-                                   # at the flip
-HA_SETUP_MAX_CANDLES = 0           # 0 = a setup never times out. It ends when
-                                   # the HA flips back, however long that takes
-                                   # - a trend can be held for days
+HA_DOJI_FRACTION = 0.25            # a DOJI is an HA body this small relative
+                                   # to the biggest body in the trend run that
+                                   # led into it. Scale-free, so it adapts per
+                                   # symbol instead of needing a fixed price
+                                   # threshold. Entry happens ON the doji -
+                                   # price does NOT have to come back and
+                                   # retest anything
 HA_RR = 1.5                        # first target = 1.5x the stop distance
 HA_PARTIAL = 0.5                   # fraction booked there; the stop then moves
                                    # to entry and the remainder is held until
@@ -472,51 +466,45 @@ def _strictly(bodies, growing):
                (bodies[k] < bodies[k - 1]) for k in range(1, len(bodies)))
 
 
-def ha_setup(ha, i, want_long):
-    """Look back from HA candle i for a completed pattern: somewhere in the
-    trend run, HA_TREND_RUN bodies expanding; then HA_TREND_RUN shrinking
-    bodies immediately before a colour flip. Returns the index the flip run
-    starts at, or None.
+def ha_doji(ha, i, want_long):
+    """Is HA candle i a DOJI that turns a real trend?
 
-    The zone itself is built by the caller, because it stops growing the
-    moment the pullback lands."""
+    A doji is a body small relative to the trend that produced it - the
+    smoothed HA stalling. That stall IS the signal: the trade is taken on
+    this candle, in the direction OPPOSITE the trend that led in. Price does
+    not have to come back and retest anything.
+
+    Returns (doji_index, run_start) or None.
+    """
     n = HA_TREND_RUN
-    f = i
-    while f >= 0 and ha_green(ha[f]) == want_long:
-        f -= 1
-    f += 1                                   # first candle of the flip run
-    if f > i or f == 0:
-        return None
-    if HA_SETUP_MAX_CANDLES and i - f + 1 > HA_SETUP_MAX_CANDLES:
-        return None                          # armed too long ago
-    # the whole trend run before the flip, however long it is
-    j = f - 1
-    r = j
+    # the run of trend-coloured candles ending at i. want_long means the
+    # trend into the doji was RED, so the doji turns us long.
+    if ha_green(ha[i]) == want_long and ha_body(ha[i]) > 0:
+        pass                                 # the doji may already have
+        #                                      flipped colour - both are fine
+    r = i - 1
     while r >= 0 and ha_green(ha[r]) != want_long:
         r -= 1
     r += 1
-    run = ha[r:j + 1]
-    if len(run) < 2 * n:
+    run = ha[r:i]                            # the trend, excluding the doji
+    if len(run) < n:
         return None
     bodies = [ha_body(x) for x in run]
-    # Exhaustion must sit immediately before the flip...
-    if not _strictly(bodies[-n:], False):
+    biggest = max(bodies)
+    scale = abs(ha[i]["c"]) or 1.0
+
+    # the trend has to be VISIBLE. A flat smoothed series is nothing BUT
+    # dojis, so without this every quiet symbol would trade continuously.
+    if HA_MIN_BODY_PCT and biggest < HA_MIN_BODY_PCT / 100.0 * scale:
         return None
-    # ...but the expansion can be ANYWHERE earlier in the same run. Smoothed
-    # HA tapers gradually, so the growing leg is rarely the three candles
-    # right before the shrinking one - demanding adjacency rejected every
-    # real trend tested (zero setups armed across four sustained trends,
-    # against 25-40 with this rule).
+    # ...and it has to have had momentum at some point
     if not any(_strictly(bodies[k:k + n], True)
                for k in range(0, len(bodies) - n + 1)):
         return None
-    # the trend has to be VISIBLE. A flat smoothed series wobbles enough to
-    # satisfy the ordering checks above on floating-point noise, which arms
-    # setups with no colour flip you could see on a chart.
-    scale = abs(ha[j]["c"]) or 1.0
-    if HA_MIN_BODY_PCT and max(bodies) < HA_MIN_BODY_PCT / 100.0 * scale:
+    # the doji itself: small against what came before it
+    if ha_body(ha[i]) > HA_DOJI_FRACTION * biggest:
         return None
-    return f
+    return i, r
 
 
 # --------------------------- telegram --------------------------------------
@@ -1074,88 +1062,54 @@ def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger):
 
 # --------------------------- the strategy ----------------------------------
 def process_candle(asset, ast, candles, ha, i):
-    """Strength -> exhaustion -> flip -> pullback into the HA zone -> a real
-    candle closing in our direction. The pattern is re-derived from the
-    series on every candle rather than carried in state, so a restart cannot
-    lose half a setup."""
+    """A visible trend, then a DOJI - an HA body small against that trend.
+    The doji is the turn, and the trade is taken on it. No pullback, no
+    retest, no confirming candle.
+
+    Everything is re-derived from the series on every scan, so a restart
+    cannot lose half a signal.
+    """
     sym = asset["symbol"]
     c = candles[i]
+    hd = ha[i]
 
     for want_long in (True, False):
-        f = ha_setup(ha, i, want_long)
-        if f is None:
+        found = ha_doji(ha, i, want_long)
+        if not found:
             continue
         direction = "LONG" if want_long else "SHORT"
+        dt = hd["t"]                         # identify by TIMESTAMP, never by
+        #                                      index - the fetch window rolls
 
-        # Walk the setup forward one bar at a time. The zone grows with each
-        # new flipped HA candle, but it FREEZES the moment the pullback lands
-        # - otherwise the stop keeps drifting away between the pullback and
-        # the confirming candle, and the trade would use a different zone
-        # from the one the pullback was measured against.
-        # The pullback is also a RETURN: price must leave the zone first, or
-        # the flip candles themselves satisfy the touch (the zone is built
-        # from them) and every setup fires instantly.
-        zhi = zlo = None
-        departed = touched = False
-        for k in range(f, i + 1):
-            if not touched:
-                # a ROLLING band over the most recent flipped HA candles, so
-                # it climbs with the trend exactly as it does on the chart
-                w = ha[max(f, k - HA_ZONE_CANDLES + 1):k + 1]
-                zhi = max(x["h"] for x in w)
-                zlo = min(x["l"] for x in w)
-            ck = candles[k]
-            if not departed:
-                departed = (ck["h"] > zhi) if want_long else (ck["l"] < zlo)
-            elif not touched:
-                touched = (ck["l"] <= zhi) if want_long else (ck["h"] >= zlo)
-        # identify the setup by the flip candle's TIMESTAMP, never by its
-        # array index - the fetch window rolls, so an index means a different
-        # candle on the next scan. departed/touched are recomputed from the
-        # series every pass rather than accumulated, so a restart cannot lose
-        # half a setup either.
-        ft = ha[f]["t"]
-
-        # ONE TRADE PER SETUP. The pattern is re-derived from the series every
-        # scan, which is what makes it restart-proof - but that also means a
-        # setup that already produced a trade still looks valid afterwards and
-        # fires again into the SAME frozen zone, at a slightly different entry
-        # and the identical stop. Seen live 31 Jul on AAVE, CASHCAT, KAITO and
-        # SOL: four duplicate entries, -6.13% of a -14.53% book.
-        # A genuinely new flip carries a new ft, so new setups still trade.
+        # ONE TRADE PER DOJI. The signal is re-derived every scan, so without
+        # this the same doji fires again on the next pass at a slightly
+        # different price into the identical stop. Seen live 31 Jul on AAVE,
+        # CASHCAT, KAITO and SOL: -6.13% of a -14.53% book.
         done = ast.get("traded") or {}
-        if done.get("ft") == ft and done.get("dir") == direction:
-            if ast.get("setup"):
-                ast["setup"] = None
+        if done.get("ft") == dt and done.get("dir") == direction:
             continue
 
-        armed = ast.get("setup")
-        if not armed or armed.get("dir") != direction or armed.get("ft") != ft:
-            log(f"{sym}: smoothed HA flipped {direction} - zone "
-                f"${fmt_px(zlo)}-${fmt_px(zhi)}, waiting for a pullback")
-        ast["setup"] = {"dir": direction, "zhi": zhi, "zlo": zlo, "ft": ft,
-                        "departed": departed, "touched": touched,
-                        "frozen": touched, "t": c["t"]}
-        if not ast["setup"]["touched"]:
-            return True
-
-        # confirmation: a real candle closing in our direction
-        if (c["c"] > c["o"]) != want_long:
-            return True
-        stop = zlo if want_long else zhi
-        risk = (c["c"] - stop) if want_long else (stop - c["c"])
+        # the stop is the doji's own level: its low for a long, high for a
+        # short. That is the level the turn happened at.
+        stop = hd["l"] if want_long else hd["h"]
+        entry = c["c"]
+        risk = (entry - stop) if want_long else (stop - entry)
         if risk <= 0:
-            log(f"{sym}: {direction} confirmed but price closed through the "
-                "zone - skipped")
-            ast["setup"] = None
-            return True
-        fire_entry(asset, ast, direction, c, stop, zhi, zlo, "HA",
-                   f"pullback into the HA zone, confirmed by a "
-                   f"{'green' if want_long else 'red'} candle")
+            log(f"{sym}: {direction} doji but price closed through its own "
+                f"level (${fmt_px(stop)}) - skipped")
+            continue
+
+        ast["setup"] = {"dir": direction, "zhi": hd["h"], "zlo": hd["l"],
+                        "ft": dt, "departed": True, "touched": True,
+                        "frozen": True, "t": c["t"]}
+        log(f"{sym}: HA DOJI - turning {direction}, stop at the doji "
+            f"{'low' if want_long else 'high'} ${fmt_px(stop)}")
+        fire_entry(asset, ast, direction, c, stop, hd["h"], hd["l"], "HA",
+                   f"HA doji after a {'down' if want_long else 'up'}trend - "
+                   f"stop at the doji {'low' if want_long else 'high'}")
         return True
 
     if ast.get("setup"):
-        log(f"{sym}: HA setup cleared - the pattern no longer holds")
         ast["setup"] = None
     return False
 
