@@ -472,7 +472,8 @@ h1{font-size:17px;margin:4px 0 12px}
        font-weight:600;margin-left:8px}
 .ok{background:#12351f;color:#3fb950}.warn{background:#3a2b12;color:#d29922}
 .closebtn{background:transparent;border:0.5px solid #6e7681;color:#c9d1d9;
-  font:11.5px inherit;padding:3px 10px;border-radius:10px;cursor:pointer}
+  font:12px inherit;padding:8px 16px;border-radius:10px;cursor:pointer;
+  min-height:34px;touch-action:manipulation}
 .closebtn:hover:enabled{border-color:#f85149;color:#f85149}
 .closebtn:disabled{opacity:.55;cursor:default}
 .card.tv{cursor:pointer}
@@ -568,23 +569,29 @@ const TOUCH = (navigator.maxTouchPoints || 0) > 1 ||
 
 function closeRunner(ev, sym){
   ev.stopPropagation();          // the card itself opens TradingView
+  // GRAB THE BUTTON FIRST. ev.currentTarget is only valid while the event
+  // is being dispatched, and confirm() BLOCKS - on iOS the dispatch has
+  // finished by the time the dialog returns, so currentTarget is null and
+  // reading .disabled or .getAttribute on it throws. That killed the
+  // handler before fetch ever ran: the button simply did nothing.
+  var b = ev.currentTarget || ev.target;
+  var shown = (b && b.getAttribute('data-px')) || '';
   // Never write a backslash escape in this file: PAGE is a non-raw
   // triple-quoted Python string, so it resolves when Python parses the
   // file and lands as a REAL newline in the served HTML - which breaks
   // whatever string or comment it sits in. Keep this text on one line.
   if(!confirm('Close '+sym+' at market NOW? This sends the order immediately '
       +'and cancels the resting stop and target.')) return;
-  const b=ev.currentTarget; b.disabled=true; b.textContent='closing...';
-  // send the price the card is showing, so the booked exit matches what
-  // was on screen when the button was tapped
-  var shown = ev.currentTarget.getAttribute('data-px') || '';
+  if(b){ b.disabled = true; b.textContent = 'closing...'; }
   fetch('/close?sym='+encodeURIComponent(sym)
         +(shown?'&px='+encodeURIComponent(shown):'')
         +(KEY?'&key='+KEY:''), {method:'POST'})
     .then(r=>r.json())
-    .then(j=>{ b.textContent = j.ok ? 'closed' : 'failed';
-               if(!j.ok){ b.disabled=false; alert(j.msg||'close failed'); } })
-    .catch(()=>{ b.textContent='failed'; b.disabled=false; });
+    .then(j=>{ if(b) b.textContent = j.ok ? 'closed' : 'failed';
+               if(!j.ok){ if(b) b.disabled=false;
+                          alert(j.msg||'close failed'); } })
+    .catch(e=>{ if(b){ b.textContent='failed'; b.disabled=false; }
+                alert('close failed: '+(e&&e.message?e.message:e)); });
 }
 
 function tvOpen(sym){
