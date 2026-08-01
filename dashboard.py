@@ -66,18 +66,34 @@ def pending_closes():
     return out
 
 
-def request_close(sym):
-    """Close this position NOW. Returns (ok, message).
+def request_close(sym, shown=None):
+    """Close this position NOW at the price the card is showing.
 
     Only symbols the agent currently holds a trade on are accepted, so a
     stray request cannot act on a position that does not exist.
+
+    `shown` is the "now" price the button was displaying. It is used when it
+    agrees with the server's own mid, so the P&L booked is the one the user
+    was looking at when they tapped. It is NEVER trusted blindly - a stale
+    tab or a hand-edited URL could otherwise book any figure it liked.
     """
     state, _ = read_state()
     ast = state.get(sym)
     if not isinstance(ast, dict) or not ast.get("trade"):
         return False, "no open trade on that symbol"
     trade = dict(ast["trade"])
-    px = (prices() or {}).get(sym) or trade.get("entry")
+
+    mid = (prices() or {}).get(sym)
+    px = mid
+    if shown and mid and abs(shown - mid) / mid <= 0.05:
+        px = shown                     # within 5% of the live mid: use it
+    elif shown and not mid:
+        px = shown                     # no server price, the card had one
+    if not px:
+        # Never fall back to the entry price. That silently books a 0.00%
+        # close, which is a fabricated result sitting in the ledger the
+        # strategy is being judged on.
+        return False, "no live price for that symbol - not closing blind"
 
     done, note = False, "queued for the agent"
     if agent is not None:
@@ -559,8 +575,12 @@ function closeRunner(ev, sym){
   if(!confirm('Close '+sym+' at market NOW? This sends the order immediately '
       +'and cancels the resting stop and target.')) return;
   const b=ev.currentTarget; b.disabled=true; b.textContent='closing...';
-  fetch('/close?sym='+encodeURIComponent(sym)+(KEY?'&key='+KEY:''),
-        {method:'POST'})
+  // send the price the card is showing, so the booked exit matches what
+  // was on screen when the button was tapped
+  var shown = ev.currentTarget.getAttribute('data-px') || '';
+  fetch('/close?sym='+encodeURIComponent(sym)
+        +(shown?'&px='+encodeURIComponent(shown):'')
+        +(KEY?'&key='+KEY:''), {method:'POST'})
     .then(r=>r.json())
     .then(j=>{ b.textContent = j.ok ? 'closed' : 'failed';
                if(!j.ok){ b.disabled=false; alert(j.msg||'close failed'); } })
@@ -711,7 +731,7 @@ function render(d){
     <div class=bar><div class=fill style="width:${rp}%;background:${peak?'#3fb950':'#58a6ff'}"></div></div>
     <div class=row style="align-items:center">
       <span class=muted>${R==null?'':R.toFixed(2)+'R from entry'} · closes when the HA flips</span>
-      <button class=closebtn onclick="closeRunner(event,'${t.sym}')">close now</button>
+      <button class=closebtn data-px="${t.mid==null?'':t.mid}" onclick="closeRunner(event,'${t.sym}')">close now</button>
     </div></div>`
   }).join(''):'<div class="card muted">none</div>';
   document.getElementById('csub').textContent=LABEL[PERIOD];
@@ -854,8 +874,14 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(403, b"forbidden", "text/plain")
                 return
         if url.path == "/close":
-            sym = (parse_qs(url.query).get("sym") or [""])[0]
-            ok, msg = request_close(sym) if sym else (False, "no symbol")
+            q = parse_qs(url.query)
+            sym = (q.get("sym") or [""])[0]
+            try:
+                shown = float((q.get("px") or [""])[0])
+            except ValueError:
+                shown = None
+            ok, msg = (request_close(sym, shown) if sym
+                       else (False, "no symbol"))
             self._send(200 if ok else 400,
                        json.dumps({"ok": ok, "msg": msg}).encode(),
                        "application/json")
