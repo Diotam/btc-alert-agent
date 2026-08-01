@@ -245,13 +245,9 @@ def build_data():
                 dist_pct = dist / mid * 100
                 prog = max(0.0, min(100.0,
                                     (1 - dist_pct / APPROACH_PCT) * 100))
-            if setup.get("touched"):
-                stage = ("pulled back \u00b7 zone locked \u00b7 "
-                         "waiting for a confirming candle")
-            elif setup.get("departed"):
-                stage = "left the zone \u00b7 waiting for the pullback"
-            else:
-                stage = "flipped \u00b7 waiting for price to leave the zone"
+            # the doji engine enters immediately, so a card here is a signal
+            # that was found but refused - almost always by MIN_STOP_PCT
+            stage = "HA doji \u00b7 stop too tight to trade"
             zones.append({"sym": sym, "dir": armed_dir, "lev": ast.get("lev"),
                           "zhi": zhi, "zlo": zlo, "stage": stage,
                           "touched": bool(setup.get("touched")),
