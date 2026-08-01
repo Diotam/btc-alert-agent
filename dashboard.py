@@ -399,7 +399,18 @@ function show__err() {
   if (s) { s.textContent = 'JS ERROR'; s.className = 'badge warn'; }
 }
 document.addEventListener('DOMContentLoaded', show__err);
-window.addEventListener('load', show__err);
+window.addEventListener('load', function () {
+  /* window.onerror reports a bare "Script error." with no line in some
+     WebKit builds even for same-origin inline code, so it cannot say WHERE.
+     This marker can: the main block sets __mainOK on its very last line, so
+     if it is missing the block never finished parsing - a completely
+     different fault from a render or fetch failure. */
+  if (!window.__mainOK) {
+    window.__err = (window.__err ? window.__err + '   |   ' : '')
+      + 'MAIN SCRIPT NEVER FINISHED PARSING';
+  }
+  show__err();
+});
 </script>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -699,8 +710,14 @@ window.addEventListener('unhandledrejection',function(ev){
 
 function offline(){document.getElementById('status').textContent='OFFLINE';
  document.getElementById('status').className='badge warn'}
-async function poll(){try{render(await (await fetch('/data'+(KEY?'?key='+KEY:''))).json())}
- catch(e){offline()}}
+async function poll(){
+  try{ render(await (await fetch('/data'+(KEY?'?key='+KEY:''))).json()) }
+  catch(e){
+    // the masked "Script error." cannot say WHERE - this can
+    window.__err='poll: '+(e&&e.message?e.message:e)
+      +(e&&e.stack?'   at '+String(e.stack).slice(0,120):'');
+    show__err(); offline();
+  }}
 let ES=null, lastMsg=0;
 function connect(){
  try{if(ES)ES.close()}catch(e){}
@@ -719,7 +736,14 @@ function connect(){
 setInterval(()=>{if(Date.now()-lastMsg>12000){poll();connect()}},6000);
 document.addEventListener('visibilitychange',()=>{
  if(!document.hidden){poll();if(Date.now()-lastMsg>6000)connect()}});
-poll();connect();
+try {
+  poll(); connect();
+} catch (e) {
+  window.__err = 'startup: ' + (e && e.message ? e.message : String(e))
+    + (e && e.stack ? '   at ' + String(e.stack).slice(0, 120) : '');
+  show__err();
+}
+window.__mainOK = true;   // last statement: proves the block parsed
 </script></body></html>"""
 
 
