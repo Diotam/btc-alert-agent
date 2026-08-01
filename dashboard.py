@@ -422,6 +422,9 @@ h1{font-size:17px;margin:4px 0 12px}
 </style></head><body>
 <h1>Signal Agent <span id=status class=badge></span>
 <span id=meta class=muted style="font-weight:400;font-size:12px"></span></h1>
+<div id=jserr style="display:none;background:#3d1418;border:0.5px solid #f85149;
+ color:#ffa198;border-radius:12px;padding:10px 14px;margin-bottom:10px;
+ font:12px ui-monospace,Menlo,monospace;white-space:pre-wrap"></div>
 <div id=btcbar class=card style="display:flex;justify-content:space-between;
      align-items:center;padding:9px 13px;position:sticky;top:0;z-index:20;
      backdrop-filter:blur(8px);background:rgba(22,27,34,.92)">
@@ -653,6 +656,24 @@ function render(d){
   document.getElementById('n-events').textContent=d.events.length;
   applyCollapse();
 }
+// Any uncaught error - including a PARSE error in this script - lands here
+// and is shown on the page. Without it a broken script just leaves the shell
+// sitting there with no badge and no clue what went wrong.
+window.addEventListener('error',function(ev){
+  var b=document.getElementById('jserr');
+  if(b){ b.style.display='block';
+         b.textContent='JS ERROR: '+(ev.message||ev.type)
+           +'  [line '+(ev.lineno||'?')+':'+(ev.colno||'?')+']'; }
+  var s=document.getElementById('status');
+  if(s){ s.textContent='JS ERROR'; s.className='badge warn'; }
+});
+window.addEventListener('unhandledrejection',function(ev){
+  var b=document.getElementById('jserr');
+  if(b){ b.style.display='block';
+         b.textContent='PROMISE ERROR: '+(ev.reason&&ev.reason.message
+                                          ? ev.reason.message : ev.reason); }
+});
+
 function offline(){document.getElementById('status').textContent='OFFLINE';
  document.getElementById('status').className='badge warn'}
 async function poll(){try{render(await (await fetch('/data'+(KEY?'?key='+KEY:''))).json())}
@@ -662,7 +683,11 @@ function connect(){
  try{if(ES)ES.close()}catch(e){}
  try{
   ES=new EventSource('/stream'+(KEY?'?key='+KEY:''));
-  ES.onmessage=e=>{lastMsg=Date.now();render(JSON.parse(e.data))};
+  ES.onmessage=e=>{lastMsg=Date.now();
+    try{ render(JSON.parse(e.data)) }
+    catch(err){ var b=document.getElementById('jserr');
+                if(b){ b.style.display='block';
+                       b.textContent='RENDER ERROR: '+err.message; } }};
   ES.onerror=()=>{offline()};
  }catch(e){offline()}
 }
