@@ -27,6 +27,83 @@ DASH_KEY = os.environ.get("DASH_KEY", "")
 # cannot be passed as URL parameters; a saved layout is the only free route.
 # Left blank, cards open a plain chart instead.
 TV_LAYOUT = os.environ.get("TV_LAYOUT", "").strip().strip("/")
+CLOSE_REQ_DIR = STATE_FILE.parent / "close_requests"
+
+# The dashboard closes positions ITSELF so a manual close is immediate rather
+# than waiting up to SCAN_EVERY for the agent to notice. It reuses the
+# agent's own execution code - same client, same rounding, same order
+# sequence - instead of a second implementation that could drift.
+try:
+    import btc_alert_agent as agent          # same directory on the droplet
+except Exception as _e:                      # dashboard must still run alone
+    agent = None
+    print(f"agent module unavailable ({type(_e).__name__}) - "
+          "manual closes will be queued for the agent instead")
+
+
+def _req_path(sym):
+    safe = "".join(c if c.isalnum() or c in "._-" else "_" for c in sym)
+    return CLOSE_REQ_DIR / (safe + ".req")
+
+
+def pending_closes():
+    """Symbols already closed here and waiting for the agent to clear state.
+    They are hidden from the panels so a closed position does not linger."""
+    out = set()
+    try:
+        for f in CLOSE_REQ_DIR.glob("*.req"):
+            try:
+                r = json.loads(f.read_text())
+            except (OSError, json.JSONDecodeError):
+                continue
+            if r.get("done") and r.get("sym"):
+                out.add(r["sym"])
+    except OSError:
+        pass
+    return out
+
+
+def request_close(sym):
+    """Close this position NOW. Returns (ok, message).
+
+    Only symbols the agent currently holds a trade on are accepted, so a
+    stray request cannot act on a position that does not exist.
+    """
+    state, _ = read_state()
+    ast = state.get(sym)
+    if not isinstance(ast, dict) or not ast.get("trade"):
+        return False, "no open trade on that symbol"
+    trade = dict(ast["trade"])
+    px = (prices() or {}).get(sym) or trade.get("entry")
+
+    done, note = False, "queued for the agent"
+    if agent is not None:
+        try:
+            if agent.EXEC_LIVE and agent.executable(sym) and trade.get("size"):
+                agent.close_position_live({"symbol": sym, "hl_coin": sym,
+                                           "label": sym, "fallbacks": []},
+                                          trade)
+                note = "closed at market"
+            else:
+                note = ("alert-only symbol - nothing to close on the exchange"
+                        if not agent.executable(sym) else "no live position")
+            # book it here too, so P&L updates immediately. record_close
+            # appends a single line in "a" mode, which is atomic enough for
+            # two processes.
+            agent.record_close(sym, trade, px, "MANUAL",
+                               int(time.time() * 1000),
+                               frac=trade.get("left", 1.0))
+            done = True
+        except Exception as e:
+            return False, f"close failed ({type(e).__name__}: {e})"
+
+    try:
+        CLOSE_REQ_DIR.mkdir(parents=True, exist_ok=True)
+        _req_path(sym).write_text(json.dumps(
+            {"sym": sym, "asked": time.time(), "done": done, "exit": px}))
+    except OSError as e:
+        return False, f"closed, but the state marker failed ({type(e).__name__})"
+    return True, note
 PORT = int(os.environ.get("DASH_PORT", "8080"))
 
 _price_cache = {"t": 0.0, "mids": {}}
@@ -232,6 +309,7 @@ def build_data():
     state, mtime = read_state()
     mids = prices()
     trades, runners = [], []
+    closing = pending_closes()
     scanned = 0
     for sym, ast in state.items():
         if sym.startswith("_") or not isinstance(ast, dict):
@@ -239,6 +317,8 @@ def build_data():
         scanned += 1
         mid = mids.get(sym)
         tr = ast.get("trade")
+        if tr and sym in closing:
+            continue          # closed from here, waiting for the agent
 
         if tr:
             sign = 1 if tr["verdict"] == "LONG" else -1
@@ -276,6 +356,10 @@ def build_data():
             "state_age_s": scan_age_s(state, mtime),
             # TradingView's interval code for whatever TF the agent runs, so
             # a card never opens a different timeframe from the one traded
+            # render every timestamp in the AGENT's timezone, not the
+            # browser's - otherwise a phone in another zone shows closed
+            # trades at times that do not match the agent's own logs
+            "tz": (state.get("_meta") or {}).get("tz", "America/Chicago"),
             "tv_interval": {"5m": "5", "15m": "15", "30m": "30",
                             "1h": "60", "4h": "240"}.get(
                 (state.get("_meta") or {}).get("tf", "15m"), "15"),
@@ -302,6 +386,10 @@ h1{font-size:17px;margin:4px 0 12px}
 .badge{display:inline-block;padding:2px 9px;border-radius:10px;font-size:12px;
        font-weight:600;margin-left:8px}
 .ok{background:#12351f;color:#3fb950}.warn{background:#3a2b12;color:#d29922}
+.closebtn{background:transparent;border:0.5px solid #6e7681;color:#c9d1d9;
+  font:11.5px inherit;padding:3px 10px;border-radius:10px;cursor:pointer}
+.closebtn:hover:enabled{border-color:#f85149;color:#f85149}
+.closebtn:disabled{opacity:.55;cursor:default}
 .card.tv{cursor:pointer}
 .card.tv:hover{border-color:#3d444d}
 .card{background:#161b22;border:1px solid #21262d;border-radius:10px;
@@ -353,6 +441,7 @@ h1{font-size:17px;margin:4px 0 12px}
 <div class="section shead" onclick="toggle('events')"><span class=chev id=c-events>\u25be</span>Recent events<span class=cnt id=n-events>0</span></div><div id=events></div>
 <script>
 let TVINT='15';   // replaced from _meta.tf on the first poll
+let TZ='America/Chicago';   // replaced from _meta.tz on the first poll
 const TVLAYOUT=__TV_LAYOUT__;
 // a saved layout carries its indicators; a bare /chart/ does not
 const TVBASE='https://www.tradingview.com/chart/'+(TVLAYOUT?TVLAYOUT+'/':'')+'?symbol=';
@@ -372,6 +461,19 @@ function tvSym(sym){
 // is never blocked, and a named target still reuses a single tab.
 const TOUCH = (navigator.maxTouchPoints || 0) > 1 ||
               !window.matchMedia('(hover: hover)').matches;
+
+function closeRunner(ev, sym){
+  ev.stopPropagation();          // the card itself opens TradingView
+  if(!confirm('Close '+sym+' at market NOW?\n\nThis sends the order '
+      +'immediately and cancels the resting stop and target.')) return;
+  const b=ev.currentTarget; b.disabled=true; b.textContent='closing...';
+  fetch('/close?sym='+encodeURIComponent(sym)+(KEY?'&key='+KEY:''),
+        {method:'POST'})
+    .then(r=>r.json())
+    .then(j=>{ b.textContent = j.ok ? 'closed' : 'failed';
+               if(!j.ok){ b.disabled=false; alert(j.msg||'close failed'); } })
+    .catch(()=>{ b.textContent='failed'; b.disabled=false; });
+}
 
 function tvOpen(sym){
   const url = TVBASE + tvSym(sym) + '&interval=' + TVINT;
@@ -438,6 +540,7 @@ function render(d){
    :'no closed trades yet';
   const st=document.getElementById('status');
   if(d.tv_interval) TVINT=d.tv_interval;
+  if(d.tz) TZ=d.tz;
   const limit=d.stale_after_s||480;
   const fresh=d.state_age_s!=null&&d.state_age_s<limit;
   st.textContent=fresh?'LIVE':'STALE '+(d.state_age_s==null?'':Math.round(d.state_age_s/60)+'m');
@@ -510,7 +613,10 @@ function render(d){
     <div class=row><span class=muted>stop <span class=num>$${px(t.stop)}</span> · risk-free</span>
     <span class=muted>booked at <span class=num>$${px(t.tp)}</span></span></div>
     <div class=bar><div class=fill style="width:${rp}%;background:${peak?'#3fb950':'#58a6ff'}"></div></div>
-    <div class=muted>${R==null?'':R.toFixed(2)+'R from entry'} · closes when the HA flips</div></div>`
+    <div class=row style="align-items:center">
+      <span class=muted>${R==null?'':R.toFixed(2)+'R from entry'} · closes when the HA flips</span>
+      <button class=closebtn onclick="closeRunner(event,'${t.sym}')">close now</button>
+    </div></div>`
   }).join(''):'<div class="card muted">none</div>';
   document.getElementById('csub').textContent=LABEL[PERIOD];
   const cut=Date.now()-DAYS[PERIOD]*86400000;
@@ -525,7 +631,7 @@ function render(d){
   const iconFor=c=>c.kind==='BE'?'➡️':(c.pnl_pct>=0?'✅':'❌');
   document.getElementById('closed').innerHTML=shown.length?shown.map(c=>{
    const cls=c.dir==='LONG'?'long':'short';
-   const when=new Date(c.t).toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+   const when=new Date(c.t).toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',timeZone:TZ});
    return `<div class="card tv" onclick="tvOpen('${c.sym}')" title="open ${c.sym} on TradingView"><div class=row>
     <span class=sym>${iconFor(c)} ${c.sym} <span class=${cls}>${c.dir}</span>
     <span class=muted style="font-weight:400">${KINDS[c.kind]||c.kind}</span>${c.frac&&c.frac<1?` <span class=muted style="font-size:10.5px">${Math.round(c.frac*100)}% closed</span>`:''}</span>
@@ -571,6 +677,9 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def do_POST(self):
+        self.do_GET()          # same routing and the same key check
+
     def do_GET(self):
         url = urlparse(self.path)
         if DASH_KEY:
@@ -578,7 +687,13 @@ class Handler(BaseHTTPRequestHandler):
             if key != DASH_KEY:
                 self._send(403, b"forbidden", "text/plain")
                 return
-        if url.path == "/data":
+        if url.path == "/close":
+            sym = (parse_qs(url.query).get("sym") or [""])[0]
+            ok, msg = request_close(sym) if sym else (False, "no symbol")
+            self._send(200 if ok else 400,
+                       json.dumps({"ok": ok, "msg": msg}).encode(),
+                       "application/json")
+        elif url.path == "/data":
             self._send(200, json.dumps(build_data()).encode(),
                        "application/json")
         elif url.path == "/stream":
