@@ -261,7 +261,13 @@ def build_data():
                            "rr": tr.get("rr"),
                            "opened_t": tr.get("opened_t", 0)})
 
-    trades.sort(key=lambda t: t["sym"])
+    # fullest bar at the top. The open-trade bar is one scale - stop at 0%,
+    # entry at 40%, target at 100% - so sorting by R puts the trade closest
+    # to its target first and the one closest to its stop last. Rebuilt on
+    # every SSE tick, so the order re-shuffles live as prices move.
+    trades.sort(key=lambda t: (t["r"] is None,
+                               -(t["r"] if t["r"] is not None else 0),
+                               t["sym"]))
     # best-performing runner first - it is the one closest to being given
     # back if the HA turns
     runners.sort(key=lambda t: -(t["r"] if t["r"] is not None else -99))
