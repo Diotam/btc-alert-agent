@@ -467,8 +467,11 @@ const TOUCH = (navigator.maxTouchPoints || 0) > 1 ||
 
 function closeRunner(ev, sym){
   ev.stopPropagation();          // the card itself opens TradingView
-  if(!confirm('Close '+sym+' at market NOW?\n\nThis sends the order '
-      +'immediately and cancels the resting stop and target.')) return;
+  // NO \n escapes here: PAGE is a non-raw triple-quoted Python string, so a
+  // backslash-n in this file becomes a REAL newline in the served HTML and
+  // breaks the JS string literal. Keep confirm text on one line.
+  if(!confirm('Close '+sym+' at market NOW? This sends the order immediately '
+      +'and cancels the resting stop and target.')) return;
   const b=ev.currentTarget; b.disabled=true; b.textContent='closing...';
   fetch('/close?sym='+encodeURIComponent(sym)+(KEY?'&key='+KEY:''),
         {method:'POST'})
