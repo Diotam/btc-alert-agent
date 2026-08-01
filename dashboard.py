@@ -384,6 +384,18 @@ PAGE = """<!DOCTYPE html><html><head>
    which is why a broken page showed no banner and no badge - the handler
    never existed. Registered here, it survives whatever happens later. */
 window.__err = null;
+/* WebKit reports a bare "Script error." with no line for same-origin inline
+   code, so the error message cannot tell us WHERE it died. This does: every
+   stage calls step(), and whatever the last recorded stage is, that is the
+   line that failed. Always on - it is a handful of string appends. */
+window.__steps = [];
+function step(name) {
+  window.__steps.push(name);
+  var b = document.getElementById('jstrace');
+  if (b) { b.style.display = 'block';
+           b.textContent = 'trace: ' + window.__steps.join(' > '); }
+}
+step('early');
 window.onerror = function (m, src, line, col) {
   window.__err = m + '  [line ' + line + ':' + col + ']';
   show__err();
@@ -456,6 +468,10 @@ h1{font-size:17px;margin:4px 0 12px}
 </style></head><body>
 <h1>Signal Agent <span id=status class=badge></span>
 <span id=meta class=muted style="font-weight:400;font-size:12px"></span></h1>
+<div id=jstrace style="display:none;background:#161b22;
+ border:0.5px solid #30363d;color:#8b949e;border-radius:12px;
+ padding:8px 12px;margin-bottom:8px;font:11px ui-monospace,Menlo,monospace;
+ word-break:break-all"></div>
 <div id=jserr style="display:none;background:#3d1418;border:0.5px solid #f85149;
  color:#ffa198;border-radius:12px;padding:10px 14px;margin-bottom:10px;
  font:12px ui-monospace,Menlo,monospace;white-space:pre-wrap"></div>
@@ -504,9 +520,10 @@ const TOUCH = (navigator.maxTouchPoints || 0) > 1 ||
 
 function closeRunner(ev, sym){
   ev.stopPropagation();          // the card itself opens TradingView
-  // NO \n escapes here: PAGE is a non-raw triple-quoted Python string, so a
-  // backslash-n in this file becomes a REAL newline in the served HTML and
-  // breaks the JS string literal. Keep confirm text on one line.
+  // Never write a backslash escape in this file: PAGE is a non-raw
+  // triple-quoted Python string, so it resolves when Python parses the
+  // file and lands as a REAL newline in the served HTML - which breaks
+  // whatever string or comment it sits in. Keep this text on one line.
   if(!confirm('Close '+sym+' at market NOW? This sends the order immediately '
       +'and cancels the resting stop and target.')) return;
   const b=ev.currentTarget; b.disabled=true; b.textContent='closing...';
@@ -582,6 +599,7 @@ function render(d){
    `<span class=pnl-pos>${pw.w}W</span> · <span class=pnl-neg>${pw.l}L</span> · ${Math.round(pw.w/n*100)}% win rate`
    :'no closed trades yet';
   const st=document.getElementById('status');
+  step('r-start');
   if(d.tv_interval) TVINT=d.tv_interval;
   if(d.tz) TZ=d.tz;
   const limit=d.stale_after_s||480;
@@ -590,6 +608,7 @@ function render(d){
   const age=d.state_age_s==null?'':' · scan '+(d.state_age_s<60?d.state_age_s+'s':Math.round(d.state_age_s/60)+'m')+' ago';
   st.className='badge '+(fresh?'ok':'warn');
   document.getElementById('meta').textContent=d.scanned+' markets'+age;
+  step('r-hdr');
   document.getElementById('trades').innerHTML=d.trades.length?d.trades.map(t=>{
    const cls=t.dir==='LONG'?'long':'short';
    const sgn=t.dir==='LONG'?1:-1;
@@ -641,6 +660,7 @@ function render(d){
   // RUNNERS: partial booked, stop at entry, riding until the HA flips.
   // Everything is measured from the ORIGINAL entry, and nothing here ever
   // freezes - these are live positions with no target left to hit.
+  step('r-trades');
   document.getElementById('runners').innerHTML=d.runners.length?d.runners.map(t=>{
    const cls=t.dir==='LONG'?'long':'short';
    const R=t.r==null?null:t.r;
@@ -662,6 +682,7 @@ function render(d){
     </div></div>`
   }).join(''):'<div class="card muted">none</div>';
   document.getElementById('csub').textContent=LABEL[PERIOD];
+  step('r-runners');
   const cut=Date.now()-DAYS[PERIOD]*86400000;
   const shown=d.closed.filter(c=>c.t>=cut).slice(0,20);
   // a partial and its runner are merged server-side into ONE trade, so
@@ -687,8 +708,10 @@ function render(d){
   document.getElementById('n-trades').textContent=d.trades.length;
   document.getElementById('n-runners').textContent=d.runners.length;
   document.getElementById('n-closed').textContent=shown.length;
+  step('r-closed');
   document.getElementById('n-events').textContent=d.events.length;
   applyCollapse();
+  step('r-done');
 }
 // Any uncaught error - including a PARSE error in this script - lands here
 // and is shown on the page. Without it a broken script just leaves the shell
@@ -711,7 +734,15 @@ window.addEventListener('unhandledrejection',function(ev){
 function offline(){document.getElementById('status').textContent='OFFLINE';
  document.getElementById('status').className='badge warn'}
 async function poll(){
-  try{ render(await (await fetch('/data'+(KEY?'?key='+KEY:''))).json()) }
+  try{
+    step('fetch');
+    var r = await fetch('/data'+(KEY?'?key='+KEY:''));
+    step('http-'+r.status);
+    var d = await r.json();
+    step('json-ok');
+    render(d);
+    step('render-ok');
+  }
   catch(e){
     // the masked "Script error." cannot say WHERE - this can
     window.__err='poll: '+(e&&e.message?e.message:e)
@@ -736,8 +767,10 @@ function connect(){
 setInterval(()=>{if(Date.now()-lastMsg>12000){poll();connect()}},6000);
 document.addEventListener('visibilitychange',()=>{
  if(!document.hidden){poll();if(Date.now()-lastMsg>6000)connect()}});
+step('main-parsed');
 try {
   poll(); connect();
+  step('startup-ok');
 } catch (e) {
   window.__err = 'startup: ' + (e && e.message ? e.message : String(e))
     + (e && e.stack ? '   at ' + String(e.stack).slice(0, 120) : '');
