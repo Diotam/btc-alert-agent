@@ -389,11 +389,19 @@ window.__err = null;
    stage calls step(), and whatever the last recorded stage is, that is the
    line that failed. Always on - it is a handful of string appends. */
 window.__steps = [];
+window.__rendered = false;   /* set true by the first successful render */
+window.__debug = (location.search.indexOf('debug') >= 0);
 function step(name) {
   window.__steps.push(name);
+  if (window.__steps.length > 14) window.__steps.shift();   /* keep it short */
+  /* Once a render has succeeded the page is demonstrably working, so the
+     trace is just noise - it only stays visible while something is wrong,
+     or when ?debug is in the URL. */
   var b = document.getElementById('jstrace');
-  if (b) { b.style.display = 'block';
-           b.textContent = 'trace: ' + window.__steps.join(' > '); }
+  if (!b) return;
+  if (window.__rendered && !window.__debug) { b.style.display = 'none'; return; }
+  b.style.display = 'block';
+  b.textContent = 'trace: ' + window.__steps.join(' > ');
 }
 step('early');
 window.onerror = function (m, src, line, col) {
@@ -403,6 +411,13 @@ window.onerror = function (m, src, line, col) {
 };
 function show__err() {
   if (!window.__err) return;
+  /* WebKit reports a bare masked "Script error." for things that are not
+     fatal. If the page has rendered at least once it is working, so do not
+     alarm with a banner unless ?debug is set. */
+  if (window.__rendered && !window.__debug
+      && String(window.__err).indexOf('Script error') === 0) {
+    window.__err = null; return;
+  }
   var b = document.getElementById('jserr');
   if (!b) return;
   b.style.display = 'block';
@@ -741,7 +756,12 @@ async function poll(){
     var d = await r.json();
     step('json-ok');
     render(d);
+    window.__rendered = true;
     step('render-ok');
+    var eb = document.getElementById('jserr');
+    if (eb && !window.__debug) { eb.style.display = 'none'; }
+    var sb = document.getElementById('jstrace');
+    if (sb && !window.__debug) { sb.style.display = 'none'; }
   }
   catch(e){
     // the masked "Script error." cannot say WHERE - this can
