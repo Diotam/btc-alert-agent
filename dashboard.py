@@ -35,9 +35,12 @@ CLOSE_REQ_DIR = STATE_FILE.parent / "close_requests"
 # sequence - instead of a second implementation that could drift.
 try:
     import btc_alert_agent as agent          # same directory on the droplet
-except Exception as _e:                      # dashboard must still run alone
+except BaseException as _e:                  # dashboard must still run alone
+    # BaseException, not Exception: the agent calls raise SystemExit on a bad
+    # config value, and SystemExit is NOT an Exception - catching only
+    # Exception would let it kill the dashboard at import time
     agent = None
-    print(f"agent module unavailable ({type(_e).__name__}) - "
+    print(f"agent module unavailable ({type(_e).__name__}: {_e}) - "
           "manual closes will be queued for the agent instead")
 
 
