@@ -134,8 +134,20 @@ CLOSE_REQ_DIR = Path(__file__).parent / "close_requests"   # the dashboard
 #   drops one marker file per symbol here; the agent closes that position on
 #   its next scan and removes the file. A directory of markers rather than a
 #   shared JSON file, so the two processes never write the same bytes   # touch this to stop new entries
-EXEC_RISK_USD = 2.0                # fixed dollar risk per trade
-EXEC_MAX_NOTIONAL_USD = 2500       # cap on position value
+EXEC_SIZING = "notional"           # "notional" = put a FIXED DOLLAR AMOUNT
+                                   #   into every trade; the loss at the stop
+                                   #   then varies with how wide the stop is
+                                   # "risk"     = fixed dollar LOSS at the
+                                   #   stop; the position size then varies
+EXEC_NOTIONAL_USD = 30.0           # size of each position in "notional" mode
+EXEC_RISK_USD = 2.0                # dollar loss at the stop in "risk" mode
+EXEC_MAX_NOTIONAL_USD = 8000       # cap on position value. Must be at
+                                   # least EXEC_RISK_USD / MIN_STOP_PCT or
+                                   # the cap silently trims the position and
+                                   # the risk with it: at $20 risk and a
+                                   # 0.25% stop the trade needs $8,000, and
+                                   # a $2,500 cap would have cut the actual
+                                   # risk to $6.25
 EXEC_MAX_POSITIONS = 0             # concurrent live positions. 0 = NO CAP:
                                    # the only remaining limits are the halt
                                    # file, EXEC_MAX_NOTIONAL_USD per trade,
@@ -799,20 +811,44 @@ def exec_blocked(open_count, day_pnl_usd):
     return None
 
 
-def plan_entry_orders(asset, trade):
+def plan_entry_orders(asset, trade, live_px=None):
     """Size the trade by fixed dollar risk and describe the orders. Logged
-    to orders.log. Returns the plan, or None."""
+    to orders.log. Returns the plan, or None.
+
+    Sizing uses `live_px` - the price of the still-forming candle - rather
+    than trade["entry"], which is the DOJI candle's close and is already
+    stale by the time the order goes out. Size is fixed at send time but the
+    fill lands at whatever the market is doing now, so sizing off the stale
+    price makes the realised risk drift: measured on his own fills it ranged
+    from $0.65 to $2.19 against a $2.00 target.
+    """
     sym = asset["symbol"]
     entry, stop, tp = trade["entry"], trade["stop"], trade["tp"]
     long_ = trade["verdict"] == "LONG"
-    per_unit = abs(entry - stop)
+    size_px = entry
+    if live_px:
+        live_gap = (live_px - stop) if long_ else (stop - live_px)
+        if live_gap > 0:
+            size_px = live_px          # only if it still leaves real risk
+    per_unit = abs(size_px - stop)
     if per_unit <= 0:
         return None
-    size = EXEC_RISK_USD / per_unit
-    notional = size * entry
+    if EXEC_SIZING == "notional":
+        # the SAME dollar amount goes into every trade. What that costs if
+        # the stop hits then depends on the stop width: a 0.25% stop loses
+        # 0.25% of the position, a 3% stop loses 3%.
+        size = EXEC_NOTIONAL_USD / size_px
+    else:
+        size = EXEC_RISK_USD / per_unit
+    if size_px != entry:
+        log(f"{sym}: sizing off the live {fmt_px(size_px)} rather than the "
+            f"doji close {fmt_px(entry)} "
+            f"(stop {per_unit / size_px * 100:.3f}% vs "
+            f"{abs(entry - stop) / entry * 100:.3f}%)")
+    notional = size * size_px
     capped = ""
     if notional > EXEC_MAX_NOTIONAL_USD:
-        size = EXEC_MAX_NOTIONAL_USD / entry
+        size = EXEC_MAX_NOTIONAL_USD / size_px
         notional = EXEC_MAX_NOTIONAL_USD
         capped = f" [notional capped, risk now ${size * per_unit:.2f}]"
     rec = {"t": now_ms(), "sym": sym,
@@ -1053,8 +1089,10 @@ def place_entry_live(asset, trade, plan):
         return None
     trade["size"] = size
     per_unit = abs(trade["entry"] - trade["stop"])
-    log(f"{sym}: position {size} units, real risk "
-        f"${size * per_unit:.2f} (planned ${EXEC_RISK_USD:.2f})")
+    target = (f"${EXEC_NOTIONAL_USD:.2f} in" if EXEC_SIZING == "notional"
+              else f"${EXEC_RISK_USD:.2f} risk")
+    log(f"{sym}: position {size} units = ${size * trade['entry']:.2f} in, "
+        f"loses ${size * per_unit:.2f} at the stop (target {target})")
     try:
         r_stop = ex.order(sym, not long_, size, round_px(trade["stop"]),
                           {"trigger": {"triggerPx": round_px(trade["stop"]),
@@ -1087,7 +1125,8 @@ def place_entry_live(asset, trade, plan):
 
 
 # --------------------------- entry -----------------------------------------
-def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger):
+def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger,
+               live_px=None):
     """Risk checks, override handling, alert, trade creation and (when
     enabled) the live order. Returns True if a trade was opened."""
     sym = asset["symbol"]
@@ -1133,7 +1172,7 @@ def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger):
     # remember WHICH setup this came from so it cannot fire a second time
     if ast.get("setup"):
         ast["traded"] = {"ft": ast["setup"].get("ft"), "dir": direction}
-    order_plan = plan_entry_orders(asset, ast["trade"])
+    order_plan = plan_entry_orders(asset, ast["trade"], live_px)
     if EXEC_LIVE and order_plan:
         # the daily loss limit needs realised USD from the ledger, which is
         # not tracked yet - only the halt file and the position cap bite
@@ -1197,10 +1236,13 @@ def process_candle(asset, ast, candles, ha, i):
             f"{'low' if want_long else 'high'} ${fmt_px(stop)} "
             f"(HA {'low' if want_long else 'high'} was "
             f"${fmt_px(hd['l'] if want_long else hd['h'])})")
+        # candles[-1] is the still-forming candle: its close is the current
+        # price, free, with no extra API call
         fire_entry(asset, ast, direction, c, stop, c["h"], c["l"], "HA",
                    f"HA doji after a {'down' if want_long else 'up'}trend - "
                    f"stop at the real candle "
-                   f"{'low' if want_long else 'high'}")
+                   f"{'low' if want_long else 'high'}",
+                   live_px=candles[-1]["c"])
         return True
 
     if ast.get("setup"):
