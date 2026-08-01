@@ -136,7 +136,10 @@ CLOSE_REQ_DIR = Path(__file__).parent / "close_requests"   # the dashboard
 #   shared JSON file, so the two processes never write the same bytes   # touch this to stop new entries
 EXEC_RISK_USD = 2.0                # fixed dollar risk per trade
 EXEC_MAX_NOTIONAL_USD = 2500       # cap on position value
-EXEC_MAX_POSITIONS = 3             # concurrent live positions
+EXEC_MAX_POSITIONS = 0             # concurrent live positions. 0 = NO CAP:
+                                   # the only remaining limits are the halt
+                                   # file, EXEC_MAX_NOTIONAL_USD per trade,
+                                   # and whatever margin the account has
 EXEC_DAILY_LOSS_LIMIT_USD = 40.0   # INERT: needs realised USD from the ledger,
                                    # which is not tracked yet
 
@@ -789,7 +792,7 @@ def exec_blocked(open_count, day_pnl_usd):
     """Reasons a live entry must not be sent."""
     if os.path.exists(EXEC_HALT_FILE):
         return "EXEC_HALT file present"
-    if open_count >= EXEC_MAX_POSITIONS:
+    if EXEC_MAX_POSITIONS and open_count >= EXEC_MAX_POSITIONS:
         return f"{open_count} positions already open (max {EXEC_MAX_POSITIONS})"
     if day_pnl_usd <= -abs(EXEC_DAILY_LOSS_LIMIT_USD):
         return f"daily loss limit hit ({day_pnl_usd:+.2f})"
