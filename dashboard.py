@@ -378,6 +378,29 @@ def build_data():
 
 
 PAGE = """<!DOCTYPE html><html><head>
+<script>
+/* FIRST script on the page, deliberately separate and tiny. A parse error in
+   the main script block kills every listener registered INSIDE that block,
+   which is why a broken page showed no banner and no badge - the handler
+   never existed. Registered here, it survives whatever happens later. */
+window.__err = null;
+window.onerror = function (m, src, line, col) {
+  window.__err = m + '  [line ' + line + ':' + col + ']';
+  show__err();
+  return false;
+};
+function show__err() {
+  if (!window.__err) return;
+  var b = document.getElementById('jserr');
+  if (!b) return;
+  b.style.display = 'block';
+  b.textContent = 'JS ERROR: ' + window.__err;
+  var s = document.getElementById('status');
+  if (s) { s.textContent = 'JS ERROR'; s.className = 'badge warn'; }
+}
+document.addEventListener('DOMContentLoaded', show__err);
+window.addEventListener('load', show__err);
+</script>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Signal Agent</title><style>
