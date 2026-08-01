@@ -269,6 +269,11 @@ def build_data():
     closed, pnl = closed_trades()
     return {"now": time.time(),
             "state_age_s": scan_age_s(state, mtime),
+            # TradingView's interval code for whatever TF the agent runs, so
+            # a card never opens a different timeframe from the one traded
+            "tv_interval": {"5m": "5", "15m": "15", "30m": "30",
+                            "1h": "60", "4h": "240"}.get(
+                (state.get("_meta") or {}).get("tf", "15m"), "15"),
             # the agent publishes its own pulse, so the staleness threshold
             # follows SCAN_EVERY instead of assuming the old 5m loop. Two
             # missed scans plus a minute of slack before anything is wrong.
@@ -342,7 +347,7 @@ h1{font-size:17px;margin:4px 0 12px}
 <div class="section shead" onclick="toggle('closed')"><span class=chev id=c-closed>\u25be</span>Closed trades<span class=cnt id=n-closed>0</span> <span id=csub class=muted style="float:right;text-transform:none;letter-spacing:0"></span></div><div id=closed></div>
 <div class="section shead" onclick="toggle('events')"><span class=chev id=c-events>\u25be</span>Recent events<span class=cnt id=n-events>0</span></div><div id=events></div>
 <script>
-const TVINT='15';
+let TVINT='15';   // replaced from _meta.tf on the first poll
 const TVLAYOUT=__TV_LAYOUT__;
 // a saved layout carries its indicators; a bare /chart/ does not
 const TVBASE='https://www.tradingview.com/chart/'+(TVLAYOUT?TVLAYOUT+'/':'')+'?symbol=';
@@ -427,6 +432,7 @@ function render(d){
    `<span class=pnl-pos>${pw.w}W</span> · <span class=pnl-neg>${pw.l}L</span> · ${Math.round(pw.w/n*100)}% win rate`
    :'no closed trades yet';
   const st=document.getElementById('status');
+  if(d.tv_interval) TVINT=d.tv_interval;
   const limit=d.stale_after_s||480;
   const fresh=d.state_age_s!=null&&d.state_age_s<limit;
   st.textContent=fresh?'LIVE':'STALE '+(d.state_age_s==null?'':Math.round(d.state_age_s/60)+'m');
