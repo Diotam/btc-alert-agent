@@ -774,12 +774,8 @@ async function poll(){
     var d = await r.json();
     step('json-ok');
     render(d);
-    window.__rendered = true;
+    renderOK();
     step('render-ok');
-    var eb = document.getElementById('jserr');
-    if (eb && !window.__debug) { eb.style.display = 'none'; }
-    var sb = document.getElementById('jstrace');
-    if (sb && !window.__debug) { sb.style.display = 'none'; }
   }
   catch(e){
     // the masked "Script error." cannot say WHERE - this can
@@ -787,16 +783,27 @@ async function poll(){
       +(e&&e.stack?'   at '+String(e.stack).slice(0,120):'');
     show__err(); offline();
   }}
+function renderOK(){
+  // a render succeeded, from EITHER path: the page is demonstrably working,
+  // so clear the diagnostics
+  window.__rendered = true;
+  window.__err = null;
+  if (window.__debug) return;
+  var eb = document.getElementById('jserr');
+  if (eb) { eb.style.display = 'none'; }
+  var sb = document.getElementById('jstrace');
+  if (sb) { sb.style.display = 'none'; }
+}
+
 let ES=null, lastMsg=0;
 function connect(){
  try{if(ES)ES.close()}catch(e){}
  try{
   ES=new EventSource('/stream'+(KEY?'?key='+KEY:''));
   ES.onmessage=e=>{lastMsg=Date.now();
-    try{ render(JSON.parse(e.data)) }
-    catch(err){ var b=document.getElementById('jserr');
-                if(b){ b.style.display='block';
-                       b.textContent='RENDER ERROR: '+err.message; } }};
+    try{ render(JSON.parse(e.data)); renderOK(); }
+    catch(err){ window.__err='render: '+(err&&err.message?err.message:err);
+                window.__rendered=false; show__err(); }};
   ES.onerror=()=>{offline()};
  }catch(e){offline()}
 }
