@@ -58,9 +58,15 @@ ADMIT_COMMODITIES = True
 ADMIT_STOCKS = False               # equities out of the universe. The
                                    # is one line to flip back
 DEXES = [""]                       # fallback when dex discovery fails
+# EXACT names, never prefixes. This used to be a startswith() match, which
+# on an equities venue swallowed every ticker beginning with CL, NG or HG -
+# CLF, CLX, CLSK, NGD, HGV. Those were then classified as commodities, let
+# in at the lower commodity volume floor, and - worse - they bypassed
+# ADMIT_STOCKS entirely, so equities that were switched off still entered
+# the universe through this door.
 COMMODITY_TICKERS = ("XAU", "GOLD", "XAG", "SILVER", "XPT", "PLAT",
-                     "XPD", "PALLAD", "CL", "OIL", "WTI", "BRENT",
-                     "NG", "NATGAS", "HG", "COPPER")
+                     "XPD", "PALLADIUM", "CL", "WTI", "OIL", "BRENT",
+                     "BRENTOIL", "NG", "NATGAS", "HG", "COPPER")
 STOCK_DEXES = ("xyz",)             # TradeXYZ equities venue
 MIN_DAY_VOLUME_USD = 2_000_000     # crypto floor, 24h notional
 COMMODITY_MIN_VOLUME_USD = 5_000_000
@@ -336,8 +342,8 @@ def executable(symbol):
 
 
 def is_commodity(name):
-    base = base_name(name)
-    return any(base.startswith(t) for t in COMMODITY_TICKERS)
+    """Exact match only - see the note on COMMODITY_TICKERS."""
+    return base_name(name).upper() in COMMODITY_TICKERS
 
 
 def list_dexes():
