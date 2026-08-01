@@ -526,7 +526,7 @@ const TVBASE='https://www.tradingview.com/chart/'+(TVLAYOUT?TVLAYOUT+'/':'')+'?s
 // Main-dex perps are HYPERLIQUID:<TICKER>USDC.P; builder-venue symbols
 // (xyz:ARM, xyz:CL) are equities and commodities TradingView carries under
 // their own tickers, so the bare name resolves better.
-function age(openedT){
+function tradeAge(openedT){
   // how long the position has been on. opened_t is the candle open, the fill
   // is at its close, so add one candle.
   if(!openedT) return '';
@@ -681,7 +681,7 @@ function render(d){
      ?`${showR.toFixed(2)}R · ${Math.round(Math.min(100,showR/RRT*100))}% of the way to TP`
      :`${showR.toFixed(2)}R · ${Math.round(Math.min(100,-showR*100))}% of the way to stop`;
    return `<div class="card tv" onclick="tvOpen('${t.sym}')" title="open ${t.sym} on TradingView">
-    <div class=row><span class=sym>${t.sym} <span class=${cls}>${t.dir}</span>${t.lev?` <span class=lev>${t.lev}x</span>`:''}${t.opened_t?` <span class=muted style="font-size:11px;font-weight:400">${age(t.opened_t)}</span>`:''} ${badge}</span>
+    <div class=row><span class=sym>${t.sym} <span class=${cls}>${t.dir}</span>${t.lev?` <span class=lev>${t.lev}x</span>`:''}${t.opened_t?` <span class=muted style="font-size:11px;font-weight:400">${tradeAge(t.opened_t)}</span>`:''} ${badge}</span>
     <span class="num ${showPnl>=0?'pnl-pos':'pnl-neg'}">${showPnl==null?'-':(showPnl>=0?'+':'')+showPnl.toFixed(2)+'%'}</span></div>
     <div class=row><span class=muted>entry <span class=num>$${px(t.entry)}</span></span>
     <span class=muted>${slDone?'exit':'now'} <span class=num>$${px(slDone?t.stop:t.mid)}</span></span></div>
@@ -702,7 +702,7 @@ function render(d){
    const rp=R==null?0:Math.max(0,Math.min(100,(R/(t.rr*2))*100));
    const peak=R!=null&&R>=t.rr*2;
    return `<div class="card tv" onclick="tvOpen('${t.sym}')" title="open ${t.sym} on TradingView">
-    <div class=row><span class=sym>${t.sym} <span class=${cls}>${t.dir}</span>${t.lev?` <span class=lev>${t.lev}x</span>`:''}${t.opened_t?` <span class=muted style="font-size:11px;font-weight:400">${age(t.opened_t)}</span>`:''} <span class="badge ok">${Math.round(t.left*100)}% running</span></span>
+    <div class=row><span class=sym>${t.sym} <span class=${cls}>${t.dir}</span>${t.lev?` <span class=lev>${t.lev}x</span>`:''}${t.opened_t?` <span class=muted style="font-size:11px;font-weight:400">${tradeAge(t.opened_t)}</span>`:''} <span class="badge ok">${Math.round(t.left*100)}% running</span></span>
     <span class="num ${t.pnl>=0?'pnl-pos':'pnl-neg'}">${t.pnl==null?'-':(t.pnl>=0?'+':'')+t.pnl.toFixed(2)+'%'}</span></div>
     <div class=row><span class=muted>entry <span class=num>$${px(t.entry)}</span></span>
     <span class=muted>now <span class=num>$${px(t.mid)}</span></span></div>
