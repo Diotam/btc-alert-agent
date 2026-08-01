@@ -97,6 +97,13 @@ HA_MIN_BODY_PCT = 0.05             # the trend run must contain at least one
                                    # setup with no visible colour flip at all.
                                    # Measured: near-flat series produce bodies
                                    # of 0.005-0.034%, normal ones 0.081%+
+HA_REQUIRE_FLIP = True             # the doji must ALSO have flipped colour -
+                                   # a red trend must have printed a GREEN
+                                   # doji before a long. Without this the
+                                   # signal fires on a small red body while
+                                   # the trend is still technically intact,
+                                   # which anticipates the turn rather than
+                                   # confirming it
 HA_DOJI_FRACTION = 0.25            # a DOJI is an HA body this small relative
                                    # to the biggest body in the trend run that
                                    # led into it. Scale-free, so it adapts per
@@ -480,11 +487,13 @@ def ha_doji(ha, i, want_long):
     Returns (doji_index, run_start) or None.
     """
     n = HA_TREND_RUN
-    # the run of trend-coloured candles ending at i. want_long means the
-    # trend into the doji was RED, so the doji turns us long.
-    if ha_green(ha[i]) == want_long and ha_body(ha[i]) > 0:
-        pass                                 # the doji may already have
-        #                                      flipped colour - both are fine
+    # want_long means the trend into the doji was RED, so the doji turns
+    # us long. With HA_REQUIRE_FLIP the doji must have actually CHANGED
+    # colour; without it, a small trend-coloured body also counts, which
+    # fires roughly six times as often but anticipates the turn instead of
+    # confirming it.
+    if HA_REQUIRE_FLIP and ha_green(ha[i]) != want_long:
+        return None
     r = i - 1
     while r >= 0 and ha_green(ha[r]) != want_long:
         r -= 1
