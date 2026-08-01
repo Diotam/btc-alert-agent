@@ -27,12 +27,6 @@ DASH_KEY = os.environ.get("DASH_KEY", "")
 # cannot be passed as URL parameters; a saved layout is the only free route.
 # Left blank, cards open a plain chart instead.
 TV_LAYOUT = os.environ.get("TV_LAYOUT", "").strip().strip("/")
-# The agent's HA zone is now a rolling band over the last few flipped candles,
-# so it is far narrower than the old pinned zone. Scaling the approach bar to
-# the band width would leave it empty until price was almost touching. Scale
-# it to a fixed percentage of price instead: the bar fills over the final
-# APPROACH_PCT of the move back toward the band.
-APPROACH_PCT = 2.0
 PORT = int(os.environ.get("DASH_PORT", "8080"))
 
 _price_cache = {"t": 0.0, "mids": {}}
@@ -202,7 +196,7 @@ def scan_age_s(state, mtime):
 def build_data():
     state, mtime = read_state()
     mids = prices()
-    trades, zones = [], []
+    trades, runners = [], []
     scanned = 0
     for sym, ast in state.items():
         if sym.startswith("_") or not isinstance(ast, dict):
@@ -210,9 +204,6 @@ def build_data():
         scanned += 1
         mid = mids.get(sym)
         tr = ast.get("trade")
-        setup = ast.get("setup")
-        armed_dir = (setup or {}).get("dir")
-        long_ = armed_dir == "LONG"
 
         if tr:
             sign = 1 if tr["verdict"] == "LONG" else -1
@@ -222,7 +213,11 @@ def build_data():
             if mid:
                 pnl = sign * (mid - tr["entry"]) / tr["entry"] * 100
                 r_now = sign * (mid - tr["entry"]) / risk
-            trades.append({"sym": sym, "dir": tr["verdict"],
+            # a trade that has booked its partial is a RUNNER: risk-free,
+            # stop at entry, closing only when the HA flips. It gets its own
+            # list so the open-trades panel stays "still at risk"
+            (runners if tr.get("half") else trades).append(
+                          {"sym": sym, "dir": tr["verdict"],
                            "half": bool(tr.get("half")),
                            "left": tr.get("left", 1.0),
                            "lev": ast.get("lev"), "risk": risk,
@@ -231,41 +226,10 @@ def build_data():
                            "rr": tr.get("rr"),
                            "opened_t": tr.get("opened_t", 0)})
 
-        # an armed HA setup. Three states, in order: waiting for price to
-        # leave the band, waiting for it to come back, then waiting for a
-        # confirming candle. dist_pct is how far price is from the band edge
-        # it has to re-enter; the bar fills over the last APPROACH_PCT of that
-        # gap, which stays readable however narrow the band is.
-        if setup and not tr:
-            zhi, zlo = setup.get("zhi"), setup.get("zlo")
-            edge = zhi if long_ else zlo
-            dist = dist_pct = prog = None
-            if mid and edge:
-                dist = mid - edge if long_ else edge - mid
-                dist_pct = dist / mid * 100
-                prog = max(0.0, min(100.0,
-                                    (1 - dist_pct / APPROACH_PCT) * 100))
-            # the doji engine enters immediately, so a card here is a signal
-            # that was found but refused - almost always by MIN_STOP_PCT
-            stage = "HA doji \u00b7 stop too tight to trade"
-            zones.append({"sym": sym, "dir": armed_dir, "lev": ast.get("lev"),
-                          "zhi": zhi, "zlo": zlo, "stage": stage,
-                          "touched": bool(setup.get("touched")),
-                          "departed": bool(setup.get("departed")),
-                          "dist": dist, "dist_pct": dist_pct,
-                          "mid": mid, "prog": prog})
-
     trades.sort(key=lambda t: t["sym"])
-    # closest to triggering first: fullest bar at the top. Rebuilt on every
-    # SSE tick, so the order re-shuffles live as prices move. Cards with no
-    # bar (older state without hi/lo) sink to the bottom.
-    # nearest to firing first: confirmed pullbacks, then departures, then
-    # the fullest bar within each
-    zones.sort(key=lambda z: (
-        not z["touched"], not z["departed"], z["prog"] is None,
-        -(z["prog"] if z["prog"] is not None else 0.0),
-        z["dist_pct"] if z["dist_pct"] is not None else float("inf"),
-        z["sym"]))
+    # best-performing runner first - it is the one closest to being given
+    # back if the HA turns
+    runners.sort(key=lambda t: -(t["r"] if t["r"] is not None else -99))
     closed, pnl = closed_trades()
     return {"now": time.time(),
             "state_age_s": scan_age_s(state, mtime),
@@ -279,7 +243,7 @@ def build_data():
             # missed scans plus a minute of slack before anything is wrong.
             "stale_after_s": 2 * int((state.get("_meta") or {})
                                      .get("scan_every_s", 300)) + 60,
-            "scanned": scanned, "trades": trades, "zones": zones,
+            "scanned": scanned, "trades": trades, "runners": runners,
             "closed": closed, "pnl": pnl, "build": BUILD,
             "btc": _btc_now(mids),
             "events": journal_events()}
@@ -343,7 +307,7 @@ h1{font-size:17px;margin:4px 0 12px}
   </div>
 </div>
 <div class="section shead" onclick="toggle('trades')"><span class=chev id=c-trades>\u25be</span>Open trades<span class=cnt id=n-trades>0</span></div><div id=trades></div>
-<div class="section shead" onclick="toggle('zones')"><span class=chev id=c-zones>\u25be</span>Watching<span class=cnt id=n-zones>0</span></div><div id=zones></div>
+<div class="section shead" onclick="toggle('runners')"><span class=chev id=c-runners>\u25be</span>Runners<span class=cnt id=n-runners>0</span></div><div id=runners></div>
 <div class="section shead" onclick="toggle('closed')"><span class=chev id=c-closed>\u25be</span>Closed trades<span class=cnt id=n-closed>0</span> <span id=csub class=muted style="float:right;text-transform:none;letter-spacing:0"></span></div><div id=closed></div>
 <div class="section shead" onclick="toggle('events')"><span class=chev id=c-events>\u25be</span>Recent events<span class=cnt id=n-events>0</span></div><div id=events></div>
 <script>
@@ -394,7 +358,7 @@ const KEY=new URLSearchParams(location.search).get('key')||'';
 let PERIOD='d', LAST=null;
 let COLLAPSED={};
 try{COLLAPSED=JSON.parse(localStorage.getItem('dashCollapsed')||'{}')}catch(e){}
-function applyCollapse(){['trades','zones','closed','events'].forEach(id=>{
+function applyCollapse(){['trades','runners','closed','events'].forEach(id=>{
  const el=document.getElementById(id), ch=document.getElementById('c-'+id);
  if(el)el.style.display=COLLAPSED[id]?'none':'';
  if(ch)ch.textContent=COLLAPSED[id]?'\u25b8':'\u25be'})}
@@ -458,14 +422,15 @@ function render(d){
    // STOP still fully closes a trade, and only before the partial: after
    // it the stop sits at entry, so hitting it is a breakeven close.
    if(window.__froz[fkey]==='tp') delete window.__froz[fkey];   // stale latch
-   if(!t.half && t.r!=null && t.r<=-1) window.__froz[fkey]='sl';
+   if(t.r!=null && t.r<=-1) window.__froz[fkey]='sl';
    const slDone=window.__froz[fkey]==='sl';
    const showR=slDone?-1:t.r;
    const showPnl=slDone?sgn*(t.stop-t.entry)/t.entry*100:t.pnl;
    // "target reached" is now computed LIVE, never latched
-   const atTarget=!t.half && t.r!=null && t.r>=RRT;
-   const badge=t.half?`<span class="badge ok">${Math.round(t.left*100)}% running · stop at entry</span>`
-     :atTarget?'<span class="badge ok">target reached · booking half</span>'
+   // this panel only holds trades still at full risk - once the partial
+   // books they move to the Runners list
+   const atTarget=t.r!=null && t.r>=RRT;
+   const badge=atTarget?'<span class="badge ok">target reached · booking half</span>'
      :slDone?'<span class="badge warn">stop hit · closing</span>':'';
    // one scale: stop = 0%, entry = 40%, TP = 100% - the fill IS closeness to TP
    const rp=showR==null?0:Math.max(0,Math.min(100,(showR+1)/(1+RRT)*100));
@@ -473,9 +438,6 @@ function render(d){
    const rlbl=showR==null?''
      :slDone?'Stop traded - waiting for the close confirmation'
      :atTarget?`${showR.toFixed(2)}R \u00b7 target reached, booking half`
-     :t.half
-     ?`${showR.toFixed(2)}R from entry \u00b7 ${Math.round(t.left*100)}% running, `
-      + `risk-free \u00b7 closes when the HA flips`
      :showR>=0
      ?`${showR.toFixed(2)}R · ${Math.round(Math.min(100,showR/RRT*100))}% of the way to TP`
      :`${showR.toFixed(2)}R · ${Math.round(Math.min(100,-showR*100))}% of the way to stop`;
@@ -489,20 +451,25 @@ function render(d){
     <div class=bar><div class=fill style="width:${rp}%;background:${rc}"></div></div>
     <div class=muted>${rlbl}</div></div>`
   }).join(''):'<div class="card muted">none</div>';
-  document.getElementById('zones').innerHTML=d.zones.length?d.zones.map(z=>{
-   const cls=z.dir==='LONG'?'long':'short';
-   const near=z.dist_pct!=null&&z.dist_pct<=0;
-   const edge=z.dir==='LONG'?z.zhi:z.zlo;
-   const gap=z.dist_pct==null?''
-    :near?`inside the HA band ($${px(z.zlo)} - $${px(z.zhi)})`
-    :`<span class=num>${z.dist_pct.toFixed(2)}%</span> from the HA band ($${px(edge)})`;
-   const pbar=z.prog==null?(gap?`<div class=muted style="margin-top:6px">${gap}</div>`:'')
-    :`<div class=bar><div class=fill style="width:${z.prog}%;background:${near?'#3fb950':'#58a6ff'}"></div></div>
-      <div class=muted>${gap}</div>`;
-   return `<div class="card tv" onclick="tvOpen('${z.sym}')" title="open ${z.sym} on TradingView"><div class=row>
-    <span class=sym>${z.sym} <span class=${cls}>${z.dir}</span>${z.lev?` <span class=lev>${z.lev}x</span>`:''}</span>
-    <span class=muted>now <span class=num>$${px(z.mid)}</span></span></div>
-    <div class=row><span class=muted>${z.stage}</span></div>${pbar}</div>`
+  // RUNNERS: partial booked, stop at entry, riding until the HA flips.
+  // Everything is measured from the ORIGINAL entry, and nothing here ever
+  // freezes - these are live positions with no target left to hit.
+  document.getElementById('runners').innerHTML=d.runners.length?d.runners.map(t=>{
+   const cls=t.dir==='LONG'?'long':'short';
+   const R=t.r==null?null:t.r;
+   // the bar shows how far PAST the target the runner has travelled, so a
+   // trade that has doubled its target reads full
+   const rp=R==null?0:Math.max(0,Math.min(100,(R/(t.rr*2))*100));
+   const peak=R!=null&&R>=t.rr*2;
+   return `<div class="card tv" onclick="tvOpen('${t.sym}')" title="open ${t.sym} on TradingView">
+    <div class=row><span class=sym>${t.sym} <span class=${cls}>${t.dir}</span>${t.lev?` <span class=lev>${t.lev}x</span>`:''} <span class="badge ok">${Math.round(t.left*100)}% running</span></span>
+    <span class="num ${t.pnl>=0?'pnl-pos':'pnl-neg'}">${t.pnl==null?'-':(t.pnl>=0?'+':'')+t.pnl.toFixed(2)+'%'}</span></div>
+    <div class=row><span class=muted>entry <span class=num>$${px(t.entry)}</span></span>
+    <span class=muted>now <span class=num>$${px(t.mid)}</span></span></div>
+    <div class=row><span class=muted>stop <span class=num>$${px(t.stop)}</span> · risk-free</span>
+    <span class=muted>booked at <span class=num>$${px(t.tp)}</span></span></div>
+    <div class=bar><div class=fill style="width:${rp}%;background:${peak?'#3fb950':'#58a6ff'}"></div></div>
+    <div class=muted>${R==null?'':R.toFixed(2)+'R from entry'} · closes when the HA flips</div></div>`
   }).join(''):'<div class="card muted">none</div>';
   document.getElementById('csub').textContent=LABEL[PERIOD];
   const cut=Date.now()-DAYS[PERIOD]*86400000;
@@ -523,7 +490,7 @@ function render(d){
   document.getElementById('events').innerHTML=
    d.events.map(e=>`<div class=event>${e.replace(/</g,'&lt;')}</div>`).join('')||'<div class="card muted">none</div>';
   document.getElementById('n-trades').textContent=d.trades.length;
-  document.getElementById('n-zones').textContent=d.zones.length;
+  document.getElementById('n-runners').textContent=d.runners.length;
   document.getElementById('n-closed').textContent=shown.length;
   document.getElementById('n-events').textContent=d.events.length;
   applyCollapse();
