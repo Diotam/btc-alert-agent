@@ -1085,10 +1085,24 @@ def place_entry_live(asset, trade, plan):
     """Entry, then the protective stop, then the TP. If the protective
     orders cannot be placed the position is closed immediately - never sit
     unprotected."""
+    # NEVER return silently from here. A sized entry that does not reach the
+    # exchange still gets tracked and still books to the ledger, so a silent
+    # skip leaves a paper trade that looks real - and the journal cannot say
+    # why. Every refusal below names itself.
     if not EXEC_LIVE:
+        log(f"{asset['symbol']}: live execution OFF (EXEC_LIVE=False) - "
+            "tracked only, no order sent")
         return None
     ex = exec_client()
     if not ex:
+        log(f"{asset['symbol']}: execution client UNAVAILABLE - no order "
+            "sent, but the trade is still being tracked")
+        try:
+            send_telegram(f"\u26a0\ufe0f {esc(asset['symbol'])} sized but "
+                          "the execution client is unavailable - tracked "
+                          "only, nothing was sent to Hyperliquid")
+        except Exception:
+            pass
         return None
     # builder-venue markets (xyz:NBIS, ...) are not in the main perp meta the
     # SDK client was built against - it raises KeyError on the asset lookup.
