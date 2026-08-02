@@ -68,6 +68,16 @@ COMMODITY_TICKERS = ("XAU", "GOLD", "XAG", "SILVER", "XPT", "PLAT",
                      "XPD", "PALLADIUM", "CL", "WTI", "OIL", "BRENT",
                      "BRENTOIL", "NG", "NATGAS", "HG", "COPPER")
 STOCK_DEXES = ("xyz",)             # TradeXYZ equities venue
+EXEC_BUILDER_DEXES = ()            # builder dexes to trade AUTOMATICALLY,
+                                   # e.g. ("xyz",). The "xyz:GOLD" naming is
+                                   # this agent's own - on Hyperliquid that
+                                   # market is just GOLD, living on the xyz
+                                   # dex rather than the main perp dex. The
+                                   # SDK reaches it when the Exchange is
+                                   # built with perp_dexs=[...]. EMPTY BY
+                                   # DEFAULT: I cannot test order placement
+                                   # on a builder dex from here, so turn it
+                                   # on deliberately and watch the first fill
 MIN_DAY_VOLUME_USD = 2_000_000     # crypto floor, 24h notional
 COMMODITY_MIN_VOLUME_USD = 5_000_000
 STOCK_MIN_VOLUME_USD = 15_000_000
@@ -361,10 +371,16 @@ def base_name(name):
 
 
 def executable(symbol):
-    """False for builder-venue markets. They are alert-only: the SDK client is
-    built against the main perp meta, which does not contain them. Nothing
-    that cannot execute may consume the live position budget."""
-    return ":" not in symbol
+    """Can the agent place orders on this market itself?
+
+    Builder-venue markets ("xyz:GOLD") are alert-only UNLESS their dex is
+    listed in EXEC_BUILDER_DEXES, in which case the SDK client was built
+    with perp_dexs=[...] and can reach them. Nothing that cannot execute may
+    consume the live position budget.
+    """
+    if ":" not in symbol:
+        return True
+    return symbol.split(":")[0] in EXEC_BUILDER_DEXES
 
 
 def is_commodity(name):
@@ -802,9 +818,27 @@ def exec_client():
             addr = os.environ.get("HL_ACCOUNT_ADDRESS", "").strip() \
                 or wallet.address
             base = exec_base_url()
-            _EXEC.update(ex=Exchange(wallet, base, account_address=addr),
+            dexes = [d for d in EXEC_BUILDER_DEXES if d]
+            kw = {"account_address": addr}
+            if dexes:
+                kw["perp_dexs"] = dexes
+            _EXEC.update(ex=Exchange(wallet, base, **kw),
                          info=Info(base, skip_ws=True), addr=addr)
-            _EXEC["meta"] = _EXEC["info"].meta()
+            # the universe check must know every market the client can
+            # reach, or builder symbols are refused as "not in the perp
+            # universe" even though the client could trade them
+            universe = list((_EXEC["info"].meta() or {}).get("universe", []))
+            for d in dexes:
+                try:
+                    extra = _EXEC["info"].meta(dex=d) or {}
+                    for u in extra.get("universe", []):
+                        universe.append({**u, "name": f"{d}:{u['name']}"})
+                    log(f"builder dex '{d}': "
+                        f"{len(extra.get('universe', []))} markets tradable")
+                except Exception as e:
+                    log(f"builder dex '{d}' meta failed ({type(e).__name__}: "
+                        f"{e}) - its markets stay alert-only")
+            _EXEC["meta"] = {"universe": universe}
             log(f"execution client ready on "
                 f"{'TESTNET' if EXEC_TESTNET else 'MAINNET'} for {addr[:10]}...")
         except Exception as e:
@@ -1115,11 +1149,14 @@ def place_entry_live(asset, trade, plan):
     # builder-venue markets (xyz:NBIS, ...) are not in the main perp meta the
     # SDK client was built against - it raises KeyError on the asset lookup.
     # Alert on them, but never try to trade them.
-    if ":" in asset["symbol"]:
+    if not executable(asset["symbol"]):
         log(f"{asset['symbol']}: live execution skipped - builder-venue "
-            "market, not tradable through the main dex client (alert only)")
+            "market and its dex is not in EXEC_BUILDER_DEXES (alert only)")
         return None
-    sym = base_name(asset["symbol"])
+    # a builder market keeps its full "dex:coin" name for the SDK; a
+    # main-dex market is just its own name
+    sym = (asset["symbol"] if ":" in asset["symbol"]
+           else base_name(asset["symbol"]))
     if not any(a.get("name") == sym
                for a in (_EXEC.get("meta") or {}).get("universe", [])):
         log(f"{sym}: live execution skipped - not in the perp universe")
