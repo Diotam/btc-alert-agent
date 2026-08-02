@@ -113,7 +113,7 @@ HA_MIN_BODY_PCT = 0.05             # the trend run must contain at least one
                                    # setup with no visible colour flip at all.
                                    # Measured: near-flat series produce bodies
                                    # of 0.005-0.034%, normal ones 0.081%+
-HA_MIN_FLIP_BODY_PCT = 0.01        # the DOJI/flip candle must itself be a real
+HA_MIN_FLIP_BODY_PCT = 0.002       # the DOJI/flip candle must itself be a real
                                    # candle, this % of price or bigger. 0 = off.
                                    # HA_DOJI_FRACTION puts a CEILING on that
                                    # body; this is the FLOOR, so the two form a
