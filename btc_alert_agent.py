@@ -121,7 +121,7 @@ HA_RR = 3.0                        # first target = 3x the stop distance
 HA_PARTIAL = 0.5                   # fraction booked there; the stop then moves
                                    # to entry and the remainder is held until
                                    # the HA flips against the trade
-MIN_STOP_PCT = 0.25                # skip entries whose stop sits closer than
+MIN_STOP_PCT = 0.15                # skip entries whose stop sits closer than
                                    # this % of price - sub-noise stops just churn
 
 # --- alerts ---------------------------------------------------------------
