@@ -69,7 +69,6 @@ COMMODITY_TICKERS = ("XAU", "GOLD", "XAG", "SILVER", "XPT", "PLAT",
                      "BRENTOIL", "NG", "NATGAS", "HG", "COPPER")
 STOCK_DEXES = ("xyz",)             # TradeXYZ equities venue
 EXEC_BUILDER_DEXES = ("xyz",)      # builder dexes to trade AUTOMATICALLY,
-                                   # builder dexes to trade AUTOMATICALLY,
                                    # e.g. ("xyz",). The "xyz:GOLD" naming is
                                    # this agent's own - on Hyperliquid that
                                    # market is just GOLD, living on the xyz
@@ -485,11 +484,16 @@ def active_assets():
     if assets:
         _UNIVERSE.update(t=time.time(), assets=assets)
         auto = sum(1 for a in assets if executable(a["symbol"]))
+        hand = len(assets) - auto
         n_com = sum(1 for a in assets if a.get("cls") == "commodity")
         n_stk = sum(1 for a in assets if a.get("cls") == "stock")
-        log(f"Discovered {len(assets)} markets: {auto} main-dex crypto "
-            f"(auto-traded), {n_com} commodities + {n_stk} equities "
-            f"(alert only, placed by hand)")
+        # say what is ACTUALLY tradable rather than assuming every builder
+        # market is alert-only - EXEC_BUILDER_DEXES can now make them live
+        log(f"Discovered {len(assets)} markets: {auto} auto-traded"
+            + (f", {hand} alert-only (placed by hand)" if hand else "")
+            + f" - {n_com} commodities, {n_stk} equities"
+            + (f", builder dexes live: {', '.join(EXEC_BUILDER_DEXES)}"
+               if EXEC_BUILDER_DEXES else ""))
         return assets
     log("Discovery returned nothing - falling back to the manual ASSETS list.")
     return ASSETS
