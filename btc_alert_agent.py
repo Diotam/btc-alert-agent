@@ -55,7 +55,7 @@ DISCOVER_DEXES = True              # scan HIP-3 builder venues. Their symbols
                                    # client is built against, so they ALERT
                                    # ONLY - they are placed by hand
 ADMIT_COMMODITIES = True
-ADMIT_STOCKS = False               # equities out of the universe. The
+ADMIT_STOCKS = True                # equities IN the universe. They are
                                    # is one line to flip back
 DEXES = [""]                       # fallback when dex discovery fails
 # EXACT names, never prefixes. This used to be a startswith() match, which
@@ -80,11 +80,11 @@ EXEC_BUILDER_DEXES = ("xyz",)      # builder dexes to trade AUTOMATICALLY,
                                    # on deliberately and watch the first fill
 MIN_DAY_VOLUME_USD = 2_000_000     # crypto floor, 24h notional
 COMMODITY_MIN_VOLUME_USD = 5_000_000
-STOCK_MIN_VOLUME_USD = 15_000_000
+STOCK_MIN_VOLUME_USD = 5_000_000
 ONLY = []                          # trade ONLY these symbols ([] = whole universe)
 EXCLUDE = ["PUMP"]                 # never trade these (matches the base name
                                    # on any venue)
-MAX_ASSETS = 70
+MAX_ASSETS = 100
 
 ASSETS = [                         # used when DISCOVER_ALL = False, or when
     {"symbol": "BTC", "label": "BTC-PERP", "hl_coin": "BTC",   # discovery fails
@@ -131,7 +131,7 @@ HA_RR = 3.0                        # first target = 3x the stop distance
 HA_PARTIAL = 0.5                   # fraction booked there; the stop then moves
                                    # to entry and the remainder is held until
                                    # the HA flips against the trade
-MIN_STOP_PCT = 0.20                # skip entries whose stop sits closer than
+MIN_STOP_PCT = 0.25                # skip entries whose stop sits closer than
                                    # this % of price - sub-noise stops just churn
 
 # --- alerts ---------------------------------------------------------------
