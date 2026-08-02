@@ -904,22 +904,14 @@ function render(d){
   applyCollapse();
   step('r-done');
 }
-// Any uncaught error - including a PARSE error in this script - lands here
-// and is shown on the page. Without it a broken script just leaves the shell
-// sitting there with no badge and no clue what went wrong.
-window.addEventListener('error',function(ev){
-  var b=document.getElementById('jserr');
-  if(b){ b.style.display='block';
-         b.textContent='JS ERROR: '+(ev.message||ev.type)
-           +'  [line '+(ev.lineno||'?')+':'+(ev.colno||'?')+']'; }
-  var s=document.getElementById('status');
-  if(s){ s.textContent='JS ERROR'; s.className='badge warn'; }
-});
+// These route through show__err() like the early handler does, so ONE rule
+// decides what reaches the banner. Writing to it directly here meant a
+// masked "Script error." still raised the banner on a page that had already
+// rendered fine, contradicting the suppression in show__err.
 window.addEventListener('unhandledrejection',function(ev){
-  var b=document.getElementById('jserr');
-  if(b){ b.style.display='block';
-         b.textContent='PROMISE ERROR: '+(ev.reason&&ev.reason.message
-                                          ? ev.reason.message : ev.reason); }
+  window.__err='promise: '+(ev.reason&&ev.reason.message
+                            ? ev.reason.message : ev.reason);
+  show__err();
 });
 
 function offline(){document.getElementById('status').textContent='OFFLINE';
