@@ -715,6 +715,61 @@ STATE_VIEW = {}
 
 
 # --------------------------- open-trade management -------------------------
+def ensure_flat(asset, trade, kind):
+    """The ledger just booked a close - make the exchange agree.
+
+    Two ways they drift apart. A STOP is detected from CANDLE data, which is
+    last-trade prints, while the exchange triggers its resting stop on MARK
+    price: a wick that moves the last trade but not the mark closes the
+    trade here and leaves the position open there. A RUNNER is worse - there
+    is no resting order for it at all, because the take-profit covered only
+    the partial, so nothing on the exchange ever closes it.
+
+    So: read the real position, and if it is not flat, close it at market.
+    """
+    if not EXEC_LIVE or not executable(asset["symbol"]) or not trade.get("size"):
+        return
+    ex = exec_client()
+    if not ex:
+        return
+    sym = (asset["symbol"] if ":" in asset["symbol"]
+           else base_name(asset["symbol"]))
+    try:
+        state = _EXEC["info"].user_state(_EXEC["addr"]) or {}
+        szi = 0.0
+        for p in state.get("assetPositions", []):
+            pos = p.get("position") or {}
+            if pos.get("coin") == sym:
+                szi = float(pos.get("szi") or 0)
+                break
+    except Exception as e:
+        log(f"{sym}: could not read the exchange position after {kind} "
+            f"({type(e).__name__}: {e}) - check it by hand")
+        return
+    if abs(szi) < 1e-12:
+        return                      # the exchange agrees, nothing to do
+    log(f"{sym}: ledger booked {kind} but the exchange still shows {szi} "
+        "open - closing at market")
+    try:
+        ex.market_close(sym)
+        log(f"{sym}: reconciling market close sent")
+    except Exception as e:
+        log(f"{sym}: reconciling close FAILED ({type(e).__name__}: {e})")
+        try:
+            send_telegram(f"\u26a0\ufe0f {esc(sym)} booked {kind} but is "
+                          f"STILL OPEN on Hyperliquid ({szi}) and the "
+                          "market close failed - close it by hand")
+        except Exception:
+            pass
+        return
+    for oid in (trade.get("stop_oid"), trade.get("tp_oid")):
+        if oid:
+            try:
+                ex.cancel(sym, oid)
+            except Exception:
+                pass
+
+
 def _close_trade(asset, trade, px, kind, event_t, note="", frac=None):
     """Alert, log and book a close of `frac` of the position."""
     sym = asset["symbol"]
@@ -731,6 +786,10 @@ def _close_trade(asset, trade, px, kind, event_t, note="", frac=None):
     log(f"{sym}: {kind} at ${fmt_px(px)}{' (intrabar)' if note else ''}")
     record_close(sym, trade, px, kind, event_t, frac=frac)
     plan_manage_orders(asset, kind, px)
+    # only a FULL close should leave the exchange flat; a partial is
+    # supposed to leave the runner open
+    if frac >= 0.999:
+        ensure_flat(asset, trade, kind)
     RUN_ALERTS.append(f"{sym} {kind} ({pnl_pct(trade, px) * frac:+.2f}%)")
     return None, True
 
@@ -863,7 +922,13 @@ def exec_client():
                 try:
                     extra = _EXEC["info"].meta(dex=d) or {}
                     for u in extra.get("universe", []):
-                        universe.append({**u, "name": f"{d}:{u['name']}"})
+                        # the dex meta may return names bare ("GOLD") or
+                        # ALREADY prefixed ("xyz:GOLD") - prefixing blindly
+                        # gives "xyz:xyz:GOLD", which matches nothing
+                        nm = u["name"]
+                        universe.append({**u,
+                                         "name": nm if ":" in nm
+                                         else f"{d}:{nm}"})
                     log(f"builder dex '{d}': "
                         f"{len(extra.get('universe', []))} markets tradable")
                 except Exception as e:
