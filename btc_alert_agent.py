@@ -68,16 +68,21 @@ COMMODITY_TICKERS = ("XAU", "GOLD", "XAG", "SILVER", "XPT", "PLAT",
                      "XPD", "PALLADIUM", "CL", "WTI", "OIL", "BRENT",
                      "BRENTOIL", "NG", "NATGAS", "HG", "COPPER")
 STOCK_DEXES = ("xyz",)             # TradeXYZ equities venue
-EXEC_BUILDER_DEXES = ("xyz",)      # builder dexes to trade AUTOMATICALLY,
-                                   # e.g. ("xyz",). The "xyz:GOLD" naming is
-                                   # this agent's own - on Hyperliquid that
-                                   # market is just GOLD, living on the xyz
-                                   # dex rather than the main perp dex. The
-                                   # SDK reaches it when the Exchange is
-                                   # built with perp_dexs=[...]. EMPTY BY
-                                   # DEFAULT: I cannot test order placement
-                                   # on a builder dex from here, so turn it
-                                   # on deliberately and watch the first fill
+EXEC_BUILDER_DEXES = ()            # builder dexes to trade AUTOMATICALLY,
+                                   # e.g. ("xyz",). OFF as of 2 Aug: the xyz
+                                   # dex has its OWN collateral pool and it
+                                   # holds $0, so every order there was
+                                   # rejected for insufficient margin no
+                                   # matter what the main account held. Turn
+                                   # back on once xyz is funded, or once the
+                                   # account is switched to Unified mode so
+                                   # the main USDC balance collateralizes it.
+                                   # The "xyz:GOLD" naming is this agent's
+                                   # own - on Hyperliquid that market is just
+                                   # GOLD, living on the xyz dex rather than
+                                   # the main perp dex. The SDK reaches it
+                                   # when the Exchange is built with
+                                   # perp_dexs=[...]
 MIN_DAY_VOLUME_USD = 2_000_000     # crypto floor, 24h notional
 COMMODITY_MIN_VOLUME_USD = 5_000_000
 STOCK_MIN_VOLUME_USD = 5_000_000
