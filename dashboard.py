@@ -628,13 +628,12 @@ const TVMAP={
   VIX:'VX1!',             DXY:'DX1!',
   EUR:'6E1!',             JPY:'6J1!',           GBP:'6B1!',
   KRW:'FX_IDC:USDKRW',
-  // Foreign listings the bare ticker would not resolve. US names (AAPL,
-  // NVDA, MSFT, GOOGL, TSLA, INTC, MRVL, MU, SNDK, CRCL, NBIS) already
-  // resolve on their own and are deliberately absent.
-  SKHX:'KRX:000660',      SKHY:'KRX:000660',    SMSN:'KRX:005930',
-  KIOXIA:'TSE:285A',      SOFTBANK:'TSE:9984',  HYUNDAI:'KRX:005380',
-  BABA:'NYSE:BABA',       TSM:'NYSE:TSM',       ASML:'NASDAQ:ASML',
-  NOK:'NYSE:NOK',         BB:'NYSE:BB'
+  // NOTHING for the equities. I mapped SMSN to KRX:005930 and SKHX/SKHY to
+  // KRX:000660; both are quoted in WON while the venue prices in USD, so
+  // the charts were out by ~600x. xyz:SMSN is $166 and the bare ticker
+  // resolves there correctly. Every equity now falls through as the venue
+  // names it - do not add exchange prefixes without checking the price
+  // matches first.
 };
 // Venue-specific markets with NO TradingView equivalent - private
 // companies, in-house baskets, synthetic indices. Without this they fall
