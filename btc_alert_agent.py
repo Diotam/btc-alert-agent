@@ -1119,6 +1119,24 @@ def rebase_to_fill(sym, trade, fill, long_):
             f"under the {MIN_STOP_PCT}% floor")
 
 
+def order_error(resp):
+    """Hyperliquid returns status 'ok' at the TOP level even when the order
+    was rejected - the real result sits in statuses[0]. Seen live on
+    xyz:SMSN: {'status': 'ok', ... 'statuses': [{'error': 'Insufficient
+    margin to place order.'}]}. Reading only the outer status made the agent
+    believe it held a position: it then placed a stop and a take-profit
+    against nothing, wrote a size onto the trade, and reported the alert as
+    placed. Returns the error string, or None if the order really went
+    through."""
+    try:
+        st = resp["response"]["data"]["statuses"][0]
+    except (KeyError, IndexError, TypeError):
+        return None if resp else "no response from the exchange"
+    if isinstance(st, dict) and st.get("error"):
+        return str(st["error"])
+    return None
+
+
 def fill_size(resp):
     """How much of a market order ACTUALLY filled. A slippage-bounded IOC on
     a thin book fills partially, and every protective order has to be sized
@@ -1300,6 +1318,17 @@ def place_entry_live(asset, trade, plan):
     try:
         r = ex.market_open(sym, long_, size)
         log(f"{sym}: LIVE entry sent {r}")
+        err = order_error(r)
+        if err:
+            # never place protective orders against a position that does
+            # not exist, and never let the alert claim this was placed
+            log(f"{sym}: ENTRY REJECTED by the exchange - {err}")
+            try:
+                send_telegram(f"\u26a0\ufe0f {esc(sym)} entry REJECTED - "
+                              f"{esc(err)}")
+            except Exception:
+                pass
+            return None
         got = fill_size(r)
         if got is not None and abs(got - size) > 10 ** -dec:
             log(f"{sym}: PARTIAL FILL - asked {size}, filled {got} "
