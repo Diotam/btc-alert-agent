@@ -1374,14 +1374,26 @@ def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger,
     if ast.get("setup"):
         ast["traded"] = {"ft": ast["setup"].get("ft"), "dir": direction}
     order_plan = plan_entry_orders(asset, ast["trade"], live_px)
-    if EXEC_LIVE and order_plan:
+    placed, why_not = False, ""
+    if not EXEC_LIVE:
+        why_not = "live execution is OFF"
+    elif not order_plan:
+        why_not = "the trade could not be sized"
+    else:
         # the daily loss limit needs realised USD from the ledger, which is
         # not tracked yet - only the halt file and the position cap bite
         why = exec_blocked(open_now, 0.0)
         if why:
+            why_not = why
             log(f"{sym}: live order blocked - {why}")
         else:
             place_entry_live(asset, ast["trade"], order_plan)
+            # place_entry_live returns None on every refusal path, so the
+            # only reliable proof an order reached the exchange is the size
+            # it wrote back onto the trade
+            placed = bool(ast["trade"].get("size"))
+            if not placed:
+                why_not = "the order did not reach the exchange"
 
     # ALERT LAST, from the trade as it now stands. Sending it before the
     # order meant Telegram carried the PLANNED levels (the doji candle's
@@ -1393,13 +1405,20 @@ def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger,
     alert_plan = dict(plan, entry=t["entry"], stop=t["stop"], tp=t["tp"])
     if ALERT_ENTRIES:
         try:
-            send_telegram(entry_message(asset, direction, alert_plan, hi, lo,
-                                        source, event_t, trigger))
+            msg = entry_message(asset, direction, alert_plan, hi, lo,
+                                source, event_t, trigger)
+            if not placed:
+                # An alert that looks identical whether or not a position
+                # exists is worse than no alert. Say so on its own line.
+                msg += (f"\n\n\u26a0\ufe0f NOT PLACED on Hyperliquid - "
+                        f"{esc(why_not)}. Tracked only.")
+            send_telegram(msg)
         except Exception as e:
             log(f"{sym}: entry alert failed: {type(e).__name__}: {e}")
     log(f"ALERT SENT -> telegram: {sym} {direction} ENTRY @ "
         f"${fmt_px(t['entry'])} ({trigger})"
-        + (f" [filled, planned ${fmt_px(entry)}]" if filled else ""))
+        + (f" [filled, planned ${fmt_px(entry)}]" if filled else "")
+        + ("" if placed else f" [NOT PLACED - {why_not}]"))
     RUN_ALERTS.append(f"{sym} {direction} entry @ ${fmt_px(t['entry'])}")
     ast["phase"], ast["setup"] = "IN_TRADE", None
     return True
