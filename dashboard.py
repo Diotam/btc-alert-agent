@@ -599,9 +599,41 @@ function tradeAge(openedT){
   return m + 'm';
 }
 
+// Builder-venue commodity names are Hyperliquid's, not TradingView's.
+// Sending the bare name opens the wrong chart entirely: "CL" resolves to
+// NYSE:CL, Colgate-Palmolive, not WTI crude; "BRENTOIL" resolves to nothing.
+// Equities on that venue DO use their real tickers, so they pass through.
+const TVMAP={
+  // energy
+  BRENTOIL:'TVC:UKOIL',   BRENT:'TVC:UKOIL',    UKOIL:'TVC:UKOIL',
+  CL:'TVC:USOIL',         WTI:'TVC:USOIL',      OIL:'TVC:USOIL',
+  CRUDE:'TVC:USOIL',      USOIL:'TVC:USOIL',
+  NATGAS:'TVC:NATGAS',    NG:'TVC:NATGAS',      GAS:'TVC:NATGAS',
+  // metals
+  GOLD:'TVC:GOLD',        XAU:'TVC:GOLD',       XAUUSD:'TVC:GOLD',
+  SILVER:'TVC:SILVER',    XAG:'TVC:SILVER',     XAGUSD:'TVC:SILVER',
+  COPPER:'COMEX:HG1!',    HG:'COMEX:HG1!',
+  PLAT:'TVC:PLATINUM',    XPT:'TVC:PLATINUM',   PLATINUM:'TVC:PLATINUM',
+  PALLADIUM:'TVC:PALLADIUM', XPD:'TVC:PALLADIUM', PALLAD:'TVC:PALLADIUM',
+  // index / FX style names that also appear on builder venues
+  SPX:'SP:SPX',           SPX500:'SP:SPX',      US500:'SP:SPX',
+  NDX:'NASDAQ:NDX',       NAS100:'NASDAQ:NDX',  US100:'NASDAQ:NDX',
+  DJI:'DJ:DJI',           US30:'DJ:DJI',
+  VIX:'TVC:VIX',          DXY:'TVC:DXY',
+  EURUSD:'FX:EURUSD',     GBPUSD:'FX:GBPUSD',   USDJPY:'FX:USDJPY'
+};
+// Anything on a builder venue that is NOT in the map falls through as its
+// bare ticker. That is right for equities (xyz:AAPL is AAPL) and wrong for
+// any commodity or index name we have not listed - CL would land on
+// NYSE:CL, Colgate-Palmolive. The tell is a chart that makes no sense for
+// the instrument; add it above when that happens.
 function tvSym(sym){
-  if(sym.indexOf(':')>=0) return encodeURIComponent(sym.split(':').pop().toUpperCase());
-  return encodeURIComponent('HYPERLIQUID:'+sym.toUpperCase()+'USDC.P');
+  if(sym.indexOf(':')>=0){
+    const bare=sym.split(':').pop();
+    return encodeURIComponent(TVMAP[bare.toUpperCase()]||bare.toUpperCase());
+  }
+  // main-dex perps keep their exact Hyperliquid name, k-prefix included
+  return encodeURIComponent('HYPERLIQUID:'+sym+'USDC.P');
 }
 // iPadOS and iOS have no popup windows - every browser there, Brave included,
 // runs on WebKit. window.open with a feature string is treated as a popup and
