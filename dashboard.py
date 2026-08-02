@@ -627,13 +627,37 @@ const TVMAP={
   JP225:'NKD1!',          KR200:'KOSPI200',
   VIX:'VX1!',             DXY:'DX1!',
   EUR:'6E1!',             JPY:'6J1!',           GBP:'6B1!',
-  KRW:'FX_IDC:USDKRW'
+  KRW:'FX_IDC:USDKRW',
+  // Foreign listings the bare ticker would not resolve. US names (AAPL,
+  // NVDA, MSFT, GOOGL, TSLA, INTC, MRVL, MU, SNDK, CRCL, NBIS) already
+  // resolve on their own and are deliberately absent.
+  SKHX:'KRX:000660',      SKHY:'KRX:000660',    SMSN:'KRX:005930',
+  KIOXIA:'TSE:285A',      SOFTBANK:'TSE:9984',  HYUNDAI:'KRX:005380',
+  BABA:'NYSE:BABA',       TSM:'NYSE:TSM',       ASML:'NASDAQ:ASML',
+  NOK:'NYSE:NOK',         BB:'NYSE:BB'
+};
+// Venue-specific markets with NO TradingView equivalent - private
+// companies, in-house baskets, synthetic indices. Without this they fall
+// through as bare tickers and open something unrelated, silently. Better to
+// say so than to show the wrong chart.
+const TVNONE={SPCX:'SpaceX, private - no public chart',
+  DRAM:'a memory-sector basket, not a listed instrument',
+  CXMT:'ChangXin Memory, private',
+  ZHIPU:'Zhipu AI, private',   MINIMAX:'MiniMax, private',
+  XYZ100:'the venue own index - charting NQ1! as the closest proxy',
+  H100:'an in-house index',    VOL:'an in-house index',
+  KSTR:'an in-house index',    BOT:'an in-house index'
 };
 // Anything on a builder venue that is NOT in the map falls through as its
 // bare ticker. That is right for equities (xyz:AAPL is AAPL) and wrong for
 // any commodity or index name we have not listed - CL would land on
 // NYSE:CL, Colgate-Palmolive. The tell is a chart that makes no sense for
 // the instrument; add it above when that happens.
+function tvUnmapped(sym){
+  if(sym.indexOf(':')<0) return null;
+  const bare=sym.split(':').pop().toUpperCase();
+  return (!TVMAP[bare] && TVNONE[bare]) ? TVNONE[bare] : null;
+}
 function tvSym(sym){
   if(sym.indexOf(':')>=0){
     const bare=sym.split(':').pop();
@@ -678,6 +702,9 @@ function closeRunner(ev, sym){
 }
 
 function tvOpen(sym){
+  // do not open a chart for something the venue invented
+  const why=tvUnmapped(sym);
+  if(why){ alert(sym+': no TradingView chart - '+why); return; }
   const url = TVBASE + tvSym(sym) + '&interval=' + TVINT;
   if (TOUCH) {
     const a = document.createElement('a');
