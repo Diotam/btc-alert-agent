@@ -576,6 +576,7 @@ h1{font-size:17px;margin:4px 0 12px}
 <div class="section shead" onclick="toggle('closed')"><span class=chev id=c-closed>\u25be</span>Closed trades<span class=cnt id=n-closed>0</span> <span id=csub class=muted style="float:right;text-transform:none;letter-spacing:0"></span></div><div id=closed></div>
 <div class="section shead" onclick="toggle('events')"><span class=chev id=c-events>\u25be</span>Recent events<span class=cnt id=n-events>0</span></div><div id=events></div>
 <script>
+const CLOSED_CARDS=50;   // cards drawn; the badge always shows the true count
 let TVINT='15';   // replaced from _meta.tf on the first poll
 let TZ='America/Chicago';   // replaced from _meta.tz on the first poll
 const TVLAYOUT=__TV_LAYOUT__;
@@ -800,10 +801,16 @@ function render(d){
       <button class=closebtn data-px="${t.mid==null?'':t.mid}" onclick="closeRunner(event,'${t.sym}')">close now</button>
     </div></div>`
   }).join(''):'<div class="card muted">none</div>';
-  document.getElementById('csub').textContent=LABEL[PERIOD];
   step('r-runners');
   const cut=Date.now()-DAYS[PERIOD]*86400000;
-  const shown=d.closed.filter(c=>c.t>=cut).slice(0,20);
+  // inPeriod is EVERY trade closed in the selected window - that is the
+  // number the P&L above is computed from, so it is the number the badge
+  // must show. `shown` is only how many cards get drawn.
+  const inPeriod=d.closed.filter(c=>c.t>=cut);
+  const shown=inPeriod.slice(0,CLOSED_CARDS);
+  document.getElementById('csub').textContent=LABEL[PERIOD]
+    +(inPeriod.length>shown.length
+      ? ' \u00b7 showing '+shown.length+' of '+inPeriod.length : '');
   // a partial and its runner are merged server-side into ONE trade, so
   // these compound kinds appear in place of the raw ledger events
   const KINDS={TP_RUNNER:'target + runner', TP_BE:'target, runner to BE',
@@ -826,7 +833,7 @@ function render(d){
    d.events.map(e=>`<div class=event>${e.replace(/</g,'&lt;')}</div>`).join('')||'<div class="card muted">none</div>';
   document.getElementById('n-trades').textContent=d.trades.length;
   document.getElementById('n-runners').textContent=d.runners.length;
-  document.getElementById('n-closed').textContent=shown.length;
+  document.getElementById('n-closed').textContent=inPeriod.length;
   step('r-closed');
   document.getElementById('n-events').textContent=d.events.length;
   applyCollapse();
