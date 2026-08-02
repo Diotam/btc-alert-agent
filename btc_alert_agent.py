@@ -1119,6 +1119,20 @@ def rebase_to_fill(sym, trade, fill, long_):
             f"under the {MIN_STOP_PCT}% floor")
 
 
+def resp_error(resp):
+    """Hyperliquid signals failure by RETURNING an error, not by raising.
+    Two shapes: {'status': 'err', 'response': '<msg>'} for account actions
+    like update_leverage, and a nested statuses[0]['error'] for orders. A
+    plain try/except catches neither. Seen live on xyz:SMSN: update_leverage
+    returned "Cross margin is not allowed for this asset." and the agent
+    carried on believing it had set 10x."""
+    if not isinstance(resp, dict):
+        return None if resp else "no response from the exchange"
+    if resp.get("status") == "err":
+        return str(resp.get("response") or "unspecified error")
+    return None
+
+
 def order_error(resp):
     """Hyperliquid returns status 'ok' at the TOP level even when the order
     was rejected - the real result sits in statuses[0]. Seen live on
@@ -1308,12 +1322,32 @@ def place_entry_live(asset, trade, plan):
     # post three times the intended collateral for the same position.
     if EXEC_SIZING == "margin":
         lev = eff_leverage(asset)
-        try:
-            ex.update_leverage(lev, sym)
-        except Exception as e:
-            log(f"{sym}: could NOT set leverage to {lev}x "
-                f"({type(e).__name__}: {e}) - refusing the entry rather than "
-                "posting unknown collateral")
+        err = None
+        for is_cross in (True, False):
+            try:
+                r = ex.update_leverage(lev, sym, is_cross)
+            except Exception as e:
+                err = f"{type(e).__name__}: {e}"
+                break
+            err = resp_error(r)
+            if not err:
+                if not is_cross:
+                    log(f"{sym}: cross margin not allowed - set {lev}x "
+                        "ISOLATED instead")
+                break
+            # some markets are isolated-only; the exchange says so by
+            # RETURNING an error rather than raising, so retry that way
+            if "cross" not in err.lower():
+                break
+        if err:
+            log(f"{sym}: could NOT set leverage to {lev}x ({err}) - "
+                "refusing the entry rather than sizing against unknown "
+                "collateral")
+            try:
+                send_telegram(f"\u26a0\ufe0f {esc(sym)} entry refused - "
+                              f"could not set {lev}x leverage: {esc(err)}")
+            except Exception:
+                pass
             return None
     try:
         r = ex.market_open(sym, long_, size)
