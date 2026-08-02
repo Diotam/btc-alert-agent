@@ -1360,15 +1360,6 @@ def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger,
         ast["setup"] = None
         return False
 
-    if ALERT_ENTRIES:
-        try:
-            send_telegram(entry_message(asset, direction, plan, hi, lo,
-                                        source, event_t, trigger))
-        except Exception as e:
-            log(f"{sym}: entry alert failed: {type(e).__name__}: {e}")
-    log(f"ALERT SENT -> telegram: {sym} {direction} ENTRY @ "
-        f"${fmt_px(entry)} ({trigger})")
-    RUN_ALERTS.append(f"{sym} {direction} entry @ ${fmt_px(entry)}")
     # count BEFORE recording the new trade: ast is the same object STATE_VIEW
     # holds, so counting afterwards makes the trade count itself and a cap of
     # 1 then blocks every live order that could ever be sent
@@ -1391,6 +1382,25 @@ def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger,
             log(f"{sym}: live order blocked - {why}")
         else:
             place_entry_live(asset, ast["trade"], order_plan)
+
+    # ALERT LAST, from the trade as it now stands. Sending it before the
+    # order meant Telegram carried the PLANNED levels (the doji candle's
+    # close) while the dashboard showed the REBASED ones (the actual fill),
+    # so the two disagreed on entry, stop distance and target for every
+    # executed trade. Now both read from the same numbers.
+    t = ast["trade"]
+    filled = abs(t["entry"] - entry) > 1e-12
+    alert_plan = dict(plan, entry=t["entry"], stop=t["stop"], tp=t["tp"])
+    if ALERT_ENTRIES:
+        try:
+            send_telegram(entry_message(asset, direction, alert_plan, hi, lo,
+                                        source, event_t, trigger))
+        except Exception as e:
+            log(f"{sym}: entry alert failed: {type(e).__name__}: {e}")
+    log(f"ALERT SENT -> telegram: {sym} {direction} ENTRY @ "
+        f"${fmt_px(t['entry'])} ({trigger})"
+        + (f" [filled, planned ${fmt_px(entry)}]" if filled else ""))
+    RUN_ALERTS.append(f"{sym} {direction} entry @ ${fmt_px(t['entry'])}")
     ast["phase"], ast["setup"] = "IN_TRADE", None
     return True
 
