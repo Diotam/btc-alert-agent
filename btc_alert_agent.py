@@ -140,11 +140,30 @@ CLOSE_REQ_DIR = Path(__file__).parent / "close_requests"   # the dashboard
 #   drops one marker file per symbol here; the agent closes that position on
 #   its next scan and removes the file. A directory of markers rather than a
 #   shared JSON file, so the two processes never write the same bytes   # touch this to stop new entries
-EXEC_SIZING = "notional"           # "notional" = put a FIXED DOLLAR AMOUNT
-                                   #   into every trade; the loss at the stop
-                                   #   then varies with how wide the stop is
+EXEC_SIZING = "margin"             # "margin"   = a FIXED DOLLAR AMOUNT of
+                                   #   COLLATERAL per trade. Position size is
+                                   #   margin x leverage, so the agent must
+                                   #   also SET the leverage or the figure is
+                                   #   a guess - see EXEC_LEVERAGE below
+                                   # "notional" = a fixed dollar POSITION
+                                   #   size, whatever collateral that needs
                                    # "risk"     = fixed dollar LOSS at the
                                    #   stop; the position size then varies
+EXEC_MARGIN_USD = 30.0             # collateral per trade in "margin" mode
+EXEC_LEVERAGE = 999                # MAX leverage: eff_leverage() clamps this
+                                   # to each market's own maximum, so 999
+                                   # simply means "whatever this market
+                                   # allows". Position size then varies a lot
+                                   # by venue - a 40x market gets 4x the
+                                   # position of a 10x one for the same
+                                   # collateral. The leverage the agent SETS
+                                   # before entering, clamped to that market's
+                                   # maximum. Sizing uses the same number, so
+                                   # the margin actually posted is the figure
+                                   # above rather than an assumption about
+                                   # whatever the account happened to be set
+                                   # to. A symbol left at 3x would otherwise
+                                   # post 3x the intended collateral.
 EXEC_NOTIONAL_USD = 30.0           # size of each position in "notional" mode
 EXEC_RISK_USD = 2.0                # dollar loss at the stop in "risk" mode
 EXEC_MAX_NOTIONAL_USD = 8000       # cap on position value. Must be at
@@ -817,6 +836,16 @@ def exec_blocked(open_count, day_pnl_usd):
     return None
 
 
+def eff_leverage(asset):
+    """The leverage the agent will actually use: the configured value, never
+    above what the market allows."""
+    cap = asset.get("lev") or EXEC_LEVERAGE
+    try:
+        return max(1, min(int(EXEC_LEVERAGE), int(cap)))
+    except (TypeError, ValueError):
+        return max(1, int(EXEC_LEVERAGE))
+
+
 def plan_entry_orders(asset, trade, live_px=None):
     """Size the trade by fixed dollar risk and describe the orders. Logged
     to orders.log. Returns the plan, or None.
@@ -839,7 +868,13 @@ def plan_entry_orders(asset, trade, live_px=None):
     per_unit = abs(size_px - stop)
     if per_unit <= 0:
         return None
-    if EXEC_SIZING == "notional":
+    if EXEC_SIZING == "margin":
+        # collateral x leverage = position value. lev is clamped to the
+        # market's maximum, and place_entry_live SETS that same leverage on
+        # the exchange, so the two cannot disagree.
+        lev = eff_leverage(asset)
+        size = (EXEC_MARGIN_USD * lev) / size_px
+    elif EXEC_SIZING == "notional":
         # the SAME dollar amount goes into every trade. What that costs if
         # the stop hits then depends on the stop width: a 0.25% stop loses
         # 0.25% of the position, a 3% stop loses 3%.
@@ -1073,6 +1108,18 @@ def place_entry_live(asset, trade, plan):
     if size <= 0:
         log(f"{sym}: size rounds to zero - not sent")
         return None
+    # SET the leverage before entering. Without this, sizing in "margin"
+    # mode is only an assumption: a symbol left at 3x on the account would
+    # post three times the intended collateral for the same position.
+    if EXEC_SIZING == "margin":
+        lev = eff_leverage(asset)
+        try:
+            ex.update_leverage(lev, sym)
+        except Exception as e:
+            log(f"{sym}: could NOT set leverage to {lev}x "
+                f"({type(e).__name__}: {e}) - refusing the entry rather than "
+                "posting unknown collateral")
+            return None
     try:
         r = ex.market_open(sym, long_, size)
         log(f"{sym}: LIVE entry sent {r}")
@@ -1095,8 +1142,10 @@ def place_entry_live(asset, trade, plan):
         return None
     trade["size"] = size
     per_unit = abs(trade["entry"] - trade["stop"])
-    target = (f"${EXEC_NOTIONAL_USD:.2f} in" if EXEC_SIZING == "notional"
-              else f"${EXEC_RISK_USD:.2f} risk")
+    target = ({"margin": f"${EXEC_MARGIN_USD:.2f} margin at "
+                         f"{eff_leverage(asset)}x",
+               "notional": f"${EXEC_NOTIONAL_USD:.2f} in"}
+              .get(EXEC_SIZING, f"${EXEC_RISK_USD:.2f} risk"))
     log(f"{sym}: position {size} units = ${size * trade['entry']:.2f} in, "
         f"loses ${size * per_unit:.2f} at the stop (target {target})")
     try:
