@@ -604,23 +604,30 @@ function tradeAge(openedT){
 // NYSE:CL, Colgate-Palmolive, not WTI crude; "BRENTOIL" resolves to nothing.
 // Equities on that venue DO use their real tickers, so they pass through.
 const TVMAP={
+  // These markets are FUTURES, not spot. Confirmed 2 Aug against the dex
+  // oracle: xyz:BRENTOIL 84.71 while spot Brent (TVC:UKOIL) was 91.03, a
+  // ~7% gap that is the contract, not an error - mid and oracle agree to
+  // within 0.1%, so the price is real. Front-month continuous contracts
+  // line up; spot CFDs do not.
   // energy
-  BRENTOIL:'TVC:UKOIL',   BRENT:'TVC:UKOIL',    UKOIL:'TVC:UKOIL',
-  CL:'TVC:USOIL',         WTI:'TVC:USOIL',      OIL:'TVC:USOIL',
-  CRUDE:'TVC:USOIL',      USOIL:'TVC:USOIL',
-  NATGAS:'TVC:NATGAS',    NG:'TVC:NATGAS',      GAS:'TVC:NATGAS',
+  BRENTOIL:'BZ1!',        BRENT:'BZ1!',         UKOIL:'BZ1!',
+  CL:'CL1!',              WTI:'CL1!',           OIL:'CL1!',
+  CRUDE:'CL1!',           USOIL:'CL1!',
+  NATGAS:'NG1!',          NG:'NG1!',            GAS:'NG1!',
   // metals
-  GOLD:'TVC:GOLD',        XAU:'TVC:GOLD',       XAUUSD:'TVC:GOLD',
-  SILVER:'TVC:SILVER',    XAG:'TVC:SILVER',     XAGUSD:'TVC:SILVER',
-  COPPER:'COMEX:HG1!',    HG:'COMEX:HG1!',
-  PLAT:'TVC:PLATINUM',    XPT:'TVC:PLATINUM',   PLATINUM:'TVC:PLATINUM',
-  PALLADIUM:'TVC:PALLADIUM', XPD:'TVC:PALLADIUM', PALLAD:'TVC:PALLADIUM',
+  GOLD:'GC1!',            XAU:'GC1!',           XAUUSD:'GC1!',
+  SILVER:'SI1!',          XAG:'SI1!',           XAGUSD:'SI1!',
+  COPPER:'HG1!',          HG:'HG1!',
+  PLAT:'PL1!',            XPT:'PL1!',           PLATINUM:'PL1!',
+  PALLADIUM:'PA1!',       XPD:'PA1!',           PALLAD:'PA1!',
+  CORN:'ZC1!',            WHEAT:'ZW1!',
   // index / FX style names that also appear on builder venues
-  SPX:'SP:SPX',           SPX500:'SP:SPX',      US500:'SP:SPX',
-  NDX:'NASDAQ:NDX',       NAS100:'NASDAQ:NDX',  US100:'NASDAQ:NDX',
-  DJI:'DJ:DJI',           US30:'DJ:DJI',
-  VIX:'TVC:VIX',          DXY:'TVC:DXY',
-  EURUSD:'FX:EURUSD',     GBPUSD:'FX:GBPUSD',   USDJPY:'FX:USDJPY'
+  SP500:'ES1!',           SPX:'ES1!',           US500:'ES1!',
+  XYZ100:'NQ1!',          NDX:'NQ1!',           US100:'NQ1!',
+  JP225:'NKD1!',          KR200:'KOSPI200',
+  VIX:'VX1!',             DXY:'DX1!',
+  EUR:'6E1!',             JPY:'6J1!',           GBP:'6B1!',
+  KRW:'FX_IDC:USDKRW'
 };
 // Anything on a builder venue that is NOT in the map falls through as its
 // bare ticker. That is right for equities (xyz:AAPL is AAPL) and wrong for
