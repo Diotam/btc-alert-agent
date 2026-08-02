@@ -68,7 +68,8 @@ COMMODITY_TICKERS = ("XAU", "GOLD", "XAG", "SILVER", "XPT", "PLAT",
                      "XPD", "PALLADIUM", "CL", "WTI", "OIL", "BRENT",
                      "BRENTOIL", "NG", "NATGAS", "HG", "COPPER")
 STOCK_DEXES = ("xyz",)             # TradeXYZ equities venue
-EXEC_BUILDER_DEXES = ()            # builder dexes to trade AUTOMATICALLY,
+EXEC_BUILDER_DEXES = ("xyz",)      # builder dexes to trade AUTOMATICALLY,
+                                   # builder dexes to trade AUTOMATICALLY,
                                    # e.g. ("xyz",). The "xyz:GOLD" naming is
                                    # this agent's own - on Hyperliquid that
                                    # market is just GOLD, living on the xyz
