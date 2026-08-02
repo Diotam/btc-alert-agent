@@ -599,69 +599,17 @@ function tradeAge(openedT){
   return m + 'm';
 }
 
-// Builder-venue commodity names are Hyperliquid's, not TradingView's.
-// Sending the bare name opens the wrong chart entirely: "CL" resolves to
-// NYSE:CL, Colgate-Palmolive, not WTI crude; "BRENTOIL" resolves to nothing.
-// Equities on that venue DO use their real tickers, so they pass through.
-const TVMAP={
-  // These markets are FUTURES, not spot. Confirmed 2 Aug against the dex
-  // oracle: xyz:BRENTOIL 84.71 while spot Brent (TVC:UKOIL) was 91.03, a
-  // ~7% gap that is the contract, not an error - mid and oracle agree to
-  // within 0.1%, so the price is real. Front-month continuous contracts
-  // line up; spot CFDs do not.
-  // energy
-  BRENTOIL:'BZ1!',        BRENT:'BZ1!',         UKOIL:'BZ1!',
-  CL:'CL1!',              WTI:'CL1!',           OIL:'CL1!',
-  CRUDE:'CL1!',           USOIL:'CL1!',
-  NATGAS:'NG1!',          NG:'NG1!',            GAS:'NG1!',
-  // metals
-  GOLD:'GC1!',            XAU:'GC1!',           XAUUSD:'GC1!',
-  SILVER:'SI1!',          XAG:'SI1!',           XAGUSD:'SI1!',
-  COPPER:'HG1!',          HG:'HG1!',
-  PLAT:'PL1!',            XPT:'PL1!',           PLATINUM:'PL1!',
-  PALLADIUM:'PA1!',       XPD:'PA1!',           PALLAD:'PA1!',
-  CORN:'ZC1!',            WHEAT:'ZW1!',
-  // index / FX style names that also appear on builder venues
-  SP500:'ES1!',           SPX:'ES1!',           US500:'ES1!',
-  XYZ100:'NQ1!',          NDX:'NQ1!',           US100:'NQ1!',
-  JP225:'NKD1!',          KR200:'KOSPI200',
-  VIX:'VX1!',             DXY:'DX1!',
-  EUR:'6E1!',             JPY:'6J1!',           GBP:'6B1!',
-  KRW:'FX_IDC:USDKRW',
-  // NOTHING for the equities. I mapped SMSN to KRX:005930 and SKHX/SKHY to
-  // KRX:000660; both are quoted in WON while the venue prices in USD, so
-  // the charts were out by ~600x. xyz:SMSN is $166 and the bare ticker
-  // resolves there correctly. Every equity now falls through as the venue
-  // names it - do not add exchange prefixes without checking the price
-  // matches first.
-};
-// Venue-specific markets with NO TradingView equivalent - private
-// companies, in-house baskets, synthetic indices. Without this they fall
-// through as bare tickers and open something unrelated, silently. Better to
-// say so than to show the wrong chart.
-const TVNONE={SPCX:'SpaceX, private - no public chart',
-  DRAM:'a memory-sector basket, not a listed instrument',
-  CXMT:'ChangXin Memory, private',
-  ZHIPU:'Zhipu AI, private',   MINIMAX:'MiniMax, private',
-  XYZ100:'the venue own index - charting NQ1! as the closest proxy',
-  H100:'an in-house index',    VOL:'an in-house index',
-  KSTR:'an in-house index',    BOT:'an in-house index'
-};
-// Anything on a builder venue that is NOT in the map falls through as its
-// bare ticker. That is right for equities (xyz:AAPL is AAPL) and wrong for
-// any commodity or index name we have not listed - CL would land on
-// NYSE:CL, Colgate-Palmolive. The tell is a chart that makes no sense for
-// the instrument; add it above when that happens.
-function tvUnmapped(sym){
-  if(sym.indexOf(':')<0) return null;
-  const bare=sym.split(':').pop().toUpperCase();
-  return (!TVMAP[bare] && TVNONE[bare]) ? TVNONE[bare] : null;
-}
+// Every market here is a Hyperliquid perp and TradingView carries them
+// ALL - the builder dex included, as "<NAME>USDC.P" on the Trade[XYZ]
+// HIP-3 venue. That is the SAME instrument the agent trades, so there is
+// nothing left to map: no futures proxies (BZ1! was ~7% off), no guessed
+// foreign listings (KRX quotes in won, ~600x off), no no-chart list for
+// SpaceX or the in-house baskets - they all have real charts here.
+//   main dex    BTC       -> HYPERLIQUID:BTCUSDC.P
+//   builder dex xyz:GOLD  -> GOLDUSDC.P
 function tvSym(sym){
-  if(sym.indexOf(':')>=0){
-    const bare=sym.split(':').pop();
-    return encodeURIComponent(TVMAP[bare.toUpperCase()]||bare.toUpperCase());
-  }
+  if(sym.indexOf(':')>=0)
+    return encodeURIComponent(sym.split(':').pop()+'USDC.P');
   // main-dex perps keep their exact Hyperliquid name, k-prefix included
   return encodeURIComponent('HYPERLIQUID:'+sym+'USDC.P');
 }
@@ -701,9 +649,6 @@ function closeRunner(ev, sym){
 }
 
 function tvOpen(sym){
-  // do not open a chart for something the venue invented
-  const why=tvUnmapped(sym);
-  if(why){ alert(sym+': no TradingView chart - '+why); return; }
   const url = TVBASE + tvSym(sym) + '&interval=' + TVINT;
   if (TOUCH) {
     const a = document.createElement('a');
