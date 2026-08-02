@@ -348,9 +348,16 @@ def fetch(asset, interval, min_candles):
 
 # --------------------------- universe --------------------------------------
 def base_name(name):
-    """Strip any venue prefix Hyperliquid includes ('xyz:GOLD') and
-    kGOLD-style multipliers, leaving the bare ticker."""
-    return name.split(":")[-1].upper().lstrip("K")
+    """Strip only the venue prefix Hyperliquid includes ('xyz:GOLD').
+
+    It used to also .upper().lstrip("K"), meant to undo kPEPE-style
+    multipliers - but "kPEPE" IS the perp's real name on Hyperliquid, so
+    stripping the k produced "PEPE", which is not in the universe. Every
+    k-prefixed market and every ticker simply starting with K (KAITO ->
+    AITO) silently failed its universe lookup and never executed. Case is
+    preserved too: the exchange matches names exactly.
+    """
+    return name.split(":")[-1]
 
 
 def executable(symbol):
@@ -395,7 +402,7 @@ def discover_assets():
     if len(dexes) > 2:
         log(f"Scanning {len(dexes)} dexes: "
             + ", ".join(d or "main" for d in dexes))
-    excluded = {base_name(x) for x in EXCLUDE}
+    excluded = {base_name(x).upper() for x in EXCLUDE}
     for dex in dexes:
         payload = {"type": "metaAndAssetCtxs"}
         if dex:
@@ -413,7 +420,7 @@ def discover_assets():
             except (TypeError, ValueError):
                 vol = 0.0
             name = u["name"]
-            if base_name(name) in excluded:
+            if base_name(name).upper() in excluded:
                 continue
             if dex:
                 if is_commodity(name):
@@ -441,7 +448,8 @@ def discover_assets():
 
 
 def _not_excluded(a):
-    return base_name(a["symbol"]) not in {base_name(x) for x in EXCLUDE}
+    return (base_name(a["symbol"]).upper()
+            not in {base_name(x).upper() for x in EXCLUDE})
 
 
 _UNIVERSE = {"t": 0.0, "assets": []}
