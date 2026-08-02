@@ -380,7 +380,10 @@ def executable(symbol):
     """
     if ":" not in symbol:
         return True
-    return symbol.split(":")[0] in EXEC_BUILDER_DEXES
+    if symbol.split(":")[0] not in EXEC_BUILDER_DEXES:
+        return False
+    # the client may have fallen back to main-dex-only at build time
+    return _EXEC["ex"] is None or bool(_EXEC.get("dexes"))
 
 
 def is_commodity(name):
@@ -798,7 +801,8 @@ def process_open_trade(asset, trade, candles, ha, last_closed_t):
 
 
 # --------------------------- execution -------------------------------------
-_EXEC = {"ex": None, "info": None, "addr": None, "meta": None, "err": None}
+_EXEC = {"ex": None, "info": None, "addr": None, "meta": None, "err": None,
+         "dexes": []}
 
 
 def exec_base_url():
@@ -824,11 +828,33 @@ def exec_client():
                 or wallet.address
             base = exec_base_url()
             dexes = [d for d in EXEC_BUILDER_DEXES if d]
-            kw = {"account_address": addr}
+            ex = None
             if dexes:
-                kw["perp_dexs"] = dexes
-            _EXEC.update(ex=Exchange(wallet, base, **kw),
-                         info=Info(base, skip_ws=True), addr=addr)
+                # The MAIN dex must be listed too. Passing only the builder
+                # names REPLACES the SDK's asset map instead of extending
+                # it, and every main-dex coin then raises KeyError - seen
+                # live as "could NOT set leverage to 3x (KeyError:
+                # 'CASHCAT')" on a plain main-dex market.
+                for attempt in ([""] + dexes, [None] + dexes):
+                    try:
+                        ex = Exchange(wallet, base, account_address=addr,
+                                      perp_dexs=attempt)
+                        log(f"execution client built with perp_dexs="
+                            f"{attempt}")
+                        break
+                    except Exception as e:
+                        log(f"perp_dexs={attempt} rejected "
+                            f"({type(e).__name__}: {e})")
+            if ex is None:
+                # Builder dexes are a bonus; main-dex trading is the job.
+                # Never let the extra feature take execution down with it.
+                ex = Exchange(wallet, base, account_address=addr)
+                if dexes:
+                    log("falling back to a MAIN-DEX-ONLY client - builder "
+                        "markets will be refused, main-dex trading is fine")
+                    dexes = []
+            _EXEC.update(ex=ex, info=Info(base, skip_ws=True), addr=addr)
+            _EXEC["dexes"] = dexes
             # the universe check must know every market the client can
             # reach, or builder symbols are refused as "not in the perp
             # universe" even though the client could trade them
