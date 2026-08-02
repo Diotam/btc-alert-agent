@@ -744,8 +744,7 @@ def ensure_flat(asset, trade, kind):
     ex = exec_client()
     if not ex:
         return
-    sym = (asset["symbol"] if ":" in asset["symbol"]
-           else base_name(asset["symbol"]))
+    sym = exec_symbol(asset["symbol"])
     try:
         state = _EXEC["info"].user_state(_EXEC["addr"]) or {}
         szi = 0.0
@@ -986,6 +985,16 @@ def exec_blocked(open_count, day_pnl_usd):
     return None
 
 
+def exec_symbol(symbol):
+    """The name the EXCHANGE expects. Builder markets keep their full
+    "xyz:GOLD" form now that the client is built with perp_dexs; only a
+    main-dex symbol is passed bare. place_entry_live and ensure_flat had
+    this inline while close_position_live and move_stop_live still used
+    base_name - so a manual close or a stop move on a commodity would have
+    been sent as "GOLD", which the client does not know."""
+    return symbol if ":" in symbol else base_name(symbol)
+
+
 def eff_leverage(asset):
     """The leverage the agent will actually use: the configured value, never
     above what the market allows."""
@@ -1157,7 +1166,7 @@ def close_position_live(asset, trade):
     ex = exec_client()
     if not ex:
         return
-    sym = base_name(asset["symbol"])
+    sym = exec_symbol(asset["symbol"])
     try:
         r = ex.market_close(sym)
         log(f"{sym}: LIVE manual close sent {r}")
@@ -1200,7 +1209,7 @@ def move_stop_live(asset, trade):
     ex = exec_client()
     if not ex:
         return
-    sym = base_name(asset["symbol"])
+    sym = exec_symbol(asset["symbol"])
     long_ = trade["verdict"] == "LONG"
     left = round(trade["size"] * trade["left"], sz_decimals(asset["symbol"]))
     try:
@@ -1263,8 +1272,7 @@ def place_entry_live(asset, trade, plan):
         return None
     # a builder market keeps its full "dex:coin" name for the SDK; a
     # main-dex market is just its own name
-    sym = (asset["symbol"] if ":" in asset["symbol"]
-           else base_name(asset["symbol"]))
+    sym = exec_symbol(asset["symbol"])
     if not any(a.get("name") == sym
                for a in (_EXEC.get("meta") or {}).get("universe", [])):
         log(f"{sym}: live execution skipped - not in the perp universe")
