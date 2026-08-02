@@ -1007,6 +1007,20 @@ def eff_leverage(asset):
         return max(1, int(EXEC_LEVERAGE))
 
 
+def free_collateral():
+    """Withdrawable USD on the account, or None if the read fails.
+
+    Returning None rather than 0.0 on failure matters: the caller treats
+    None as "unknown, proceed" so a bad read cannot silently block every
+    entry. A real zero balance still blocks."""
+    try:
+        st = _EXEC["info"].user_state(_EXEC["addr"]) or {}
+        return float(st["withdrawable"])
+    except Exception as e:
+        log(f"free_collateral() failed: {type(e).__name__}: {e}")
+        return None
+
+
 def plan_entry_orders(asset, trade, live_px=None):
     """Size the trade by fixed dollar risk and describe the orders. Logged
     to orders.log. Returns the plan, or None.
@@ -1349,6 +1363,16 @@ def place_entry_live(asset, trade, plan):
             except Exception:
                 pass
             return None
+    # MARGIN IS THE ONLY REAL CONSTRAINT now the position cap is off, and
+    # nothing else guards it. Check it here so a short account produces a
+    # named skip instead of an "Insufficient margin" rejection from the
+    # venue - the order was never going to fill either way.
+    need = size * trade["entry"] / max(eff_leverage(asset), 1)
+    avail = free_collateral()
+    if avail is not None and avail < need * 1.05:
+        log(f"{sym}: ENTRY SKIPPED - needs ${need:.2f} margin, "
+            f"${avail:.2f} free")
+        return None
     try:
         r = ex.market_open(sym, long_, size)
         log(f"{sym}: LIVE entry sent {r}")
