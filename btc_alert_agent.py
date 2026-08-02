@@ -797,10 +797,12 @@ def _close_trade(asset, trade, px, kind, event_t, note="", frac=None):
     log(f"{sym}: {kind} at ${fmt_px(px)}{' (intrabar)' if note else ''}")
     record_close(sym, trade, px, kind, event_t, frac=frac)
     plan_manage_orders(asset, kind, px)
-    # only a FULL close should leave the exchange flat; a partial is
-    # supposed to leave the runner open
-    if frac >= 0.999:
-        ensure_flat(asset, trade, kind)
+    # EVERY _close_trade call ends the position - the partial books through
+    # record_close directly, never here. The old `frac >= 0.999` guard was
+    # therefore wrong: a RUNNER closing its remaining half passes frac 0.5,
+    # so reconciliation was skipped on exactly the case that has NO resting
+    # order and most needs it. Seen live on HYPE, closed by hand.
+    ensure_flat(asset, trade, kind)
     RUN_ALERTS.append(f"{sym} {kind} ({pnl_pct(trade, px) * frac:+.2f}%)")
     return None, True
 
