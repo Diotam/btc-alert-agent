@@ -92,8 +92,8 @@ SCAN_EVERY = "5m"                  # how often the loop wakes. Aligning it to
                                    # trades - intrabar stop/target detection
                                    # and moving the stop to entry after the
                                    # partial fills
-HA_SMOOTH_IN = 5                   # EMA applied to OHLC before building HA
-HA_SMOOTH_OUT = 5                  # EMA applied to the HA output
+HA_SMOOTH_IN = 10                  # EMA applied to OHLC before building HA
+HA_SMOOTH_OUT = 10                 # EMA applied to the HA output
 HA_TREND_RUN = 3                   # bodies that must expand, then shrink
 HA_MIN_BODY_PCT = 0.05             # the trend run must contain at least one
                                    # HA body this big, as a % of price. Without
