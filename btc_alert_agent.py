@@ -113,6 +113,14 @@ HA_MIN_BODY_PCT = 0.05             # the trend run must contain at least one
                                    # setup with no visible colour flip at all.
                                    # Measured: near-flat series produce bodies
                                    # of 0.005-0.034%, normal ones 0.081%+
+HA_MIN_FLIP_BODY_PCT = 0.01        # the DOJI/flip candle must itself be a real
+                                   # candle, this % of price or bigger. 0 = off.
+                                   # HA_DOJI_FRACTION puts a CEILING on that
+                                   # body; this is the FLOOR, so the two form a
+                                   # band. Added after FARTCOIN entered on a
+                                   # colour flip whose body was 0.006% - under
+                                   # a tick, invisible on a chart, a rounding
+                                   # artefact rather than a reversal.
 HA_REQUIRE_FLIP = True             # the doji must ALSO have flipped colour -
                                    # a red trend must have printed a GREEN
                                    # doji before a long. Without this the
@@ -568,6 +576,10 @@ def ha_doji(ha, i, want_long):
     # colour; without it, a small trend-coloured body also counts, which
     # fires roughly six times as often but anticipates the turn instead of
     # confirming it.
+    if HA_MIN_FLIP_BODY_PCT:
+        # a colour change of essentially zero is not a turn
+        if abs(ha[i]["c"] - ha[i]["o"]) / ha[i]["o"] * 100 < HA_MIN_FLIP_BODY_PCT:
+            return None
     if HA_REQUIRE_FLIP and ha_green(ha[i]) != want_long:
         return None
     r = i - 1
