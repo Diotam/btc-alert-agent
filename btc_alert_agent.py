@@ -114,6 +114,18 @@ SCAN_EVERY = "5m"                  # how often the loop wakes. Aligning it to
 HA_SMOOTH_IN = 10                  # EMA applied to OHLC before building HA
 HA_SMOOTH_OUT = 10                 # EMA applied to the HA output
 HA_TREND_RUN = 3                   # bodies that must expand, then shrink
+HA_MIN_RUN = 15                    # MINIMUM trend-coloured HA candles before
+                                   # the flip counts at all. Deliberately
+                                   # separate from HA_TREND_RUN: that one is
+                                   # also the width of the strictly-expanding
+                                   # window, so raising IT to 5 would demand
+                                   # five consecutively growing bodies, which
+                                   # is rare enough to gate the engine to
+                                   # near silence. This one only asks that
+                                   # the trend was LONG, not that it grew
+                                   # monotonically. Raise to kill the 1-2
+                                   # candle flip runs; lower toward 3 for the
+                                   # old behaviour
 HA_MIN_BODY_PCT = 0.05             # the trend run must contain at least one
                                    # HA body this big, as a % of price. Without
                                    # it a FLAT smoothed series satisfies
@@ -599,7 +611,7 @@ def ha_doji(ha, i, want_long):
         r -= 1
     r += 1
     run = ha[r:i]                            # the trend, excluding the doji
-    if len(run) < n:
+    if len(run) < max(n, HA_MIN_RUN):
         return None
     bodies = [ha_body(x) for x in run]
     biggest = max(bodies)
