@@ -114,6 +114,12 @@ SCAN_EVERY = "5m"                  # how often the loop wakes. Aligning it to
 HA_SMOOTH_IN = 10                  # EMA applied to OHLC before building HA
 HA_SMOOTH_OUT = 10                 # EMA applied to the HA output
 HA_TREND_RUN = 3                   # bodies that must expand, then shrink
+BTC_TREND_SMOOTH = (5, 5)          # smoothing for the BTC CONTEXT line only,
+                                   # deliberately lighter than the signal's
+                                   # 10,10 so it turns sooner and reports
+                                   # where BTC is now
+BTC_TREND_TTL_S = 120              # one BTC fetch per scan, not per symbol
+_BTC_CACHE = {"t": 0.0, "v": None}
 HA_MIN_RUN = 15                    # MINIMUM trend-coloured HA candles before
                                    # the flip counts at all. Deliberately
                                    # separate from HA_TREND_RUN: that one is
@@ -346,6 +352,50 @@ def fetch_hyperliquid(coin, interval, lookback):
     return [{"t": c["t"], "o": float(c["o"]), "h": float(c["h"]),
              "l": float(c["l"]), "c": float(c["c"]), "v": float(c["v"])}
             for c in data]
+
+
+def btc_trend():
+    """BTC's smoothed-HA colour, run length and % move over that run.
+
+    Read with BTC_TREND_SMOOTH (5,5), NOT the signal smoothing (10,10).
+    Lighter smoothing turns sooner, so this reports where BTC is NOW rather
+    than confirming it several candles late - which is what you want from
+    context that is only ever displayed, never traded on.
+
+    Cached for BTC_TREND_TTL_S so a scan of 35 symbols costs one fetch.
+    Returns (up, candles_in_run, pct_move) or None if it cannot be read."""
+    now = time.time()
+    if _BTC_CACHE["t"] and now - _BTC_CACHE["t"] < BTC_TREND_TTL_S:
+        return _BTC_CACHE["v"]
+    try:
+        c = fetch_hyperliquid("BTC", TF, LOOKBACK.get(TF, 400))
+        ha = smoothed_ha(c, *BTC_TREND_SMOOTH)
+        if len(ha) < 3:
+            return None
+        up = ha_green(ha[-1])
+        n = 1
+        while n < len(ha) and ha_green(ha[-1 - n]) == up:
+            n += 1
+        move = (c[-1]["c"] - c[-n]["o"]) / c[-n]["o"] * 100 if n <= len(c) \
+            else 0.0
+        val = (up, n, move)
+    except Exception as e:
+        log(f"btc_trend() failed: {type(e).__name__}: {e}")
+        val = None
+    _BTC_CACHE.update({"t": now, "v": val})
+    return val
+
+
+def btc_context_line():
+    """One line of BTC context for an alert. CONTEXT ONLY - nothing is
+    filtered on it, so an alt signal against BTC still fires and still
+    says so."""
+    v = btc_trend()
+    if not v:
+        return "<i>\u20bf trend: unavailable</i>"
+    up, n, move = v
+    arrow = "\u2197\ufe0f UP" if up else "\u2198\ufe0f DOWN"
+    return (f"<i>\u20bf BTC {arrow} \u00b7 {n} candles \u00b7 {move:+.2f}%</i>")
 
 
 def fetch_binance(sym, interval, lookback):
@@ -659,6 +709,7 @@ def entry_message(asset, direction, plan, zhi, zlo, source, t, trigger):
         f"TP:    <code>${fmt_px(plan['tp'])}</code>  "
         f"({HA_RR}x the stop \u00b7 {HA_PARTIAL:.0%} booked there)",
         f"<i>data: {esc(source)}</i>",
+        btc_context_line(),
     ])
 
 
