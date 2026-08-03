@@ -50,10 +50,14 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 # --- asset universe -------------------------------------------------------
 DISCOVER_ALL = True
-DISCOVER_DEXES = True              # scan HIP-3 builder venues. Their symbols
-                                   # are absent from the main perp meta the SDK
-                                   # client is built against, so they ALERT
-                                   # ONLY - they are placed by hand
+DISCOVER_DEXES = False             # scan HIP-3 builder venues. OFF as of
+                                   # 2 Aug: with EXEC_BUILDER_DEXES empty
+                                   # they could only ever alert, never trade,
+                                   # so every xyz signal was noise that also
+                                   # booked paper rows into the ledger. False
+                                   # falls back to DEXES = [""], the main dex
+                                   # alone. Turn both back on together if the
+                                   # xyz pool is ever funded again
 ADMIT_COMMODITIES = True
 ADMIT_STOCKS = True                # equities IN the universe. They are
                                    # is one line to flip back
