@@ -1034,6 +1034,7 @@ def ensure_flat(asset, trade, kind):
         "open - closing at market")
     try:
         ex.market_close(sym)
+        CLOSED_THIS_SCAN.add(sym)   # sym is already the exchange name here
         log(f"{sym}: reconciling market close sent")
     except Exception as e:
         log(f"{sym}: reconciling close FAILED ({type(e).__name__}: {e})")
@@ -1067,6 +1068,7 @@ def _close_trade(asset, trade, px, kind, event_t, note="", frac=None):
             log(f"{sym}: {kind} alert failed: {type(e).__name__}: {e}")
     log(f"{sym}: {kind} at ${fmt_px(px)}{' (intrabar)' if note else ''}")
     record_close(sym, trade, px, kind, event_t, frac=frac)
+    CLOSED_THIS_SCAN.add(exec_symbol(sym))
     plan_manage_orders(asset, kind, px)
     # EVERY _close_trade call ends the position - the partial books through
     # record_close directly, never here. The old `frac >= 0.999` guard was
@@ -1849,6 +1851,14 @@ def protect_position(asset, trade):
 
 POS_CACHE = {"t": 0.0, "v": None}   # exchange positions, refreshed once per
 #                                    scan - never per symbol
+CLOSED_THIS_SCAN = set()            # symbols this scan has closed. POS_CACHE
+#                                    is a snapshot from the TOP of the scan,
+#                                    so anything closed during it still looks
+#                                    open - and the orphan sweep would adopt
+#                                    the position it just closed. Live 3 Aug
+#                                    on CRV: stop booked, ensure_flat closed
+#                                    it, the sweep re-adopted it 9s later at
+#                                    the same stop price
 
 
 def exchange_positions():
@@ -2210,12 +2220,20 @@ def adopt_orphans(state, assets):
 
     Scoped by ADOPT_ORPHANS so a position opened deliberately outside the
     agent's universe is reported and left alone rather than taken over."""
-    live = POS_CACHE.get("v")
-    if live is None or ADOPT_ORPHANS == "off":
+    if ADOPT_ORPHANS == "off":
+        return False
+    # FRESH read, not POS_CACHE: the scan has been closing positions since
+    # that snapshot was taken, and a stale one makes them look like orphans.
+    live = exchange_positions()
+    if live is None:
         return False
     known = {exec_symbol(a["symbol"]): a for a in assets}
     changed = False
     for coin, (szi, entry_px) in live.items():
+        if coin in CLOSED_THIS_SCAN:
+            log(f"{coin}: closed earlier this scan - not adopting the "
+                "position on its way out")
+            continue
         asset = known.get(coin)
         if asset is None:
             if ADOPT_ORPHANS == "universe":
@@ -2263,7 +2281,11 @@ def check_asset(asset, state):
         req = close_requested(sym)
         if req is not None:
             # capture the side BEFORE the close clears the trade
-            rev = bool(req.get("reverse")) and not req.get("done")
+            # NOT gated on done. The dashboard closes the position itself
+            # and marks done=True, which is exactly the state open_reverse
+            # expects: booked and flat. Requiring `not done` meant the
+            # button closed and never opened the other side.
+            rev = bool(req.get("reverse"))
             was_long = (ast.get("trade") or {}).get("verdict") == "LONG"
             if req.get("done"):
                 # the dashboard already closed it and booked the row
@@ -2408,6 +2430,7 @@ def check_once():
     # ONE positions read per scan, shared by every symbol. None means the
     # read failed, and callers treat that as "unknown" - never as flat, or a
     # timeout would look like every position closing at once.
+    CLOSED_THIS_SCAN.clear()
     POS_CACHE["v"] = exchange_positions() if EXEC_LIVE else None
     POS_CACHE["t"] = time.time()
     changed = False
