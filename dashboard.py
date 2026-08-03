@@ -421,8 +421,8 @@ def build_data():
     # closest to firing first: "ready" at the top, then whoever has the
     # longest run behind them, since that is the one nearest a doji
     _ORDER = {"ready": 0, "held by the BTC gate": 1, "waiting for flip": 2,
-              "doji too small": 3, "waiting for doji": 4, "no momentum": 5,
-              "trend too flat": 6, "building trend": 7, "warming up": 8}
+              "doji too small": 3, "waiting for doji": 4,
+              "trend too flat": 5, "no run": 6, "warming up": 7}
     gates.sort(key=lambda x: (_ORDER.get(x.get("stage"), 9),
                               -(x.get("run") or 0), x["sym"]))
     closed, pnl = closed_trades()
@@ -837,19 +837,16 @@ function render(d){
     G.filter(g=>g.stage===READY).length+' ready';
   document.getElementById('gates').innerHTML=G.length?G.map(g=>{
     const cls=g.dir==='LONG'?'long':'short';
-    const pct=g.need?Math.min(100,Math.round((g.run||0)/g.need*100)):100;
     const done=g.stage===READY;
-    const bar=`<span style="display:inline-block;width:64px;height:4px;`
-      +`background:#2a2a2a;border-radius:2px;vertical-align:middle">`
-      +`<span style="display:block;width:${pct}%;height:100%;border-radius:2px;`
-      +`background:${done?'#3fb950':'#6b6b6b'}"></span></span>`;
+    // there is no minimum run length any more, so the run is DESCRIPTIVE -
+    // how long the current trend has been, not progress toward a threshold
     return `<div class="card tv" onclick="tvOpen('${g.sym}')" `
       +`title="open ${g.sym} on TradingView"><div class=row>
       <span class=sym>${done?'\u25cf':'\u25cb'} ${g.sym} `
       +`<span class=${cls}>${g.dir||''}</span></span>
       <span class=muted>${g.stage}</span></div><div class=row>
-      <span class=muted>${bar} ${g.run||0}/${g.need||0} candles `
-      +`\u00b7 ${g.trend||''}</span>
+      <span class=muted>${g.run||0} candle${(g.run||0)===1?'':'s'} `
+      +`${g.trend||''}</span>
       <span class=muted>${g.detail||''}</span></div></div>`;
   }).join(''):'<div class="card muted">no symbols scanned yet</div>';
   step('r-gates');
