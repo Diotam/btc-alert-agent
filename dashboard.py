@@ -350,7 +350,8 @@ def _lvl(v):
     """Level as a display string, tolerant of sub-dollar markets."""
     if v is None:
         return "?"
-    return f"{v:,.6f}".rstrip("0").rstrip(".") if v < 1 else f"{v:,.2f}"
+    # two more decimals than before, matching fmt_px in the agent
+    return f"{v:,.8f}".rstrip("0").rstrip(".") if v < 1 else f"{v:,.4f}"
 
 
 def scan_age_s(state, mtime):
@@ -686,8 +687,8 @@ function setP(p){PERIOD=p;
  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.dataset.p===p));
  if(LAST)render(LAST);}
 function px(p){if(p==null)return '-';
- return p>=10000?p.toLocaleString(undefined,{maximumFractionDigits:0})
- :p>=1?p.toFixed(2):p.toFixed(6)}
+ return p>=10000?p.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})
+ :p>=1?p.toFixed(4):p.toFixed(8)}
 function render(d){
  if(d.btc&&d.btc.px!=null){
    document.getElementById('btcpx').textContent='$'+d.btc.px.toLocaleString(
