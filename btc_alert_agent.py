@@ -683,6 +683,74 @@ def _strictly(bodies, growing):
                (bodies[k] < bodies[k - 1]) for k in range(1, len(bodies)))
 
 
+def gate_status(ha, i):
+    """Where this symbol sits in the entry chain, for the dashboard.
+
+    ha_doji returns None with no reason, so nothing downstream can say WHY
+    a symbol is not trading. This mirrors its checks in order and names the
+    first one that fails. It is a REPORT, never a decision - fire_entry
+    still asks ha_doji. If the two ever disagree, ha_doji is right.
+
+    Returns {stage, detail, run, need} - cheap, pure arithmetic on a series
+    already in memory."""
+    if i < 2:
+        return {"stage": "warming up", "detail": "", "run": 0}
+    # the run BELOW the current candle, whichever colour it is
+    cur = ha_green(ha[i])
+    r = i - 1
+    while r >= 0 and ha_green(ha[r]) == ha_green(ha[i - 1]):
+        r -= 1
+    r += 1
+    run = ha[r:i]
+    n_run = len(run)
+    trend_up = ha_green(ha[i - 1])
+    want_long = not trend_up          # a red run turns us long
+    d = {"run": n_run, "trend": "up" if trend_up else "down",
+         "dir": "LONG" if want_long else "SHORT", "need": max(HA_TREND_RUN,
+                                                              HA_MIN_RUN)}
+
+    if n_run < d["need"]:
+        d.update(stage="building trend",
+                 detail=f"{n_run}/{d['need']} candles")
+        return d
+    bodies = [ha_body(x) for x in run]
+    biggest = max(bodies)
+    scale = abs(ha[i]["c"]) or 1.0
+    if HA_MIN_BODY_PCT and biggest < HA_MIN_BODY_PCT / 100.0 * scale:
+        d.update(stage="trend too flat",
+                 detail=f"{biggest / scale * 100:.3f}% vs "
+                        f"{HA_MIN_BODY_PCT}%")
+        return d
+    if not any(_strictly(bodies[k:k + HA_TREND_RUN], True)
+               for k in range(0, len(bodies) - HA_TREND_RUN + 1)):
+        d.update(stage="no momentum", detail="no expanding bodies")
+        return d
+    body = ha_body(ha[i])
+    if body > HA_DOJI_FRACTION * biggest:
+        d.update(stage="waiting for doji",
+                 detail=f"body {body / biggest * 100:.0f}% of biggest")
+        return d
+    if HA_MIN_FLIP_BODY_PCT and \
+            body / (abs(ha[i]["o"]) or 1.0) * 100 < HA_MIN_FLIP_BODY_PCT:
+        d.update(stage="doji too small", detail="under the flip floor")
+        return d
+    if HA_DOJI_COLOUR == "flip" and ha_green(ha[i]) != want_long:
+        d.update(stage="waiting for flip",
+                 detail="doji is still trend-coloured")
+        return d
+    bt = btc_trend() if BTC_GATE != "off" else None
+    if bt:
+        eff_up = (not bt[0]) if bt[3] else bt[0]
+        allow = eff_up if BTC_GATE == "align" else not eff_up
+        if want_long != allow:
+            d.update(stage="held by the BTC gate",
+                     detail=f"BTC {'up' if bt[0] else 'down'}"
+                            f"{', stalling' if bt[3] else ''}")
+            return d
+    d.update(stage="ready", detail="doji confirmed, gate open")
+    return d
+
+
 def ha_doji(ha, i, want_long, colour=None):
     """Is HA candle i a DOJI that turns a real trend?
 
@@ -1689,6 +1757,17 @@ def process_candle(asset, ast, candles, ha, i):
     sym = asset["symbol"]
     c = candles[i]
     hd = ha[i]
+
+    # record where this symbol sits in the chain, for the dashboard. Report
+    # only - it never gates anything. Written every scan so the panel is
+    # never staler than the last candle close.
+    try:
+        g = gate_status(ha, i)
+        g["t"] = hd["t"]
+        g["px"] = c["c"]
+        ast["gate"] = g       # save_state runs at the end of every scan
+    except Exception as e:
+        log(f"{sym}: gate_status failed: {type(e).__name__}: {e}")
 
     for want_long in (True, False):
         found = ha_doji(ha, i, want_long)
