@@ -66,7 +66,7 @@ def pending_closes():
     return out
 
 
-def request_close(sym, shown=None):
+def request_close(sym, shown=None, reverse=False):
     """Close this position NOW at the price the card is showing.
 
     Only symbols the agent currently holds a trade on are accepted, so a
@@ -119,7 +119,8 @@ def request_close(sym, shown=None):
     try:
         CLOSE_REQ_DIR.mkdir(parents=True, exist_ok=True)
         _req_path(sym).write_text(json.dumps(
-            {"sym": sym, "asked": time.time(), "done": done, "exit": px}))
+            {"sym": sym, "asked": time.time(), "done": done, "exit": px,
+             "reverse": bool(reverse)}))
     except OSError as e:
         return False, f"closed, but the state marker failed ({type(e).__name__})"
     return True, note
@@ -638,6 +639,26 @@ function tvSym(sym){
 const TOUCH = (navigator.maxTouchPoints || 0) > 1 ||
               !window.matchMedia('(hover: hover)').matches;
 
+function reversePos(ev, sym){
+  ev.stopPropagation();
+  // same currentTarget capture as closeRunner - confirm() blocks and on iOS
+  // the dispatch is over by the time it returns
+  var b = ev.currentTarget || ev.target;
+  var shown = (b && b.getAttribute('data-px')) || '';
+  if(!confirm('Reverse '+sym+' NOW? This closes the position at market and '
+      +'immediately opens the opposite side with a fresh stop and target.')) return;
+  if(b){ b.disabled = true; b.textContent = 'reversing...'; }
+  fetch('/reverse?sym='+encodeURIComponent(sym)
+        +(shown?'&px='+encodeURIComponent(shown):'')
+        +(KEY?'&key='+KEY:''), {method:'POST'})
+    .then(r=>r.json())
+    .then(j=>{ if(b) b.textContent = j.ok ? 'reversing' : 'failed';
+               if(!j.ok){ if(b) b.disabled=false;
+                          alert(j.msg||'reverse failed'); } })
+    .catch(e=>{ if(b){ b.textContent='failed'; b.disabled=false; }
+                alert('reverse failed: '+(e&&e.message?e.message:e)); });
+}
+
 function closeRunner(ev, sym){
   ev.stopPropagation();          // the card itself opens TradingView
   // GRAB THE BUTTON FIRST. ev.currentTarget is only valid while the event
@@ -826,6 +847,7 @@ function render(d){
     <div class=row style="align-items:center">
       <span class=muted>${R==null?'':R.toFixed(2)+'R from entry'} · closes when the HA flips</span>
       <button class=closebtn data-px="${t.mid==null?'':t.mid}" onclick="closeRunner(event,'${t.sym}')">close now</button>
+      <button class=closebtn data-px="${t.mid==null?'':t.mid}" onclick="reversePos(event,'${t.sym}')">reverse</button>
     </div></div>`
   }).join(''):'<div class="card muted">none</div>';
   step('r-runners');
@@ -988,14 +1010,15 @@ class Handler(BaseHTTPRequestHandler):
             if key != DASH_KEY:
                 self._send(403, b"forbidden", "text/plain")
                 return
-        if url.path == "/close":
+        if url.path in ("/close", "/reverse"):
             q = parse_qs(url.query)
             sym = (q.get("sym") or [""])[0]
+            rev = url.path == "/reverse"
             try:
                 shown = float((q.get("px") or [""])[0])
             except ValueError:
                 shown = None
-            ok, msg = (request_close(sym, shown) if sym
+            ok, msg = (request_close(sym, shown, reverse=rev) if sym
                        else (False, "no symbol"))
             self._send(200 if ok else 400,
                        json.dumps({"ok": ok, "msg": msg}).encode(),
