@@ -420,9 +420,9 @@ def build_data():
     runners.sort(key=lambda t: -(t["r"] if t["r"] is not None else -99))
     # closest to firing first: "ready" at the top, then whoever has the
     # longest run behind them, since that is the one nearest a doji
-    _ORDER = {"ready": 0, "held by the BTC gate": 1, "waiting for flip": 2,
-              "doji too small": 3, "waiting for doji": 4,
-              "trend too flat": 5, "no run": 6, "warming up": 7}
+    _ORDER = {"ready": 0, "waiting for flip": 1, "doji too small": 2,
+              "waiting for doji": 3, "trend too flat": 4, "no run": 5,
+              "warming up": 6}
     gates.sort(key=lambda x: (_ORDER.get(x.get("stage"), 9),
                               -(x.get("run") or 0), x["sym"]))
     closed, pnl = closed_trades()
