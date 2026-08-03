@@ -208,6 +208,16 @@ EXEC_LOG_ORDERS = True             # write every sized order to orders.log.
                                    # gated execution. EXEC_LIVE alone decides
                                    # whether real orders are sent
 EXEC_TESTNET = False               # False = MAINNET, real money
+EXEC_MARGIN_MODE = "isolated"      # "isolated" or "cross". ISOLATED as of
+                                   # 3 Aug: each position is backed only by
+                                   # its own ~EXEC_MARGIN_USD, so the worst
+                                   # case on any one trade is that slot, not
+                                   # the account. Cross lets a single bad
+                                   # position draw on everything. The other
+                                   # mode is still tried as a fallback,
+                                   # since some markets refuse one of them.
+                                   # ONLY AFFECTS NEW ENTRIES - positions
+                                   # already open stay as they were opened
 EXEC_HALT_FILE = "/opt/btc-agent/EXEC_HALT"
 CLOSE_REQ_DIR = Path(__file__).parent / "close_requests"   # the dashboard
 #   drops one marker file per symbol here; the agent closes that position on
@@ -1114,14 +1124,26 @@ def eff_leverage(asset):
 
 
 def free_collateral():
-    """Withdrawable USD on the account, or None if the read fails.
+    """FREE INITIAL MARGIN: account value minus margin already committed.
+    None if the read fails.
+
+    NOT "withdrawable". That field answers a different question - how much
+    cash could leave the account right now - and it also nets off margin
+    reserved by resting orders. Measured live 3 Aug with 8 cross positions
+    and 15 resting stops/TPs: accountValue $372.53, totalMarginUsed
+    $225.02, so $147.51 of headroom, while withdrawable read 0.0. The guard
+    was refusing every entry on an account with room for four more.
 
     Returning None rather than 0.0 on failure matters: the caller treats
     None as "unknown, proceed" so a bad read cannot silently block every
-    entry. A real zero balance still blocks."""
+    entry. A real zero still blocks, and the venue is the final backstop -
+    if Hyperliquid disagrees it rejects the order and the NOT PLACED path
+    reports it honestly."""
     try:
         st = _EXEC["info"].user_state(_EXEC["addr"]) or {}
-        return float(st["withdrawable"])
+        ms = st.get("crossMarginSummary") or st.get("marginSummary") or {}
+        return max(0.0, float(ms["accountValue"])
+                   - float(ms["totalMarginUsed"]))
     except Exception as e:
         log(f"free_collateral() failed: {type(e).__name__}: {e}")
         return None
@@ -1443,7 +1465,11 @@ def place_entry_live(asset, trade, plan):
     if EXEC_SIZING == "margin":
         lev = eff_leverage(asset)
         err = None
-        for is_cross in (True, False):
+        # EXEC_MARGIN_MODE decides the FIRST attempt; the other mode is the
+        # fallback, because some markets refuse one or the other and say so
+        # by RETURNING an error rather than raising.
+        first = EXEC_MARGIN_MODE != "isolated"
+        for is_cross in (first, not first):
             try:
                 r = ex.update_leverage(lev, sym, is_cross)
             except Exception as e:
@@ -1451,13 +1477,15 @@ def place_entry_live(asset, trade, plan):
                 break
             err = resp_error(r)
             if not err:
-                if not is_cross:
-                    log(f"{sym}: cross margin not allowed - set {lev}x "
-                        "ISOLATED instead")
+                mode = "cross" if is_cross else "ISOLATED"
+                if is_cross != first:
+                    log(f"{sym}: {EXEC_MARGIN_MODE} refused - set {lev}x "
+                        f"{mode} instead")
+                else:
+                    log(f"{sym}: leverage {lev}x {mode}")
                 break
-            # some markets are isolated-only; the exchange says so by
-            # RETURNING an error rather than raising, so retry that way
-            if "cross" not in err.lower():
+            low = err.lower()
+            if "cross" not in low and "isolated" not in low:
                 break
         if err:
             log(f"{sym}: could NOT set leverage to {lev}x ({err}) - "
