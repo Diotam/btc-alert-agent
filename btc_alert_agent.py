@@ -249,7 +249,10 @@ def log(msg):
 
 
 def fmt_px(p):
-    return f"{p:,.0f}" if p >= 10000 else f"{p:,.2f}" if p >= 1 else f"{p:,.6f}"
+    # two more decimals than the original bands (0/2/6), so AVAX prints
+    # 6.5676 rather than 6.57 - the doji levels are often separated by less
+    # than a cent and the rounded form made distinct prices look identical
+    return f"{p:,.2f}" if p >= 10000 else f"{p:,.4f}" if p >= 1 else f"{p:,.8f}"
 
 
 def pnl_pct(trade, exit_px):
