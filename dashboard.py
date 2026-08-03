@@ -423,7 +423,7 @@ def build_data():
     _ORDER = {"ready": 0, "confirming": 1, "doji, awaiting confirmation": 2,
               "confirmation failed": 3, "waiting for flip": 4,
               "doji too small": 5, "waiting for doji": 6,
-              "trend too flat": 7, "no run": 8, "warming up": 9}
+              "trend too flat": 7, "building trend": 8, "warming up": 9}
     gates.sort(key=lambda x: (_ORDER.get(x.get("stage"), 9),
                               -(x.get("run") or 0), x["sym"]))
     closed, pnl = closed_trades()
@@ -846,7 +846,8 @@ function render(d){
       <span class=sym>${done?'\u25cf':'\u25cb'} ${g.sym} `
       +`<span class=${cls}>${g.dir||''}</span></span>
       <span class=muted>${g.stage}</span></div><div class=row>
-      <span class=muted>${g.run||0} candle${(g.run||0)===1?'':'s'} `
+      <span class=muted>${g.run||0}${g.stage==='building trend'
+        ?'/'+(g.need||0):''} candle${(g.run||0)===1?'':'s'} `
       +`${g.trend||''}</span>
       <span class=muted>${g.detail||''}</span></div></div>`;
   }).join(''):'<div class="card muted">no symbols scanned yet</div>';
