@@ -370,7 +370,7 @@ def scan_age_s(state, mtime):
 def build_data():
     state, mtime = read_state()
     mids = prices()
-    trades, runners, gates = [], [], []
+    trades = []
     closing = pending_closes()
     scanned = 0
     for sym, ast in state.items():
@@ -381,12 +381,6 @@ def build_data():
         tr = ast.get("trade")
         if tr and sym in closing:
             continue          # closed from here, waiting for the agent
-
-        g = ast.get("gate")
-        if g and not tr:
-            # only symbols with NO open trade - once it is in a trade the
-            # gate chain is behind it and the open-trades panel owns the row
-            gates.append(dict(g, sym=sym, mid=mid))
 
         if tr:
             sign = 1 if tr["verdict"] == "LONG" else -1
@@ -399,7 +393,9 @@ def build_data():
             # a trade that has booked its partial is a RUNNER: risk-free,
             # stop at entry, closing only when the HA flips. It gets its own
             # list so the open-trades panel stays "still at risk"
-            (runners if tr.get("half") else trades).append(
+            # the Runners panel is gone, so a runner shows in Open trades -
+            # a live position must never be invisible on the dashboard
+            trades.append(
                           {"sym": sym, "dir": tr["verdict"],
                            "half": bool(tr.get("half")),
                            "left": tr.get("left", 1.0),
@@ -418,15 +414,8 @@ def build_data():
                                t["sym"]))
     # best-performing runner first - it is the one closest to being given
     # back if the HA turns
-    runners.sort(key=lambda t: -(t["r"] if t["r"] is not None else -99))
     # closest to firing first: "ready" at the top, then whoever has the
     # longest run behind them, since that is the one nearest a doji
-    _ORDER = {"ready": 0, "confirming": 1, "doji, awaiting confirmation": 2,
-              "confirmation failed": 3, "waiting for flip": 4,
-              "doji too small": 5, "waiting for doji": 6,
-              "trend too flat": 7, "building trend": 8, "warming up": 9}
-    gates.sort(key=lambda x: (_ORDER.get(x.get("stage"), 9),
-                              -(x.get("run") or 0), x["sym"]))
     closed, pnl = closed_trades()
     return {"now": time.time(),
             "state_age_s": scan_age_s(state, mtime),
@@ -449,8 +438,7 @@ def build_data():
             # missed scans plus a minute of slack before anything is wrong.
             "stale_after_s": 2 * int((state.get("_meta") or {})
                                      .get("scan_every_s", 300)) + 60,
-            "scanned": scanned, "trades": trades, "runners": runners,
-            "gates": gates,
+            "scanned": scanned, "trades": trades, "runners": [],
             "tally": signal_tally(),
             "closed": closed, "pnl": pnl, "build": BUILD,
             "btc": _btc_now(mids),
@@ -589,8 +577,6 @@ h1{font-size:17px;margin:4px 0 12px}
   </div>
 </div>
 <div class="section shead" onclick="toggle('trades')"><span class=chev id=c-trades>\u25be</span>Open trades<span class=cnt id=n-trades>0</span></div><div id=trades></div>
-<div class="section shead" onclick="toggle('runners')"><span class=chev id=c-runners>\u25be</span>Runners<span class=cnt id=n-runners>0</span></div><div id=runners></div>
-<div class="section shead" onclick="toggle('gates')"><span class=chev id=c-gates>\u25be</span>Setup pipeline<span class=cnt id=n-gates>0</span> <span id=gsub class=muted style="float:right;text-transform:none;letter-spacing:0"></span></div><div id=gates></div>
 <div class="section shead" onclick="toggle('closed')"><span class=chev id=c-closed>\u25be</span>Closed trades<span class=cnt id=n-closed>0</span> <span id=csub class=muted style="float:right;text-transform:none;letter-spacing:0"></span></div><div id=closed></div>
 <div class="section shead" onclick="toggle('events')"><span class=chev id=c-events>\u25be</span>Recent events<span class=cnt id=n-events>0</span></div><div id=events></div>
 <script>
@@ -712,7 +698,7 @@ const KEY=new URLSearchParams(location.search).get('key')||'';
 let PERIOD='d', LAST=null;
 let COLLAPSED={};
 try{COLLAPSED=JSON.parse(localStorage.getItem('dashCollapsed')||'{}')}catch(e){}
-function applyCollapse(){['trades','runners','gates','closed','events'].forEach(id=>{
+function applyCollapse(){['trades','closed','events'].forEach(id=>{
  const el=document.getElementById(id), ch=document.getElementById('c-'+id);
  if(el)el.style.display=COLLAPSED[id]?'none':'';
  if(ch)ch.textContent=COLLAPSED[id]?'\u25b8':'\u25be'})}
@@ -829,51 +815,6 @@ function render(d){
   // Everything is measured from the ORIGINAL entry, and nothing here ever
   // freezes - these are live positions with no target left to hit.
   step('r-trades');
-  document.getElementById('runners').innerHTML=d.runners.length?d.runners.map(t=>{
-   const cls=t.dir==='LONG'?'long':'short';
-   const R=t.r==null?null:t.r;
-   // the bar shows how far PAST the target the runner has travelled, so a
-   // trade that has doubled its target reads full
-   const rp=R==null?0:Math.max(0,Math.min(100,(R/(t.rr*2))*100));
-   const peak=R!=null&&R>=t.rr*2;
-   return `<div class="card tv" onclick="tvOpen('${t.sym}')" title="open ${t.sym} on TradingView">
-    <div class=row><span class=sym>${t.sym} <span class=${cls}>${t.dir}</span>${t.lev?` <span class=lev>${t.lev}x</span>`:''}${t.opened_t?` <span class=muted style="font-size:11px;font-weight:400">${tradeAge(t.opened_t)}</span>`:''} <span class="badge ok">${Math.round(t.left*100)}% running</span></span>
-    <span class="num ${t.pnl>=0?'pnl-pos':'pnl-neg'}">${t.pnl==null?'-':(t.pnl>=0?'+':'')+t.pnl.toFixed(2)+'%'}</span></div>
-    <div class=row><span class=muted>entry <span class=num>$${px(t.entry)}</span></span>
-    <span class=muted>now <span class=num>$${px(t.mid)}</span></span></div>
-    <div class=row><span class=muted>stop <span class=num>$${px(t.stop)}</span> · risk-free</span>
-    <span class=muted>booked at <span class=num>$${px(t.tp)}</span></span></div>
-    <div class=bar><div class=fill style="width:${rp}%;background:${peak?'#3fb950':'#58a6ff'}"></div></div>
-    <div class=row style="align-items:center">
-      <span class=muted>${R==null?'':R.toFixed(2)+'R from entry'} · closes when the HA flips</span>
-      <button class=closebtn data-px="${t.mid==null?'':t.mid}" onclick="closeRunner(event,'${t.sym}')">close now</button>
-      <button class=closebtn data-px="${t.mid==null?'':t.mid}" onclick="reversePos(event,'${t.sym}')">reverse</button>
-    </div></div>`
-  }).join(''):'<div class="card muted">none</div>';
-  step('r-runners');
-  // SETUP PIPELINE: where every un-traded symbol sits in the entry chain.
-  // Report only - the agent decides, this just says why nothing fired.
-  const G=d.gates||[];
-  const READY='ready';
-  document.getElementById('n-gates').textContent=G.length;
-  document.getElementById('gsub').textContent=
-    G.filter(g=>g.stage===READY).length+' ready';
-  document.getElementById('gates').innerHTML=G.length?G.map(g=>{
-    const cls=g.dir==='LONG'?'long':'short';
-    const done=g.stage===READY;
-    // there is no minimum run length any more, so the run is DESCRIPTIVE -
-    // how long the current trend has been, not progress toward a threshold
-    return `<div class="card tv" onclick="tvOpen('${g.sym}')" `
-      +`title="open ${g.sym} on TradingView"><div class=row>
-      <span class=sym>${done?'\u25cf':'\u25cb'} ${g.sym} `
-      +`<span class=${cls}>${g.dir||''}</span></span>
-      <span class=muted>${g.stage}</span></div><div class=row>
-      <span class=muted>${g.run||0}${g.stage==='building trend'
-        ?'/'+(g.need||0):''} candle${(g.run||0)===1?'':'s'} `
-      +`${g.trend||''}</span>
-      <span class=muted>${g.detail||''}</span></div></div>`;
-  }).join(''):'<div class="card muted">no symbols scanned yet</div>';
-  step('r-gates');
   const cut=Date.now()-DAYS[PERIOD]*86400000;
   // inPeriod is EVERY trade closed in the selected window - that is the
   // number the P&L above is computed from, so it is the number the badge
@@ -904,7 +845,6 @@ function render(d){
   document.getElementById('events').innerHTML=
    d.events.map(e=>`<div class=event>${e.replace(/</g,'&lt;')}</div>`).join('')||'<div class="card muted">none</div>';
   document.getElementById('n-trades').textContent=d.trades.length;
-  document.getElementById('n-runners').textContent=d.runners.length;
   document.getElementById('n-closed').textContent=inPeriod.length;
   step('r-closed');
   document.getElementById('n-events').textContent=d.events.length;
