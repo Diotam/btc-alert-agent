@@ -4,10 +4,10 @@ SMOOTHED HEIKIN ASHI DOJI AGENT
 --------------------------------
 One strategy, long side described; shorts mirror it exactly.
 
-  1. TREND - a run of red HA candles with real momentum in it: at least
-     HA_TREND_RUN consecutive bodies expanding somewhere in the run, and the
-     biggest body at least HA_MIN_BODY_PCT of price so a flat series cannot
-     qualify.
+  1. TREND - a run of red HA candles, any length, whose biggest body is at
+     least HA_MIN_BODY_PCT of price so a flat series cannot qualify. There
+     is no minimum run length and no requirement that the bodies expanded:
+     both were removed 3 Aug.
   2. DOJI - an HA body no more than HA_DOJI_FRACTION of the biggest body in
      that run. The smoothed HA has stalled, and that stall IS the turn.
   3. ENTER on the doji, in the direction opposite the trend that led into
@@ -113,7 +113,6 @@ SCAN_EVERY = "5m"                  # how often the loop wakes. Aligning it to
                                    # partial fills
 HA_SMOOTH_IN = 10                  # EMA applied to OHLC before building HA
 HA_SMOOTH_OUT = 10                 # EMA applied to the HA output
-HA_TREND_RUN = 3                   # bodies that must expand, then shrink
 BTC_TREND_SMOOTH = (5, 5)          # smoothing for the BTC CONTEXT line only,
                                    # deliberately lighter than the signal's
                                    # 10,10 so it turns sooner and reports
@@ -132,18 +131,6 @@ BTC_GATE = "align"                 # what the BTC trend DOES, not just says.
                                    # context fetch timed out
 BTC_TREND_TTL_S = 120              # one BTC fetch per scan, not per symbol
 _BTC_CACHE = {"t": 0.0, "v": None}
-HA_MIN_RUN = 15                    # MINIMUM trend-coloured HA candles before
-                                   # the flip counts at all. Deliberately
-                                   # separate from HA_TREND_RUN: that one is
-                                   # also the width of the strictly-expanding
-                                   # window, so raising IT to 5 would demand
-                                   # five consecutively growing bodies, which
-                                   # is rare enough to gate the engine to
-                                   # near silence. This one only asks that
-                                   # the trend was LONG, not that it grew
-                                   # monotonically. Raise to kill the 1-2
-                                   # candle flip runs; lower toward 3 for the
-                                   # old behaviour
 HA_MIN_BODY_PCT = 0.05             # the trend run must contain at least one
                                    # HA body this big, as a % of price. Without
                                    # it a FLAT smoothed series satisfies
@@ -185,7 +172,7 @@ HA_RR = 3.0                        # first target = 3x the stop distance
 HA_PARTIAL = 0.5                   # fraction booked there; the stop then moves
                                    # to entry and the remainder is held until
                                    # the HA flips against the trade
-STOP_LOOKBACK = 5                  # the stop is the extreme of the LAST N
+STOP_LOOKBACK = 7                  # the stop is the extreme of the LAST N
                                    # REAL candles ending at the doji - low
                                    # for a long, high for a short. 1 restores
                                    # the old behaviour (the doji candle's own
@@ -680,11 +667,6 @@ def ha_body(x):
     return abs(x["c"] - x["o"])
 
 
-def _strictly(bodies, growing):
-    return all((bodies[k] > bodies[k - 1]) if growing else
-               (bodies[k] < bodies[k - 1]) for k in range(1, len(bodies)))
-
-
 def gate_status(ha, i):
     """Where this symbol sits in the entry chain, for the dashboard.
 
@@ -695,7 +677,7 @@ def gate_status(ha, i):
 
     Returns {stage, detail, run, need} - cheap, pure arithmetic on a series
     already in memory."""
-    if i < 2:
+    if i < 1:
         return {"stage": "warming up", "detail": "", "run": 0}
     # the run BELOW the current candle, whichever colour it is
     cur = ha_green(ha[i])
@@ -708,12 +690,10 @@ def gate_status(ha, i):
     trend_up = ha_green(ha[i - 1])
     want_long = not trend_up          # a red run turns us long
     d = {"run": n_run, "trend": "up" if trend_up else "down",
-         "dir": "LONG" if want_long else "SHORT", "need": max(HA_TREND_RUN,
-                                                              HA_MIN_RUN)}
+         "dir": "LONG" if want_long else "SHORT", "need": 1}
 
-    if n_run < d["need"]:
-        d.update(stage="building trend",
-                 detail=f"{n_run}/{d['need']} candles")
+    if not run:
+        d.update(stage="no run", detail="nothing to measure against")
         return d
     bodies = [ha_body(x) for x in run]
     biggest = max(bodies)
@@ -722,10 +702,6 @@ def gate_status(ha, i):
         d.update(stage="trend too flat",
                  detail=f"{biggest / scale * 100:.3f}% vs "
                         f"{HA_MIN_BODY_PCT}%")
-        return d
-    if not any(_strictly(bodies[k:k + HA_TREND_RUN], True)
-               for k in range(0, len(bodies) - HA_TREND_RUN + 1)):
-        d.update(stage="no momentum", detail="no expanding bodies")
         return d
     body = ha_body(ha[i])
     if body > HA_DOJI_FRACTION * biggest:
@@ -763,7 +739,6 @@ def ha_doji(ha, i, want_long, colour=None):
 
     Returns (doji_index, run_start) or None.
     """
-    n = HA_TREND_RUN
     # want_long means the trend into the doji was RED, so the doji turns us
     # long. HA_DOJI_COLOUR decides which colour that doji has to be: "same"
     # takes the trend-coloured stall (a red doji ending a downtrend), "flip"
@@ -782,7 +757,10 @@ def ha_doji(ha, i, want_long, colour=None):
         r -= 1
     r += 1
     run = ha[r:i]                            # the trend, excluding the doji
-    if len(run) < max(n, HA_MIN_RUN):
+    # NO MINIMUM RUN LENGTH as of 3 Aug, his call. One trend-coloured candle
+    # is enough to be a run. The only guard left is that there IS one - an
+    # empty run has no biggest body to measure the doji against.
+    if not run:
         return None
     bodies = [ha_body(x) for x in run]
     biggest = max(bodies)
@@ -791,10 +769,6 @@ def ha_doji(ha, i, want_long, colour=None):
     # the trend has to be VISIBLE. A flat smoothed series is nothing BUT
     # dojis, so without this every quiet symbol would trade continuously.
     if HA_MIN_BODY_PCT and biggest < HA_MIN_BODY_PCT / 100.0 * scale:
-        return None
-    # ...and it has to have had momentum at some point
-    if not any(_strictly(bodies[k:k + n], True)
-               for k in range(0, len(bodies) - n + 1)):
         return None
     # the doji itself: small against what came before it
     if ha_body(ha[i]) > HA_DOJI_FRACTION * biggest:
