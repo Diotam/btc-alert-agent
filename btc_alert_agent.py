@@ -190,6 +190,17 @@ HA_RR = 3.0                        # first target = 3x the stop distance
 HA_PARTIAL = 0.5                   # fraction booked there; the stop then moves
                                    # to entry and the remainder is held until
                                    # the HA flips against the trade
+ADOPT_ORPHANS = "universe"         # a position on the exchange with NO
+                                   # tracked trade at all - opened by hand,
+                                   # or left behind when the agent booked a
+                                   # close the venue never made.
+                                   #   "universe" - adopt only symbols the
+                                   #                agent already scans, so
+                                   #                a deliberate hand trade
+                                   #                on anything else is left
+                                   #                alone
+                                   #   "any"      - adopt everything held
+                                   #   "off"      - report only, never adopt
 REVERSE_ALERTS = True              # when the smoothed HA flips against an
                                    # open trade, the runner closes. That
                                    # same flip is a setup the OTHER way, so
@@ -2149,6 +2160,49 @@ def process_candle(asset, ast, candles, ha, i):
 
 
 # --------------------------- per-asset scan --------------------------------
+def adopt_orphans(state, assets):
+    """Positions held on the exchange that NOTHING in state is tracking.
+
+    The per-symbol path only compares sides on symbols that already have a
+    tracked trade, so it cannot see these at all. They are the dangerous
+    shape: live size, no stop the agent knows about, and no ledger row when
+    they eventually close.
+
+    Scoped by ADOPT_ORPHANS so a position opened deliberately outside the
+    agent's universe is reported and left alone rather than taken over."""
+    live = POS_CACHE.get("v")
+    if live is None or ADOPT_ORPHANS == "off":
+        return False
+    known = {exec_symbol(a["symbol"]): a for a in assets}
+    changed = False
+    for coin, (szi, entry_px) in live.items():
+        asset = known.get(coin)
+        if asset is None:
+            if ADOPT_ORPHANS == "universe":
+                log(f"{coin}: position held outside the agent's universe "
+                    f"({szi:+g}) - reported, not adopted")
+                continue
+            asset = {"symbol": coin, "hl_coin": coin,
+                     "label": f"{coin}-PERP", "fallbacks": [], "cls": "crypto"}
+        sym = asset["symbol"]
+        ast = state.get(sym) or blank_asset_state()
+        if ast.get("trade"):
+            continue                       # the side check already covers it
+        try:
+            _, cs = fetch(asset, TF, 60)
+            if not cs:
+                log(f"{sym}: orphan position but no candles - not adopted")
+                continue
+            log(f"{sym}: ORPHAN position on the exchange ({szi:+g}) with "
+                "nothing tracked - adopting")
+            adopt_position(asset, ast, cs, szi, entry_px)
+            state[sym] = ast
+            changed = True
+        except Exception as e:
+            log(f"{sym}: orphan adoption failed: {type(e).__name__}: {e}")
+    return changed
+
+
 def check_asset(asset, state):
     sym = asset["symbol"]
     ast = state.get(sym) or blank_asset_state()
@@ -2344,6 +2398,12 @@ def check_once():
                 except Exception as e:
                     log(f"{sym}: zombie-trade check failed: "
                         f"{type(e).__name__}: {e}")
+
+        # AFTER the per-symbol pass: anything held that nothing tracks
+        try:
+            changed = adopt_orphans(state, assets) or changed
+        except Exception as e:
+            log(f"orphan sweep failed: {type(e).__name__}: {e}")
 
         new_cursor = stopped_at if stopped_at is not None else 0
         if meta.get("cursor", 0) != new_cursor:
