@@ -150,6 +150,13 @@ HA_DOJI_COLOUR = "flip"            # which colour the doji must be, relative
                                    #            colour first. Later, more
                                    #            confirmation, fewer trades.
                                    #   "any"  - either colour counts.
+HA_MIN_RUN = 5                     # MINIMUM trend-coloured HA candles before
+                                   # the flip counts. Back on 3 Aug at 5,
+                                   # after LIT showed a ONE-candle red run
+                                   # inside an uptrend being read as a trend
+                                   # and its next green candle as a flip.
+                                   # 15 silenced the engine; 1 lets noise
+                                   # through. 0 disables the check
 HA_CONFIRM_BARS = 2                # HA candles that must follow the doji
                                    # before the trade is taken: each in the
                                    # doji's direction, each with a body
@@ -737,11 +744,12 @@ def gate_status(ha, candles, i):
     n_run = len(run)
     trend_up = ha_green(ha[i - 1])
     want_long = not trend_up          # a red run turns us long
+    need = max(1, HA_MIN_RUN)
     d = {"run": n_run, "trend": "up" if trend_up else "down",
-         "dir": "LONG" if want_long else "SHORT", "need": 1}
+         "dir": "LONG" if want_long else "SHORT", "need": need}
 
-    if not run:
-        d.update(stage="no run", detail="nothing to measure against")
+    if n_run < need:
+        d.update(stage="building trend", detail=f"{n_run}/{need} candles")
         return d
     bodies = [ha_body(x) for x in run]
     biggest = max(bodies)
@@ -806,10 +814,11 @@ def ha_doji(ha, i, want_long, colour=None):
         r -= 1
     r += 1
     run = ha[r:i]                            # the trend, excluding the doji
-    # NO MINIMUM RUN LENGTH as of 3 Aug, his call. One trend-coloured candle
-    # is enough to be a run. The only guard left is that there IS one - an
-    # empty run has no biggest body to measure the doji against.
-    if not run:
+    # a run has to be long enough to BE a trend. Without this a single
+    # counter-coloured candle inside a move counts as one, and the candle
+    # after it reads as a flip - LIT, 3 Aug, "1 candle down" turning LONG
+    # in the middle of an uptrend.
+    if len(run) < max(1, HA_MIN_RUN):
         return None
     bodies = [ha_body(x) for x in run]
     biggest = max(bodies)
