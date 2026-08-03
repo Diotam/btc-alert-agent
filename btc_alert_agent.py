@@ -920,6 +920,8 @@ def lifecycle_message(asset, kind, trade, exit_px, event_t, note):
         "MANUAL": ("\u270b", "CLOSED BY HAND",
                    "closed from the dashboard at market"),
         "TP": ("\u2705", "TAKE PROFIT HIT", "target reached"),
+        "GONE": ("\u26a0\ufe0f", "POSITION GONE",
+                 "tracked here but flat on the exchange"),
     }[kind]
     pnl = pnl_pct(trade, exit_px)
     return "\n".join([
@@ -1870,6 +1872,30 @@ def exchange_positions():
     return out
 
 
+def cancel_stale_orders(asset, trade):
+    """Cancel the resting stop and TP of a position that no longer exists.
+
+    Reduce-only orders on a flat symbol can never fill, but they still
+    RESERVE MARGIN - that is what drove withdrawable to 0.00 on 3 Aug with
+    15 of them resting. Best effort: a cancel that fails is logged, never
+    raised, because the booking has already happened by this point."""
+    if not EXEC_LIVE or not executable(asset["symbol"]):
+        return
+    ex = exec_client()
+    if not ex:
+        return
+    sym = exec_symbol(asset["symbol"])
+    for label, oid in (("stop", trade.get("stop_oid")),
+                       ("TP", trade.get("tp_oid"))):
+        if not oid:
+            continue
+        try:
+            ex.cancel(sym, oid)
+            log(f"{sym}: cancelled stale {label} order {oid}")
+        except Exception as e:
+            log(f"{sym}: stale {label} cancel failed ({type(e).__name__})")
+
+
 def adopt_position(asset, ast, candles, coin_sz, entry_px):
     """Take over a live position the agent is not tracking correctly.
 
@@ -2278,6 +2304,39 @@ def check_asset(asset, state):
             if held and (held[0] > 0) != tracked_long:
                 adopt_position(asset, ast, cs, held[0], held[1])
                 state[sym] = ast
+                return True
+            # TRACKED BUT GONE - the third shape, and the one that produced
+            # the DOGE phantom: state held a SHORT 4276 while the account was
+            # flat and no orders rested. Without this the agent watches a
+            # stop that can never trigger, forever, and the ledger never
+            # gets its row.
+            #
+            # TWO GUARDS, both load-bearing. Only trades with a SIZE are
+            # reconciled, so a tracked-but-never-placed paper trade is left
+            # alone. And only trades opened BEFORE the positions read, since
+            # POS_CACHE is filled at the top of the scan - a trade opened
+            # later in this same scan is legitimately absent from it and
+            # would otherwise be booked as gone the instant it opened.
+            opened = (ast["trade"].get("opened_t") or 0)
+            if (not held and ast["trade"].get("size")
+                    and opened < POS_CACHE.get("t", 0) * 1000):
+                px = cs[-1]["c"]
+                log(f"{sym}: tracked {ast['trade']['verdict']} but the "
+                    "exchange is FLAT - booking it closed")
+                record_close(sym, ast["trade"], px, "GONE", now_ms(),
+                             frac=ast["trade"].get("left", 1.0))
+                try:
+                    send_telegram(
+                        f"\u26a0\ufe0f <b>{esc(sym)}</b> was tracked "
+                        f"{ast['trade']['verdict']} but the exchange is flat "
+                        f"- booked closed at <code>${fmt_px(px)}</code>")
+                except Exception:
+                    pass
+                cancel_stale_orders(asset, ast["trade"])
+                ast["trade"] = None
+                ast["phase"] = "SCAN"
+                state[sym] = ast
+                RUN_STATUS.append(f"{sym} booked GONE")
                 return True
         if cs:
             trade, ch = process_open_trade(asset, ast["trade"], cs,
