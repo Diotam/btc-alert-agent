@@ -190,6 +190,15 @@ HA_RR = 3.0                        # first target = 3x the stop distance
 HA_PARTIAL = 0.5                   # fraction booked there; the stop then moves
                                    # to entry and the remainder is held until
                                    # the HA flips against the trade
+REVERSE_ALERTS = True              # when the smoothed HA flips against an
+                                   # open trade, the runner closes. That
+                                   # same flip is a setup the OTHER way, so
+                                   # send a REVERSE alert with levels ready
+                                   # for Trust Wallet's flip button. ALERT
+                                   # ONLY - the agent does not place it,
+                                   # because a reverse skips the doji, the
+                                   # confirmation bars and the run-length
+                                   # floor that every other entry must clear
 STOP_LOOKBACK = 7                  # the stop is the extreme of the LAST N
                                    # REAL candles ending at the doji - low
                                    # for a long, high for a short. 1 restores
@@ -1078,6 +1087,56 @@ def _book_partial(asset, trade, px, event_t):
     move_stop_live(asset, trade)
 
 
+def reverse_alert(asset, trade, candles, c, was_long):
+    """The flip that closes a runner is a setup the OTHER way. Send the
+    levels so the position can be flipped in one action.
+
+    ALERT ONLY. A reverse has cleared none of the entry chain - no doji, no
+    confirmation bars, no run-length floor - so the agent must not place it
+    on its own. The levels use the same rules an entry would: the stop is
+    the STOP_LOOKBACK real-candle extreme ending at this candle, and the
+    target is HA_RR from there."""
+    sym = asset["symbol"]
+    try:
+        idx = next(k for k in range(len(candles) - 1, -1, -1)
+                   if candles[k]["t"] == c["t"])
+        lo = max(0, idx - STOP_LOOKBACK + 1)
+        window = candles[lo:idx + 1]
+        if not window:
+            return
+        now_long = not was_long
+        stop = (min(x["l"] for x in window) if now_long
+                else max(x["h"] for x in window))
+        entry = c["c"]
+        risk = (entry - stop) if now_long else (stop - entry)
+        if risk <= 0:
+            log(f"{sym}: reverse to {'LONG' if now_long else 'SHORT'} has no "
+                "risk distance - no alert")
+            return
+        if MIN_STOP_PCT and risk / entry * 100 < MIN_STOP_PCT:
+            log(f"{sym}: reverse stop {risk / entry * 100:.3f}% under the "
+                f"{MIN_STOP_PCT}% floor - no alert")
+            return
+        tp = entry + HA_RR * risk if now_long else entry - HA_RR * risk
+        side = "LONG" if now_long else "SHORT"
+        send_telegram(
+            f"\U0001f504 <b>REVERSE \u00b7 {esc(sym)}</b>\n"
+            f"<i>the smoothed HA flipped against your "
+            f"{'long' if was_long else 'short'}</i>\n\n"
+            f"Flip to <b>{side}</b>\n"
+            f"Entry: <code>${fmt_px(entry)}</code>\n"
+            f"Stop:  <code>${fmt_px(stop)}</code> "
+            f"({len(window)}-candle {'low' if now_long else 'high'}, "
+            f"{risk / entry * 100:.2f}%)\n"
+            f"TP:    <code>${fmt_px(tp)}</code> ({HA_RR:.1f}x)\n\n"
+            f"\u26a0\ufe0f Not placed - a reverse skips the doji and the "
+            f"confirmation bars. Yours to take or ignore.")
+        log(f"{sym}: REVERSE alert - flip to {side} @ ${fmt_px(entry)}, "
+            f"stop ${fmt_px(stop)}")
+    except Exception as e:
+        log(f"{sym}: reverse_alert failed: {type(e).__name__}: {e}")
+
+
 def process_open_trade(asset, trade, candles, ha, last_closed_t):
     """Stop / target watch. Before the partial the stop is the HA zone low;
     after it the stop is entry and the exit trigger is an HA flip against
@@ -1100,6 +1159,8 @@ def process_open_trade(asset, trade, candles, ha, last_closed_t):
             continue
         h = by_t.get(c["t"])
         if h and ha_green(h) != long:
+            if REVERSE_ALERTS:
+                reverse_alert(asset, trade, candles, c, long)
             return _close_trade(asset, trade, c["c"], "RUNNER", event_t,
                                 "smoothed HA flipped against the trade")
 
