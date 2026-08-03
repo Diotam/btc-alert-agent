@@ -1795,6 +1795,121 @@ def place_entry_live(asset, trade, plan):
     return True
 
 
+def protect_position(asset, trade):
+    """Place the stop and the partial TP for a trade that already exists on
+    the exchange. Used when ADOPTING a position the agent did not open -
+    a hand-reversed one, say - where the protective orders that belonged to
+    the old side are gone. Returns True if both legs rested."""
+    if not EXEC_LIVE or not executable(asset["symbol"]):
+        return False
+    ex = exec_client()
+    if not ex or not trade.get("size"):
+        return False
+    sym = exec_symbol(asset["symbol"])
+    long_ = trade["verdict"] == "LONG"
+    dec = sz_decimals(asset["symbol"])
+    size = round(trade["size"], dec)
+    try:
+        r_stop = ex.order(sym, not long_, size, round_px(trade["stop"]),
+                          {"trigger": {"triggerPx": round_px(trade["stop"]),
+                                       "isMarket": True, "tpsl": "sl"}},
+                          reduce_only=True)
+        trade["stop_oid"] = order_oid(r_stop)
+        part = round(size * HA_PARTIAL, dec)
+        r_tp = ex.order(sym, not long_, part, round_px(trade["tp"]),
+                        {"limit": {"tif": "Gtc"}}, reduce_only=True)
+        trade["tp_oid"] = order_oid(r_tp)
+        log(f"{sym}: ADOPTED position re-protected - stop "
+            f"${fmt_px(trade['stop'])}, TP ${fmt_px(trade['tp'])}")
+        return True
+    except Exception as e:
+        log(f"{sym}: could NOT protect the adopted position "
+            f"({type(e).__name__}: {e})")
+        try:
+            send_telegram(f"\U0001F6A8 {esc(sym)} is OPEN AND UNPROTECTED - "
+                          "the agent adopted it but could not place a stop. "
+                          "Close it or set a stop by hand now")
+        except Exception:
+            pass
+        return False
+
+
+POS_CACHE = {"t": 0.0, "v": None}   # exchange positions, refreshed once per
+#                                    scan - never per symbol
+
+
+def exchange_positions():
+    """{symbol: signed size} for everything actually open on the account.
+    None if the read fails - callers must treat that as "unknown", never as
+    "flat", or a failed request would look like every position closing."""
+    try:
+        st = _EXEC["info"].user_state(_EXEC["addr"]) or {}
+    except Exception as e:
+        log(f"exchange_positions() failed: {type(e).__name__}: {e}")
+        return None
+    out = {}
+    for p in st.get("assetPositions") or []:
+        d = p.get("position") or {}
+        try:
+            szi = float(d.get("szi") or 0)
+        except (TypeError, ValueError):
+            continue
+        if szi:
+            out[d.get("coin")] = (szi, float(d.get("entryPx") or 0))
+    return out
+
+
+def adopt_position(asset, ast, candles, coin_sz, entry_px):
+    """Take over a live position the agent is not tracking correctly.
+
+    Covers the hand-reversed case - flip the side in Trust Wallet and the
+    agent is left tracking a long while the account is short, with the old
+    reduce-only stop and TP no longer reducing anything, so the position
+    sits UNPROTECTED. Books whatever was tracked, tracks what is actually
+    held, and puts fresh protective orders behind it."""
+    sym = asset["symbol"]
+    now_long = coin_sz > 0
+    old = ast.get("trade")
+    if old:
+        px = candles[-1]["c"] if candles else entry_px
+        log(f"{sym}: tracked {old['verdict']} but the exchange holds "
+            f"{'LONG' if now_long else 'SHORT'} - booking the old side")
+        _close_trade(asset, old, px, "MANUAL", now_ms(),
+                     "position changed outside the agent - booked on adopt")
+    lo = max(0, len(candles) - STOP_LOOKBACK)
+    window = candles[lo:] if candles else []
+    if not window:
+        log(f"{sym}: adopted but no candles for a stop - left unprotected")
+        return
+    entry = entry_px or window[-1]["c"]
+    stop = (min(x["l"] for x in window) if now_long
+            else max(x["h"] for x in window))
+    risk = (entry - stop) if now_long else (stop - entry)
+    if risk <= 0:
+        log(f"{sym}: adopted but the {len(window)}-candle extreme is already "
+            "through the entry - no stop placed")
+        return
+    trade = {"verdict": "LONG" if now_long else "SHORT",
+             "entry": entry, "stop": stop,
+             "tp": entry + HA_RR * risk if now_long else entry - HA_RR * risk,
+             "size": abs(coin_sz), "left": 1.0, "half": False,
+             "risk0": risk, "rr": HA_RR, "opened_t": now_ms(),
+             "checked_t": 0, "source": "ADOPTED"}
+    ast["trade"] = trade
+    ast["phase"] = "IN_TRADE"
+    protect_position(asset, trade)
+    try:
+        send_telegram(
+            f"\U0001f501 <b>ADOPTED \u00b7 {esc(sym)}</b>\n"
+            f"<i>the position changed outside the agent</i>\n\n"
+            f"Now tracking <b>{trade['verdict']}</b> {abs(coin_sz)}\n"
+            f"Entry: <code>${fmt_px(entry)}</code>\n"
+            f"Stop:  <code>${fmt_px(stop)}</code>\n"
+            f"TP:    <code>${fmt_px(trade['tp'])}</code>")
+    except Exception:
+        pass
+
+
 # --------------------------- entry -----------------------------------------
 def open_reverse(asset, ast, candles, was_long):
     """Flip the position the dashboard just closed.
@@ -2084,6 +2199,18 @@ def check_asset(asset, state):
                         pass
             state[sym] = ast
             return True
+        # ADOPT BEFORE WATCHING. If the position changed outside the agent -
+        # a hand-reversed side, a hand-closed position - watching the old
+        # trade would book an outcome that never happened, and a flipped
+        # position is sitting with no working stop.
+        live = POS_CACHE.get("v")
+        if live is not None and cs:
+            held = live.get(exec_symbol(sym))
+            tracked_long = ast["trade"]["verdict"] == "LONG"
+            if held and (held[0] > 0) != tracked_long:
+                adopt_position(asset, ast, cs, held[0], held[1])
+                state[sym] = ast
+                return True
         if cs:
             trade, ch = process_open_trade(asset, ast["trade"], cs,
                                            smoothed_ha(cs), cs[-2]["t"])
@@ -2151,6 +2278,11 @@ def check_once():
     state = load_state()
     STATE_VIEW.clear()
     STATE_VIEW.update(state)
+    # ONE positions read per scan, shared by every symbol. None means the
+    # read failed, and callers treat that as "unknown" - never as flat, or a
+    # timeout would look like every position closing at once.
+    POS_CACHE["v"] = exchange_positions() if EXEC_LIVE else None
+    POS_CACHE["t"] = time.time()
     changed = False
     failures = 0
     start = time.time()
