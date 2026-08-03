@@ -118,6 +118,18 @@ BTC_TREND_SMOOTH = (5, 5)          # smoothing for the BTC CONTEXT line only,
                                    # deliberately lighter than the signal's
                                    # 10,10 so it turns sooner and reports
                                    # where BTC is now
+BTC_GATE = "align"                 # what the BTC trend DOES, not just says.
+                                   #   "align" - only take alt signals in
+                                   #             BTC's direction. BTC green
+                                   #             allows LONGs and refuses
+                                   #             SHORTs, and vice versa.
+                                   #   "fade"  - the opposite: BTC green
+                                   #             allows only alt SHORTs.
+                                   #   "off"   - tag the alert, gate nothing.
+                                   # BTC itself is never gated against
+                                   # itself. On a failed BTC read the gate
+                                   # OPENS - never block trading because a
+                                   # context fetch timed out
 BTC_TREND_TTL_S = 120              # one BTC fetch per scan, not per symbol
 _BTC_CACHE = {"t": 0.0, "v": None}
 HA_MIN_RUN = 15                    # MINIMUM trend-coloured HA candles before
@@ -402,7 +414,9 @@ def btc_context_line():
         return "<i>\u20bf trend: unavailable</i>"
     up, n, move = v
     arrow = "\u2197\ufe0f UP" if up else "\u2198\ufe0f DOWN"
-    return (f"<i>\u20bf BTC {arrow} \u00b7 {n} candles \u00b7 {move:+.2f}%</i>")
+    gate = "" if BTC_GATE == "off" else f" \u00b7 gate {BTC_GATE}"
+    return (f"<i>\u20bf BTC {arrow} \u00b7 {n} candles \u00b7 "
+            f"{move:+.2f}%{gate}</i>")
 
 
 def fetch_binance(sym, interval, lookback):
@@ -1653,6 +1667,22 @@ def process_candle(asset, ast, candles, ha, i):
         done = ast.get("traded") or {}
         if done.get("ft") == rt and done.get("dir") == direction:
             continue
+
+        # THE BTC GATE. Alts follow Bitcoin, and the first real sample after
+        # the 3 Aug reset showed the whole loss sitting on one side of that:
+        # longs 10 legs / 2 winners / -2.79%, shorts 5 legs / 3 winners /
+        # +0.27%. A reversal engine in a falling market keeps calling bottoms
+        # - nine longs to four shorts - and they kept failing.
+        if BTC_GATE != "off" and sym != "BTC":
+            bt = btc_trend()
+            if bt:
+                btc_up = bt[0]
+                want = btc_up if BTC_GATE == "align" else not btc_up
+                if want_long != want:
+                    log(f"{sym}: {direction} doji REFUSED by the BTC gate "
+                        f"(BTC {'UP' if btc_up else 'DOWN'}, "
+                        f"BTC_GATE={BTC_GATE})")
+                    continue
 
         # The doji marks WHERE the turn happened, but the stop is taken from
         # the REAL candle at that point, not the HA one. HA highs and lows
