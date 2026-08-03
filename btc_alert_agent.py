@@ -208,12 +208,14 @@ EXEC_LOG_ORDERS = True             # write every sized order to orders.log.
                                    # gated execution. EXEC_LIVE alone decides
                                    # whether real orders are sent
 EXEC_TESTNET = False               # False = MAINNET, real money
-EXEC_MARGIN_MODE = "isolated"      # "isolated" or "cross". ISOLATED as of
-                                   # 3 Aug: each position is backed only by
-                                   # its own ~EXEC_MARGIN_USD, so the worst
-                                   # case on any one trade is that slot, not
-                                   # the account. Cross lets a single bad
-                                   # position draw on everything. The other
+EXEC_MARGIN_MODE = "cross"         # "isolated" or "cross". CROSS as of
+                                   # 3 Aug, reverting the isolated switch he
+                                   # made earlier the same day. Cross lets
+                                   # one bad position draw on the whole
+                                   # account, but it keeps every position in
+                                   # the SAME pool that free_collateral()
+                                   # reads, which is the reporting the guard
+                                   # was rebuilt around. The other
                                    # mode is still tried as a fallback,
                                    # since some markets refuse one of them.
                                    # ONLY AFFECTS NEW ENTRIES - positions
