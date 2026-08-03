@@ -1796,6 +1796,33 @@ def place_entry_live(asset, trade, plan):
 
 
 # --------------------------- entry -----------------------------------------
+def open_reverse(asset, ast, candles, was_long):
+    """Flip the position the dashboard just closed.
+
+    The close is already BOOKED by the caller, so the ledger keeps both
+    halves and the two never disagree - which is the whole reason this
+    lives here rather than being tapped in the wallet. Levels come from the
+    same rules an entry uses; nothing else about the entry chain applies,
+    because a reverse is a deliberate override of it."""
+    sym = asset["symbol"]
+    if not candles:
+        return
+    c = candles[-1]
+    now_long = not was_long
+    lo_i = max(0, len(candles) - STOP_LOOKBACK)
+    window = candles[lo_i:]
+    stop = (min(x["l"] for x in window) if now_long
+            else max(x["h"] for x in window))
+    direction = "LONG" if now_long else "SHORT"
+    log(f"{sym}: REVERSE requested - flipping to {direction}, stop at the "
+        f"{len(window)}-candle {'low' if now_long else 'high'} "
+        f"${fmt_px(stop)}")
+    fire_entry(asset, ast, direction, c, stop, c["h"], c["l"], "REVERSE",
+               f"reversed by hand from the dashboard - stop at the "
+               f"{len(window)}-candle {'low' if now_long else 'high'}",
+               live_px=c["c"])
+
+
 def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger,
                live_px=None):
     """Risk checks, override handling, alert, trade creation and (when
@@ -2026,6 +2053,9 @@ def check_asset(asset, state):
         # position is actually flat, so a failed close is retried next scan
         req = close_requested(sym)
         if req is not None:
+            # capture the side BEFORE the close clears the trade
+            rev = bool(req.get("reverse")) and not req.get("done")
+            was_long = (ast.get("trade") or {}).get("verdict") == "LONG"
             if req.get("done"):
                 # the dashboard already closed it and booked the row
                 log(f"{sym}: manually closed from the dashboard at "
@@ -2040,6 +2070,18 @@ def check_asset(asset, state):
             ast["phase"] = "SCAN"
             clear_close_request(sym)
             RUN_STATUS.append(f"{sym} manually closed")
+            if rev:
+                try:
+                    open_reverse(asset, ast, cs, was_long)
+                except Exception as e:
+                    log(f"{sym}: reverse FAILED after the close - now FLAT: "
+                        f"{type(e).__name__}: {e}")
+                    try:
+                        send_telegram(
+                            f"\u26a0\ufe0f {esc(sym)} closed but the reverse "
+                            "did NOT open - you are flat")
+                    except Exception:
+                        pass
             state[sym] = ast
             return True
         if cs:
