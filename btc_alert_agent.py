@@ -148,13 +148,20 @@ HA_MIN_FLIP_BODY_PCT = 0.002       # the DOJI/flip candle must itself be a real
                                    # colour flip whose body was 0.006% - under
                                    # a tick, invisible on a chart, a rounding
                                    # artefact rather than a reversal.
-HA_REQUIRE_FLIP = True             # the doji must ALSO have flipped colour -
-                                   # a red trend must have printed a GREEN
-                                   # doji before a long. Without this the
-                                   # signal fires on a small red body while
-                                   # the trend is still technically intact,
-                                   # which anticipates the turn rather than
-                                   # confirming it
+HA_DOJI_COLOUR = "same"            # which colour the doji must be, relative
+                                   # to the trend that led into it.
+                                   #   "same" - a RED doji ends a downtrend
+                                   #            and turns us LONG; a GREEN
+                                   #            doji ends an uptrend and
+                                   #            turns us SHORT. The stall is
+                                   #            read BEFORE the colour turns,
+                                   #            so entries come earlier and
+                                   #            the trend is still nominally
+                                   #            intact when we take them.
+                                   #   "flip" - the doji must have CHANGED
+                                   #            colour first. Later, more
+                                   #            confirmation, fewer trades.
+                                   #   "any"  - either colour counts.
 HA_DOJI_FRACTION = 0.25            # a DOJI is an HA body this small relative
                                    # to the biggest body in the trend run that
                                    # led into it. Scale-free, so it adapts per
@@ -645,16 +652,17 @@ def ha_doji(ha, i, want_long):
     Returns (doji_index, run_start) or None.
     """
     n = HA_TREND_RUN
-    # want_long means the trend into the doji was RED, so the doji turns
-    # us long. With HA_REQUIRE_FLIP the doji must have actually CHANGED
-    # colour; without it, a small trend-coloured body also counts, which
-    # fires roughly six times as often but anticipates the turn instead of
-    # confirming it.
+    # want_long means the trend into the doji was RED, so the doji turns us
+    # long. HA_DOJI_COLOUR decides which colour that doji has to be: "same"
+    # takes the trend-coloured stall (a red doji ending a downtrend), "flip"
+    # waits for the colour to actually turn first.
     if HA_MIN_FLIP_BODY_PCT:
         # a colour change of essentially zero is not a turn
         if abs(ha[i]["c"] - ha[i]["o"]) / ha[i]["o"] * 100 < HA_MIN_FLIP_BODY_PCT:
             return None
-    if HA_REQUIRE_FLIP and ha_green(ha[i]) != want_long:
+    if HA_DOJI_COLOUR == "flip" and ha_green(ha[i]) != want_long:
+        return None
+    if HA_DOJI_COLOUR == "same" and ha_green(ha[i]) == want_long:
         return None
     r = i - 1
     while r >= 0 and ha_green(ha[r]) != want_long:
@@ -1628,13 +1636,22 @@ def process_candle(asset, ast, candles, ha, i):
         direction = "LONG" if want_long else "SHORT"
         dt = hd["t"]                         # identify by TIMESTAMP, never by
         #                                      index - the fetch window rolls
+        rt = ha[found[1]]["t"]               # timestamp of the RUN's first
+        #                                     candle - the dedupe key
 
-        # ONE TRADE PER DOJI. The signal is re-derived every scan, so without
-        # this the same doji fires again on the next pass at a slightly
-        # different price into the identical stop. Seen live 31 Jul on AAVE,
-        # CASHCAT, KAITO and SOL: -6.13% of a -14.53% book.
+        # ONE TRADE PER TREND RUN. The signal is re-derived every scan, so
+        # without this the same setup fires again on the next pass at a
+        # slightly different price into the identical stop. Seen live 31 Jul
+        # on AAVE, CASHCAT, KAITO and SOL: -6.13% of a -14.53% book.
+        #
+        # Keyed on the RUN START, not the doji. Under HA_DOJI_COLOUR="same"
+        # the doji is TREND-COLOURED, so it does not end the run - the next
+        # candle can be another small trend-coloured body, a fresh doji
+        # timestamp, and the identical trade. Keying on the run start means
+        # one trade per trend, however many stalls it prints. Under "flip"
+        # the doji ends the run anyway, so this is equivalent there.
         done = ast.get("traded") or {}
-        if done.get("ft") == dt and done.get("dir") == direction:
+        if done.get("ft") == rt and done.get("dir") == direction:
             continue
 
         # The doji marks WHERE the turn happened, but the stop is taken from
@@ -1653,7 +1670,7 @@ def process_candle(asset, ast, candles, ha, i):
             continue
 
         ast["setup"] = {"dir": direction, "zhi": c["h"], "zlo": c["l"],
-                        "ft": dt, "departed": True, "touched": True,
+                        "ft": rt, "departed": True, "touched": True,
                         "frozen": True, "t": c["t"]}
         log(f"{sym}: HA DOJI - turning {direction}, stop at the real candle "
             f"{'low' if want_long else 'high'} ${fmt_px(stop)} "
