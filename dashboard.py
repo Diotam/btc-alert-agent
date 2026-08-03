@@ -518,11 +518,6 @@ h1{font-size:17px;margin:4px 0 12px}
 .badge{display:inline-block;padding:2px 9px;border-radius:10px;font-size:12px;
        font-weight:600;margin-left:8px}
 .ok{background:#12351f;color:#3fb950}.warn{background:#3a2b12;color:#d29922}
-.closebtn{background:transparent;border:0.5px solid #6e7681;color:#c9d1d9;
-  font:12px inherit;padding:8px 16px;border-radius:10px;cursor:pointer;
-  min-height:34px;touch-action:manipulation}
-.closebtn:hover:enabled{border-color:#f85149;color:#f85149}
-.closebtn:disabled{opacity:.55;cursor:default}
 .card.tv{cursor:pointer}
 .card.tv:hover{border-color:#3d444d}
 .card{background:#161b22;border:1px solid #21262d;border-radius:10px;
@@ -624,53 +619,6 @@ function tvSym(sym){
 // is never blocked, and a named target still reuses a single tab.
 const TOUCH = (navigator.maxTouchPoints || 0) > 1 ||
               !window.matchMedia('(hover: hover)').matches;
-
-function reversePos(ev, sym){
-  ev.stopPropagation();
-  // same currentTarget capture as closeRunner - confirm() blocks and on iOS
-  // the dispatch is over by the time it returns
-  var b = ev.currentTarget || ev.target;
-  var shown = (b && b.getAttribute('data-px')) || '';
-  if(!confirm('Reverse '+sym+' NOW? This closes the position at market and '
-      +'immediately opens the opposite side with a fresh stop and target.')) return;
-  if(b){ b.disabled = true; b.textContent = 'reversing...'; }
-  fetch('/reverse?sym='+encodeURIComponent(sym)
-        +(shown?'&px='+encodeURIComponent(shown):'')
-        +(KEY?'&key='+KEY:''), {method:'POST'})
-    .then(r=>r.json())
-    .then(j=>{ if(b) b.textContent = j.ok ? 'reversing' : 'failed';
-               if(!j.ok){ if(b) b.disabled=false;
-                          alert(j.msg||'reverse failed'); } })
-    .catch(e=>{ if(b){ b.textContent='failed'; b.disabled=false; }
-                alert('reverse failed: '+(e&&e.message?e.message:e)); });
-}
-
-function closeRunner(ev, sym){
-  ev.stopPropagation();          // the card itself opens TradingView
-  // GRAB THE BUTTON FIRST. ev.currentTarget is only valid while the event
-  // is being dispatched, and confirm() BLOCKS - on iOS the dispatch has
-  // finished by the time the dialog returns, so currentTarget is null and
-  // reading .disabled or .getAttribute on it throws. That killed the
-  // handler before fetch ever ran: the button simply did nothing.
-  var b = ev.currentTarget || ev.target;
-  var shown = (b && b.getAttribute('data-px')) || '';
-  // Never write a backslash escape in this file: PAGE is a non-raw
-  // triple-quoted Python string, so it resolves when Python parses the
-  // file and lands as a REAL newline in the served HTML - which breaks
-  // whatever string or comment it sits in. Keep this text on one line.
-  if(!confirm('Close '+sym+' at market NOW? This sends the order immediately '
-      +'and cancels the resting stop and target.')) return;
-  if(b){ b.disabled = true; b.textContent = 'closing...'; }
-  fetch('/close?sym='+encodeURIComponent(sym)
-        +(shown?'&px='+encodeURIComponent(shown):'')
-        +(KEY?'&key='+KEY:''), {method:'POST'})
-    .then(r=>r.json())
-    .then(j=>{ if(b) b.textContent = j.ok ? 'closed' : 'failed';
-               if(!j.ok){ if(b) b.disabled=false;
-                          alert(j.msg||'close failed'); } })
-    .catch(e=>{ if(b){ b.textContent='failed'; b.disabled=false; }
-                alert('close failed: '+(e&&e.message?e.message:e)); });
-}
 
 function tvOpen(sym){
   const url = TVBASE + tvSym(sym) + '&interval=' + TVINT;
@@ -809,11 +757,7 @@ function render(d){
     <div class=row><span class=muted>stop <span class=num>$${px(t.stop)}</span></span>
     <span class=muted>TP <span class=num>$${px(t.tp)}</span></span></div>
     <div class=bar><div class=fill style="width:${rp}%;background:${rc}"></div></div>
-    <div class=row style="align-items:center">
-      <span class=muted>${rlbl}</span>
-      <span><button class=closebtn data-px="${t.mid==null?'':t.mid}" onclick="closeRunner(event,'${t.sym}')">close now</button>
-      <button class=closebtn data-px="${t.mid==null?'':t.mid}" onclick="reversePos(event,'${t.sym}')">reverse</button></span>
-    </div></div>`
+    <div class=muted>${rlbl}</div></div>`
   }).join(''):'<div class="card muted">none</div>';
   // RUNNERS: partial booked, stop at entry, riding until the HA flips.
   // Everything is measured from the ORIGINAL entry, and nothing here ever
