@@ -160,7 +160,7 @@ HA_MIN_FLIP_BODY_PCT = 0.002       # the DOJI/flip candle must itself be a real
                                    # colour flip whose body was 0.006% - under
                                    # a tick, invisible on a chart, a rounding
                                    # artefact rather than a reversal.
-HA_DOJI_COLOUR = "same"            # which colour the doji must be, relative
+HA_DOJI_COLOUR = "flip"            # which colour the doji must be, relative
                                    # to the trend that led into it.
                                    #   "same" - a RED doji ends a downtrend
                                    #            and turns us LONG; a GREEN
@@ -416,7 +416,15 @@ def btc_trend():
             n += 1
         move = (c[-1]["c"] - c[-n]["o"]) / c[-n]["o"] * 100 if n <= len(c) \
             else 0.0
-        val = (up, n, move)
+        # IS BITCOIN STALLING? A SAME-COLOUR doji - a small trend-coloured
+        # body at the end of the run - is the earliest read on exhaustion,
+        # printing BEFORE the colour turns. The entry detector waits for the
+        # flip; the gate does not, because BTC leads the alts and by the
+        # time BTC has flipped the alt move is already under way.
+        # want_long=True means "a red run ending", so it detects a stalling
+        # DOWNtrend; that is the one to look for when BTC is currently red.
+        stalling = bool(ha_doji(ha, len(ha) - 1, not up, colour="same"))
+        val = (up, n, move, stalling)
     except Exception as e:
         log(f"btc_trend() failed: {type(e).__name__}: {e}")
         val = None
@@ -431,11 +439,12 @@ def btc_context_line():
     v = btc_trend()
     if not v:
         return "<i>\u20bf trend: unavailable</i>"
-    up, n, move = v
+    up, n, move, stalling = v
     arrow = "\u2197\ufe0f UP" if up else "\u2198\ufe0f DOWN"
     gate = "" if BTC_GATE == "off" else f" \u00b7 gate {BTC_GATE}"
+    stall = " \u00b7 STALLING (same-colour doji)" if stalling else ""
     return (f"<i>\u20bf BTC {arrow} \u00b7 {n} candles \u00b7 "
-            f"{move:+.2f}%{gate}</i>")
+            f"{move:+.2f}%{stall}{gate}</i>")
 
 
 def fetch_binance(sym, interval, lookback):
@@ -674,7 +683,7 @@ def _strictly(bodies, growing):
                (bodies[k] < bodies[k - 1]) for k in range(1, len(bodies)))
 
 
-def ha_doji(ha, i, want_long):
+def ha_doji(ha, i, want_long, colour=None):
     """Is HA candle i a DOJI that turns a real trend?
 
     A doji is a body small relative to the trend that produced it - the
@@ -693,9 +702,10 @@ def ha_doji(ha, i, want_long):
         # a colour change of essentially zero is not a turn
         if abs(ha[i]["c"] - ha[i]["o"]) / ha[i]["o"] * 100 < HA_MIN_FLIP_BODY_PCT:
             return None
-    if HA_DOJI_COLOUR == "flip" and ha_green(ha[i]) != want_long:
+    mode = colour or HA_DOJI_COLOUR
+    if mode == "flip" and ha_green(ha[i]) != want_long:
         return None
-    if HA_DOJI_COLOUR == "same" and ha_green(ha[i]) == want_long:
+    if mode == "same" and ha_green(ha[i]) == want_long:
         return None
     r = i - 1
     while r >= 0 and ha_green(ha[r]) != want_long:
@@ -1713,11 +1723,19 @@ def process_candle(asset, ast, candles, ha, i):
         if BTC_GATE != "off" and sym != "BTC":
             bt = btc_trend()
             if bt:
-                btc_up = bt[0]
-                want = btc_up if BTC_GATE == "align" else not btc_up
+                btc_up, _, _, stalling = bt
+                # A SAME-COLOUR DOJI ON BTC TURNS THE GATE EARLY. It is the
+                # analysis step before the entry: BTC's trend is exhausting
+                # but has not yet flipped, and since BTC leads the alts,
+                # waiting for its flip would gate the alt trades that are
+                # already turning. So the gate reads the direction BTC is
+                # heading INTO, not the one it is leaving.
+                eff_up = (not btc_up) if stalling else btc_up
+                want = eff_up if BTC_GATE == "align" else not eff_up
                 if want_long != want:
                     log(f"{sym}: {direction} doji REFUSED by the BTC gate "
-                        f"(BTC {'UP' if btc_up else 'DOWN'}, "
+                        f"(BTC {'UP' if btc_up else 'DOWN'}"
+                        f"{' STALLING' if stalling else ''}, "
                         f"BTC_GATE={BTC_GATE})")
                     continue
 
