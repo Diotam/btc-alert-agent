@@ -150,6 +150,17 @@ HA_DOJI_COLOUR = "flip"            # which colour the doji must be, relative
                                    #            colour first. Later, more
                                    #            confirmation, fewer trades.
                                    #   "any"  - either colour counts.
+HA_MODE = "reversal"               # what the doji MEANS.
+                                   #   "reversal"     - a doji ending a red
+                                   #                    run turns us LONG.
+                                   #                    Every version before
+                                   #                    3 Aug worked this way.
+                                   #   "continuation" - the same doji turns
+                                   #                    us SHORT: the stall is
+                                   #                    a pause in the move,
+                                   #                    not the end of it.
+                                   # Detection is IDENTICAL either way - only
+                                   # the resulting side flips
 HA_MIN_RUN = 5                     # MINIMUM trend-coloured HA candles before
                                    # the flip counts. Back on 3 Aug at 5,
                                    # after LIT showed a ONE-candle red run
@@ -702,7 +713,20 @@ def confirmed(ha, candles, d, i, want_long, final=True):
     return True, ""
 
 
-def gate_status(ha, candles, i):
+def traded_side(signal_long, sym=None):
+    """The side that would ACTUALLY be taken, given BITCOIN decides.
+
+    One rule, used by both the executor and the panel - when they each had
+    their own copy the panel showed the alt's implied side on rows that had
+    not reached a doji and BTC's side on the ones that had, so a row could
+    display one direction and fire the other."""
+    if sym == "BTC":
+        return signal_long                 # BTC cannot follow itself
+    bt = btc_trend()
+    return bt[0] if bt else signal_long     # unreadable: fall back
+
+
+def gate_status(ha, candles, i, sym=None):
     """Where this symbol sits in the entry chain, for the dashboard.
 
     ha_doji returns None with no reason, so nothing downstream can say WHY
@@ -725,10 +749,8 @@ def gate_status(ha, candles, i):
                 continue
             ok, why = confirmed(ha, candles, dd, i, sig_long,
                                 final=(k == HA_CONFIRM_BARS))
-            side = "LONG" if sig_long else "SHORT"
-            bt = btc_trend()
-            if bt:
-                side = "LONG" if bt[0] else "SHORT"
+            sd = sig_long if HA_MODE == "reversal" else not sig_long
+            side = "LONG" if traded_side(sd, sym) else "SHORT"
             return {"run": k, "trend": "up" if sig_long else "down",
                     "dir": side, "need": HA_CONFIRM_BARS,
                     "stage": "confirming" if ok else "confirmation failed",
@@ -743,10 +765,12 @@ def gate_status(ha, candles, i):
     run = ha[r:i]
     n_run = len(run)
     trend_up = ha_green(ha[i - 1])
-    want_long = not trend_up          # a red run turns us long
+    # a red run turns us LONG under "reversal", SHORT under "continuation"
+    want_long = (not trend_up) if HA_MODE == "reversal" else trend_up
     need = max(1, HA_MIN_RUN)
     d = {"run": n_run, "trend": "up" if trend_up else "down",
-         "dir": "LONG" if want_long else "SHORT", "need": need}
+         "dir": "LONG" if traded_side(want_long, sym) else "SHORT",
+         "need": need}
 
     if n_run < need:
         d.update(stage="building trend", detail=f"{n_run}/{need} candles")
@@ -775,9 +799,6 @@ def gate_status(ha, candles, i):
     # a doji is not a trade any more - HA_CONFIRM_BARS candles have to keep
     # going its way, each bigger than the last, and the final REAL candle
     # has to close that way. Report how far along that is.
-    bt = btc_trend()
-    if bt:
-        d["dir"] = "LONG" if bt[0] else "SHORT"
     if HA_CONFIRM_BARS:
         d.update(stage="doji, awaiting confirmation",
                  detail=f"0/{HA_CONFIRM_BARS} bars")
@@ -1820,7 +1841,7 @@ def process_candle(asset, ast, candles, ha, i):
     # only - it never gates anything. Written every scan so the panel is
     # never staler than the last candle close.
     try:
-        g = gate_status(ha, candles, i)
+        g = gate_status(ha, candles, i, sym)
         g["t"] = hd["t"]
         g["px"] = c["c"]
         ast["gate"] = g       # save_state runs at the end of every scan
@@ -1846,14 +1867,12 @@ def process_candle(asset, ast, candles, ha, i):
         # own chart, becomes a LONG while BTC is green. The old gate would
         # have refused that signal; this reverses it instead.
         # BTC itself still trades its own doji - it cannot follow itself.
-        want_long = signal_long
-        if sym != "BTC":
-            bt = btc_trend()
-            if bt:
-                want_long = bt[0]
-            else:
-                log(f"{sym}: BTC trend unreadable - falling back to the "
-                    "alt's own doji direction")
+        # the doji's own reading, inverted under "continuation"
+        raw = signal_long if HA_MODE == "reversal" else not signal_long
+        want_long = traded_side(raw, sym)
+        if sym != "BTC" and want_long == raw and not btc_trend():
+            log(f"{sym}: BTC trend unreadable - falling back to the "
+                "alt's own doji direction")
         direction = "LONG" if want_long else "SHORT"
         dt = hd["t"]                         # identify by TIMESTAMP, never by
         #                                      index - the fetch window rolls
@@ -1881,14 +1900,24 @@ def process_candle(asset, ast, candles, ha, i):
         # stop is a price the market may never trade to. The real candle's
         # extreme is a level that actually exists on the book.
         # It also guarantees positive risk: for a long, low <= close always.
-        lo = max(0, i - STOP_LOOKBACK + 1)
-        window = candles[lo:i + 1]
+        # THE WINDOW SITS BEFORE THE DOJI, not before the entry. The doji at
+        # d is the turn; the level being risked against is the extreme of
+        # the move that led INTO it, so the confirmation bars after it are
+        # excluded - they are already part of the new direction and would
+        # drag the stop toward entry.
+        lo = max(0, d - STOP_LOOKBACK)
+        window = candles[lo:d]
+        if not window:
+            log(f"{sym}: {direction} doji at the start of the series - no "
+                "candles before it to take a stop from, skipped")
+            continue
         stop = (min(x["l"] for x in window) if want_long
                 else max(x["h"] for x in window))
         entry = c["c"]
         risk = (entry - stop) if want_long else (stop - entry)
         if risk <= 0:
-            log(f"{sym}: {direction} doji but the candle closed at its own "
+            log(f"{sym}: {direction} doji but entry is already through the "
+                f"{len(window)}-candle "
                 f"{'low' if want_long else 'high'} - no risk distance, "
                 "skipped")
             continue
@@ -1898,14 +1927,15 @@ def process_candle(asset, ast, candles, ha, i):
                         "frozen": True, "t": c["t"]}
         log(f"{sym}: HA DOJI CONFIRMED after {HA_CONFIRM_BARS} bar(s) - "
             f"turning {direction}, stop at the {len(window)}-candle "
-            f"{'low' if want_long else 'high'} ${fmt_px(stop)} "
-            f"(doji was {fmt_ts(ha[d]['t'])})")
+            f"{'low' if want_long else 'high'} before the doji "
+            f"${fmt_px(stop)} (doji was {fmt_ts(ha[d]['t'])})")
         # candles[-1] is the still-forming candle: its close is the current
         # price, free, with no extra API call
         fire_entry(asset, ast, direction, c, stop, c["h"], c["l"], "HA",
                    f"HA doji after a {'down' if want_long else 'up'}trend, "
                    f"confirmed by {HA_CONFIRM_BARS} expanding bar(s) and a "
                    f"real close - stop at the {len(window)}-candle "
+                   f"extreme before the doji, "
                    f"{'low' if want_long else 'high'}",
                    live_px=candles[-1]["c"])
         return True
