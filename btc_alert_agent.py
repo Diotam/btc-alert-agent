@@ -1885,8 +1885,22 @@ def adopt_position(asset, ast, candles, coin_sz, entry_px):
         px = candles[-1]["c"] if candles else entry_px
         log(f"{sym}: tracked {old['verdict']} but the exchange holds "
             f"{'LONG' if now_long else 'SHORT'} - booking the old side")
-        _close_trade(asset, old, px, "MANUAL", now_ms(),
-                     "position changed outside the agent - booked on adopt")
+        # BOOK IT DIRECTLY. _close_trade ends with ensure_flat(), which reads
+        # the account, sees a live position and MARKET-CLOSES it - and the
+        # live position here is the one being adopted. Routing the booking
+        # through _close_trade therefore closed the very position the user
+        # had just reversed into. Seen live 3 Aug. The partial books through
+        # record_close for the same reason; this must too.
+        record_close(sym, old, px, "MANUAL", now_ms(),
+                     frac=old.get("left", 1.0))
+        if ALERT_LIFECYCLE:
+            try:
+                send_telegram(lifecycle_message(
+                    asset, "MANUAL", old, px, now_ms(),
+                    "position changed outside the agent - booked on adopt"))
+            except Exception:
+                pass
+        RUN_ALERTS.append(f"{sym} old side booked on adopt")
     lo = max(0, len(candles) - STOP_LOOKBACK)
     window = candles[lo:] if candles else []
     if not window:
