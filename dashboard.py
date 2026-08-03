@@ -827,6 +827,7 @@ function render(d){
   // a partial and its runner are merged server-side into ONE trade, so
   // these compound kinds appear in place of the raw ledger events
   const KINDS={TP_RUNNER:'target + runner', TP_BE:'target, runner to BE',
+               GONE:'position gone',
                TP_HALF:'target hit', RUNNER:'runner', BE:'breakeven',
                STOP:'stopped'};
   // outcome, not event type: anything closed in profit gets a checkmark.
