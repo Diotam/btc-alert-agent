@@ -150,6 +150,17 @@ HA_DOJI_COLOUR = "flip"            # which colour the doji must be, relative
                                    #            colour first. Later, more
                                    #            confirmation, fewer trades.
                                    #   "any"  - either colour counts.
+HA_CONFIRM_BARS = 2                # HA candles that must follow the doji
+                                   # before the trade is taken: each in the
+                                   # doji's direction, each with a body
+                                   # BIGGER than the one before, and on the
+                                   # LAST of them the REAL candle must close
+                                   # that way too. The doji says a turn is
+                                   # happening; these say it took. 0 restores
+                                   # the old fire-on-the-doji behaviour.
+                                   # Entry moves to the last bar's close, so
+                                   # price has usually left the 7-candle
+                                   # stop behind - stops widen accordingly
 HA_DOJI_FRACTION = 0.25            # a DOJI is an HA body this small relative
                                    # to the biggest body in the trend run that
                                    # led into it. Scale-free, so it adapts per
@@ -655,7 +666,36 @@ def ha_body(x):
     return abs(x["c"] - x["o"])
 
 
-def gate_status(ha, i):
+def confirmed(ha, candles, d, i, want_long, final=True):
+    """Did the doji at d actually take, by candle i?
+
+    Every HA candle after the doji must run the trade's way with a body
+    LARGER than the one before it - a stall that resumes the old trend, or
+    one that peters out, never reaches here. On the final bar the REAL
+    candle must close that way as well, which is the part the HA cannot
+    fake: HA closes are averages of four prices and drift green while the
+    market prints red."""
+    prev = ha_body(ha[d])
+    for k in range(d + 1, i + 1):
+        if ha_green(ha[k]) != want_long:
+            return False, f"bar {k - d} turned back"
+        b = ha_body(ha[k])
+        if b <= prev:
+            return False, f"bar {k - d} did not expand"
+        prev = b
+    if not final:
+        # mid-flight: the expansion has held so far, but the real-close test
+        # belongs to the LAST bar only. Applying it early would report a
+        # perfectly healthy sequence as failed.
+        return True, ""
+    c = candles[i]
+    real_up = c["c"] > c["o"]
+    if real_up != want_long:
+        return False, "real candle closed the wrong way"
+    return True, ""
+
+
+def gate_status(ha, candles, i):
     """Where this symbol sits in the entry chain, for the dashboard.
 
     ha_doji returns None with no reason, so nothing downstream can say WHY
@@ -667,6 +707,26 @@ def gate_status(ha, i):
     already in memory."""
     if i < 1:
         return {"stage": "warming up", "detail": "", "run": 0}
+    # A DOJI ALREADY IN FLIGHT beats anything this candle could be: report
+    # how its confirmation is going rather than starting the chain over.
+    for k in range(1, HA_CONFIRM_BARS + 1):
+        dd = i - k
+        if dd < 0:
+            break
+        for sig_long in (True, False):
+            if not ha_doji(ha, dd, sig_long):
+                continue
+            ok, why = confirmed(ha, candles, dd, i, sig_long,
+                                final=(k == HA_CONFIRM_BARS))
+            side = "LONG" if sig_long else "SHORT"
+            bt = btc_trend()
+            if bt:
+                side = "LONG" if bt[0] else "SHORT"
+            return {"run": k, "trend": "up" if sig_long else "down",
+                    "dir": side, "need": HA_CONFIRM_BARS,
+                    "stage": "confirming" if ok else "confirmation failed",
+                    "detail": (f"{k}/{HA_CONFIRM_BARS} bars"
+                               if ok else why)}
     # the run BELOW the current candle, whichever colour it is
     cur = ha_green(ha[i])
     r = i - 1
@@ -704,15 +764,17 @@ def gate_status(ha, i):
         d.update(stage="waiting for flip",
                  detail="doji is still trend-coloured")
         return d
-    # the doji is timing; BITCOIN sets the direction, so report the side the
-    # trade would actually be taken on, not the side the alt's doji implies
+    # a doji is not a trade any more - HA_CONFIRM_BARS candles have to keep
+    # going its way, each bigger than the last, and the final REAL candle
+    # has to close that way. Report how far along that is.
     bt = btc_trend()
     if bt:
         d["dir"] = "LONG" if bt[0] else "SHORT"
-        d.update(stage="ready",
-                 detail=f"doji confirmed, BTC {'up' if bt[0] else 'down'}")
-    else:
-        d.update(stage="ready", detail="doji confirmed, BTC unreadable")
+    if HA_CONFIRM_BARS:
+        d.update(stage="doji, awaiting confirmation",
+                 detail=f"0/{HA_CONFIRM_BARS} bars")
+        return d
+    d.update(stage="ready", detail="doji confirmed")
     return d
 
 
@@ -1154,6 +1216,22 @@ def exec_symbol(symbol):
     return symbol if ":" in symbol else base_name(symbol)
 
 
+def only_isolated(symbol):
+    """Does the VENUE forbid cross margin on this market?
+
+    Hyperliquid marks such assets in the perp meta - CASHCAT carries
+    onlyIsolated: True and marginMode: "strictIsolated". Reading the flag
+    beats discovering it by sending a cross request and being refused: one
+    less round trip, and the log stops implying something went wrong when
+    nothing did."""
+    sym = exec_symbol(symbol)
+    for a in (_EXEC.get("meta") or {}).get("universe", []):
+        if a.get("name") == sym:
+            return bool(a.get("onlyIsolated")) or \
+                a.get("marginMode") == "strictIsolated"
+    return False
+
+
 def eff_leverage(asset):
     """The leverage the agent will actually use: the configured value, never
     above what the market allows."""
@@ -1509,7 +1587,14 @@ def place_entry_live(asset, trade, plan):
         # EXEC_MARGIN_MODE decides the FIRST attempt; the other mode is the
         # fallback, because some markets refuse one or the other and say so
         # by RETURNING an error rather than raising.
-        first = EXEC_MARGIN_MODE != "isolated"
+        # the venue's own flag wins over the preference - a strictIsolated
+        # market can never take cross, so do not ask
+        forced = only_isolated(asset["symbol"])
+        first = False if forced else (EXEC_MARGIN_MODE != "isolated")
+        if forced:
+            log(f"{sym}: venue marks this market ISOLATED-ONLY - not "
+                "attempting cross")
+        prev_err = ""
         for is_cross in (first, not first):
             try:
                 r = ex.update_leverage(lev, sym, is_cross)
@@ -1520,11 +1605,12 @@ def place_entry_live(asset, trade, plan):
             if not err:
                 mode = "cross" if is_cross else "ISOLATED"
                 if is_cross != first:
-                    log(f"{sym}: {EXEC_MARGIN_MODE} refused - set {lev}x "
-                        f"{mode} instead")
+                    log(f"{sym}: {EXEC_MARGIN_MODE} refused ({prev_err}) - "
+                        f"set {lev}x {mode} instead")
                 else:
                     log(f"{sym}: leverage {lev}x {mode}")
                 break
+            prev_err = err
             low = err.lower()
             if "cross" not in low and "isolated" not in low:
                 break
@@ -1725,17 +1811,26 @@ def process_candle(asset, ast, candles, ha, i):
     # only - it never gates anything. Written every scan so the panel is
     # never staler than the last candle close.
     try:
-        g = gate_status(ha, i)
+        g = gate_status(ha, candles, i)
         g["t"] = hd["t"]
         g["px"] = c["c"]
         ast["gate"] = g       # save_state runs at the end of every scan
     except Exception as e:
         log(f"{sym}: gate_status failed: {type(e).__name__}: {e}")
 
+    # the doji sits HA_CONFIRM_BARS candles back; THIS candle is the one
+    # that confirms it, and the one we enter on
+    d = i - HA_CONFIRM_BARS
+    if d < 0:
+        return False
     for signal_long in (True, False):
-        found = ha_doji(ha, i, signal_long)
+        found = ha_doji(ha, d, signal_long)
         if not found:
             continue
+        if HA_CONFIRM_BARS:
+            ok, why = confirmed(ha, candles, d, i, signal_long)
+            if not ok:
+                continue
         # BITCOIN DECIDES THE DIRECTION, 3 Aug, his call. The alt's own doji
         # is TIMING ONLY - it says a turn is happening here, not which way to
         # take it. So an alt doji that ends an UPTREND, a short setup on its
@@ -1792,16 +1887,16 @@ def process_candle(asset, ast, candles, ha, i):
         ast["setup"] = {"dir": direction, "zhi": c["h"], "zlo": c["l"],
                         "ft": rt, "departed": True, "touched": True,
                         "frozen": True, "t": c["t"]}
-        log(f"{sym}: HA DOJI - turning {direction}, stop at the "
-            f"{len(window)}-candle "
+        log(f"{sym}: HA DOJI CONFIRMED after {HA_CONFIRM_BARS} bar(s) - "
+            f"turning {direction}, stop at the {len(window)}-candle "
             f"{'low' if want_long else 'high'} ${fmt_px(stop)} "
-            f"(HA {'low' if want_long else 'high'} was "
-            f"${fmt_px(hd['l'] if want_long else hd['h'])})")
+            f"(doji was {fmt_ts(ha[d]['t'])})")
         # candles[-1] is the still-forming candle: its close is the current
         # price, free, with no extra API call
         fire_entry(asset, ast, direction, c, stop, c["h"], c["l"], "HA",
-                   f"HA doji after a {'down' if want_long else 'up'}trend - "
-                   f"stop at the {len(window)}-candle "
+                   f"HA doji after a {'down' if want_long else 'up'}trend, "
+                   f"confirmed by {HA_CONFIRM_BARS} expanding bar(s) and a "
+                   f"real close - stop at the {len(window)}-candle "
                    f"{'low' if want_long else 'high'}",
                    live_px=candles[-1]["c"])
         return True
