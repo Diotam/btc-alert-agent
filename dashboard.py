@@ -809,7 +809,11 @@ function render(d){
     <div class=row><span class=muted>stop <span class=num>$${px(t.stop)}</span></span>
     <span class=muted>TP <span class=num>$${px(t.tp)}</span></span></div>
     <div class=bar><div class=fill style="width:${rp}%;background:${rc}"></div></div>
-    <div class=muted>${rlbl}</div></div>`
+    <div class=row style="align-items:center">
+      <span class=muted>${rlbl}</span>
+      <span><button class=closebtn data-px="${t.mid==null?'':t.mid}" onclick="closeRunner(event,'${t.sym}')">close now</button>
+      <button class=closebtn data-px="${t.mid==null?'':t.mid}" onclick="reversePos(event,'${t.sym}')">reverse</button></span>
+    </div></div>`
   }).join(''):'<div class="card muted">none</div>';
   // RUNNERS: partial booked, stop at entry, riding until the HA flips.
   // Everything is measured from the ORIGINAL entry, and nothing here ever
