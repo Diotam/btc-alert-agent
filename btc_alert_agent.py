@@ -91,8 +91,9 @@ MIN_DAY_VOLUME_USD = 2_000_000     # crypto floor, 24h notional
 COMMODITY_MIN_VOLUME_USD = 5_000_000
 STOCK_MIN_VOLUME_USD = 5_000_000
 ONLY = []                          # trade ONLY these symbols ([] = whole universe)
-EXCLUDE = ["PUMP"]                 # never trade these (matches the base name
-                                   # on any venue)
+EXCLUDE = []                       # never trade these (matches the base name
+                                   # on any venue). PUMP was removed from
+                                   # this list 3 Aug - it trades again
 MAX_ASSETS = 100
 
 ASSETS = [                         # used when DISCOVER_ALL = False, or when
@@ -117,18 +118,6 @@ BTC_TREND_SMOOTH = (5, 5)          # smoothing for the BTC CONTEXT line only,
                                    # deliberately lighter than the signal's
                                    # 10,10 so it turns sooner and reports
                                    # where BTC is now
-BTC_GATE = "align"                 # what the BTC trend DOES, not just says.
-                                   #   "align" - only take alt signals in
-                                   #             BTC's direction. BTC green
-                                   #             allows LONGs and refuses
-                                   #             SHORTs, and vice versa.
-                                   #   "fade"  - the opposite: BTC green
-                                   #             allows only alt SHORTs.
-                                   #   "off"   - tag the alert, gate nothing.
-                                   # BTC itself is never gated against
-                                   # itself. On a failed BTC read the gate
-                                   # OPENS - never block trading because a
-                                   # context fetch timed out
 BTC_TREND_TTL_S = 120              # one BTC fetch per scan, not per symbol
 _BTC_CACHE = {"t": 0.0, "v": None}
 HA_MIN_BODY_PCT = 0.05             # the trend run must contain at least one
@@ -430,10 +419,9 @@ def btc_context_line():
         return "<i>\u20bf trend: unavailable</i>"
     up, n, move, stalling = v
     arrow = "\u2197\ufe0f UP" if up else "\u2198\ufe0f DOWN"
-    gate = "" if BTC_GATE == "off" else f" \u00b7 gate {BTC_GATE}"
-    stall = " \u00b7 STALLING (same-colour doji)" if stalling else ""
+    stall = " \u00b7 stalling" if stalling else ""
     return (f"<i>\u20bf BTC {arrow} \u00b7 {n} candles \u00b7 "
-            f"{move:+.2f}%{stall}{gate}</i>")
+            f"{move:+.2f}%{stall} \u00b7 sets the direction</i>")
 
 
 def fetch_binance(sym, interval, lookback):
@@ -716,16 +704,15 @@ def gate_status(ha, i):
         d.update(stage="waiting for flip",
                  detail="doji is still trend-coloured")
         return d
-    bt = btc_trend() if BTC_GATE != "off" else None
+    # the doji is timing; BITCOIN sets the direction, so report the side the
+    # trade would actually be taken on, not the side the alt's doji implies
+    bt = btc_trend()
     if bt:
-        eff_up = (not bt[0]) if bt[3] else bt[0]
-        allow = eff_up if BTC_GATE == "align" else not eff_up
-        if want_long != allow:
-            d.update(stage="held by the BTC gate",
-                     detail=f"BTC {'up' if bt[0] else 'down'}"
-                            f"{', stalling' if bt[3] else ''}")
-            return d
-    d.update(stage="ready", detail="doji confirmed, gate open")
+        d["dir"] = "LONG" if bt[0] else "SHORT"
+        d.update(stage="ready",
+                 detail=f"doji confirmed, BTC {'up' if bt[0] else 'down'}")
+    else:
+        d.update(stage="ready", detail="doji confirmed, BTC unreadable")
     return d
 
 
@@ -1745,10 +1732,24 @@ def process_candle(asset, ast, candles, ha, i):
     except Exception as e:
         log(f"{sym}: gate_status failed: {type(e).__name__}: {e}")
 
-    for want_long in (True, False):
-        found = ha_doji(ha, i, want_long)
+    for signal_long in (True, False):
+        found = ha_doji(ha, i, signal_long)
         if not found:
             continue
+        # BITCOIN DECIDES THE DIRECTION, 3 Aug, his call. The alt's own doji
+        # is TIMING ONLY - it says a turn is happening here, not which way to
+        # take it. So an alt doji that ends an UPTREND, a short setup on its
+        # own chart, becomes a LONG while BTC is green. The old gate would
+        # have refused that signal; this reverses it instead.
+        # BTC itself still trades its own doji - it cannot follow itself.
+        want_long = signal_long
+        if sym != "BTC":
+            bt = btc_trend()
+            if bt:
+                want_long = bt[0]
+            else:
+                log(f"{sym}: BTC trend unreadable - falling back to the "
+                    "alt's own doji direction")
         direction = "LONG" if want_long else "SHORT"
         dt = hd["t"]                         # identify by TIMESTAMP, never by
         #                                      index - the fetch window rolls
@@ -1769,30 +1770,6 @@ def process_candle(asset, ast, candles, ha, i):
         done = ast.get("traded") or {}
         if done.get("ft") == rt and done.get("dir") == direction:
             continue
-
-        # THE BTC GATE. Alts follow Bitcoin, and the first real sample after
-        # the 3 Aug reset showed the whole loss sitting on one side of that:
-        # longs 10 legs / 2 winners / -2.79%, shorts 5 legs / 3 winners /
-        # +0.27%. A reversal engine in a falling market keeps calling bottoms
-        # - nine longs to four shorts - and they kept failing.
-        if BTC_GATE != "off" and sym != "BTC":
-            bt = btc_trend()
-            if bt:
-                btc_up, _, _, stalling = bt
-                # A SAME-COLOUR DOJI ON BTC TURNS THE GATE EARLY. It is the
-                # analysis step before the entry: BTC's trend is exhausting
-                # but has not yet flipped, and since BTC leads the alts,
-                # waiting for its flip would gate the alt trades that are
-                # already turning. So the gate reads the direction BTC is
-                # heading INTO, not the one it is leaving.
-                eff_up = (not btc_up) if stalling else btc_up
-                want = eff_up if BTC_GATE == "align" else not eff_up
-                if want_long != want:
-                    log(f"{sym}: {direction} doji REFUSED by the BTC gate "
-                        f"(BTC {'UP' if btc_up else 'DOWN'}"
-                        f"{' STALLING' if stalling else ''}, "
-                        f"BTC_GATE={BTC_GATE})")
-                    continue
 
         # The doji marks WHERE the turn happened, but the stop is taken from
         # the REAL candle at that point, not the HA one. HA highs and lows
