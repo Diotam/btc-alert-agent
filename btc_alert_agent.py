@@ -1,2127 +1,1030 @@
 #!/usr/bin/env python3
 """
-SMOOTHED HEIKIN ASHI DOJI AGENT
---------------------------------
-One strategy, long side described; shorts mirror it exactly.
+Live dashboard for the signal agent. Reads the agent's state file, pulls
+live mid prices from Hyperliquid, and tails the agent's journal for recent
+events. Serves a phone-friendly page on port 8080. Stdlib only.
 
-  1. TREND - a run of red HA candles, any length, whose biggest body is at
-     least HA_MIN_BODY_PCT of price so a flat series cannot qualify. There
-     is no minimum run length and no requirement that the bodies expanded:
-     both were removed 3 Aug.
-  2. DOJI - an HA body no more than HA_DOJI_FRACTION of the biggest body in
-     that run. The smoothed HA has stalled, and that stall IS the turn.
-  3. ENTER on the doji, in the direction opposite the trend that led into
-     it. Price does NOT have to come back and retest anything.
-
-  stop   = the REAL candle's extreme at the doji - its low for a long, its
-           high for a short. Not the HA level: HA highs and lows are EMA
-           averages that need never have printed
-  target = HA_RR x that distance. HA_PARTIAL of the position is booked there
-           and the stop moves to entry; the remainder is held until the
-           smoothed HA flips back against the trade.
-
-The HA series is a derived band: EMA the OHLC, build Heikin Ashi on that,
-then EMA the result. It decides WHEN to trade; the real candles decide at
-what price, so every level the agent sends to the exchange is one the market
-actually traded.
-
-Config comes from environment variables:
-  TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID / HL_API_KEY / HL_ACCOUNT_ADDRESS
-
-Modes:
-  python3 btc_alert_agent.py           single scan
-  python3 btc_alert_agent.py --test    send a test message
-  python3 btc_alert_agent.py --loop    run continuously
+Optional: set DASH_KEY in the environment to require ?key=... on every
+request (light protection - the page is read-only either way).
 """
-
 import json
 import os
-import sys
+import subprocess
 import time
-import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from zoneinfo import ZoneInfo
-
-# ============================= CONFIG ======================================
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
-
-# --- asset universe -------------------------------------------------------
-DISCOVER_ALL = True
-DISCOVER_DEXES = False             # scan HIP-3 builder venues. OFF as of
-                                   # 2 Aug: with EXEC_BUILDER_DEXES empty
-                                   # they could only ever alert, never trade,
-                                   # so every xyz signal was noise that also
-                                   # booked paper rows into the ledger. False
-                                   # falls back to DEXES = [""], the main dex
-                                   # alone. Turn both back on together if the
-                                   # xyz pool is ever funded again
-ADMIT_COMMODITIES = True
-ADMIT_STOCKS = True                # equities IN the universe. They are
-                                   # is one line to flip back
-DEXES = [""]                       # fallback when dex discovery fails
-# EXACT names, never prefixes. This used to be a startswith() match, which
-# on an equities venue swallowed every ticker beginning with CL, NG or HG -
-# CLF, CLX, CLSK, NGD, HGV. Those were then classified as commodities, let
-# in at the lower commodity volume floor, and - worse - they bypassed
-# ADMIT_STOCKS entirely, so equities that were switched off still entered
-# the universe through this door.
-COMMODITY_TICKERS = ("XAU", "GOLD", "XAG", "SILVER", "XPT", "PLAT",
-                     "XPD", "PALLADIUM", "CL", "WTI", "OIL", "BRENT",
-                     "BRENTOIL", "NG", "NATGAS", "HG", "COPPER")
-STOCK_DEXES = ("xyz",)             # TradeXYZ equities venue
-EXEC_BUILDER_DEXES = ()            # builder dexes to trade AUTOMATICALLY,
-                                   # e.g. ("xyz",). OFF as of 2 Aug: the xyz
-                                   # dex has its OWN collateral pool and it
-                                   # holds $0, so every order there was
-                                   # rejected for insufficient margin no
-                                   # matter what the main account held. Turn
-                                   # back on once xyz is funded, or once the
-                                   # account is switched to Unified mode so
-                                   # the main USDC balance collateralizes it.
-                                   # The "xyz:GOLD" naming is this agent's
-                                   # own - on Hyperliquid that market is just
-                                   # GOLD, living on the xyz dex rather than
-                                   # the main perp dex. The SDK reaches it
-                                   # when the Exchange is built with
-                                   # perp_dexs=[...]
-MIN_DAY_VOLUME_USD = 2_000_000     # crypto floor, 24h notional
-COMMODITY_MIN_VOLUME_USD = 5_000_000
-STOCK_MIN_VOLUME_USD = 5_000_000
-ONLY = []                          # trade ONLY these symbols ([] = whole universe)
-EXCLUDE = []                       # never trade these (matches the base name
-                                   # on any venue). PUMP was removed from
-                                   # this list 3 Aug - it trades again
-MAX_ASSETS = 100
-
-ASSETS = [                         # used when DISCOVER_ALL = False, or when
-    {"symbol": "BTC", "label": "BTC-PERP", "hl_coin": "BTC",   # discovery fails
-     "fallbacks": ["binance:BTCUSDT", "kraken:XBTUSD"]},
-]
-
-# --- strategy dials -------------------------------------------------------
-TF = "15m"                         # execution timeframe
-SCAN_EVERY = "5m"                  # how often the loop wakes. Aligning it to
-                                   # TF means one scan per candle. A shorter
-                                   # pulse costs API calls but reacts sooner:
-                                   # symbols with no open trade are skipped
-                                   # until their candle closes either way, so
-                                   # the extra scans only ever serve OPEN
-                                   # trades - intrabar stop/target detection
-                                   # and moving the stop to entry after the
-                                   # partial fills
-HA_SMOOTH_IN = 10                  # EMA applied to OHLC before building HA
-HA_SMOOTH_OUT = 10                 # EMA applied to the HA output
-BTC_TREND_SMOOTH = (5, 5)          # smoothing for the BTC CONTEXT line only,
-                                   # deliberately lighter than the signal's
-                                   # 10,10 so it turns sooner and reports
-                                   # where BTC is now
-BTC_TREND_TTL_S = 120              # one BTC fetch per scan, not per symbol
-_BTC_CACHE = {"t": 0.0, "v": None}
-HA_MIN_BODY_PCT = 0.05             # the trend run must contain at least one
-                                   # HA body this big, as a % of price. Without
-                                   # it a FLAT smoothed series satisfies
-                                   # "strictly growing then strictly shrinking"
-                                   # on noise in the fifth decimal and arms a
-                                   # setup with no visible colour flip at all.
-                                   # Measured: near-flat series produce bodies
-                                   # of 0.005-0.034%, normal ones 0.081%+
-HA_MIN_FLIP_BODY_PCT = 0.002       # the DOJI/flip candle must itself be a real
-                                   # candle, this % of price or bigger. 0 = off.
-                                   # HA_DOJI_FRACTION puts a CEILING on that
-                                   # body; this is the FLOOR, so the two form a
-                                   # band. Added after FARTCOIN entered on a
-                                   # colour flip whose body was 0.006% - under
-                                   # a tick, invisible on a chart, a rounding
-                                   # artefact rather than a reversal.
-HA_DOJI_COLOUR = "flip"            # which colour the doji must be, relative
-                                   # to the trend that led into it.
-                                   #   "same" - a RED doji ends a downtrend
-                                   #            and turns us LONG; a GREEN
-                                   #            doji ends an uptrend and
-                                   #            turns us SHORT. The stall is
-                                   #            read BEFORE the colour turns,
-                                   #            so entries come earlier and
-                                   #            the trend is still nominally
-                                   #            intact when we take them.
-                                   #   "flip" - the doji must have CHANGED
-                                   #            colour first. Later, more
-                                   #            confirmation, fewer trades.
-                                   #   "any"  - either colour counts.
-HA_CONFIRM_BARS = 2                # HA candles that must follow the doji
-                                   # before the trade is taken: each in the
-                                   # doji's direction, each with a body
-                                   # BIGGER than the one before, and on the
-                                   # LAST of them the REAL candle must close
-                                   # that way too. The doji says a turn is
-                                   # happening; these say it took. 0 restores
-                                   # the old fire-on-the-doji behaviour.
-                                   # Entry moves to the last bar's close, so
-                                   # price has usually left the 7-candle
-                                   # stop behind - stops widen accordingly
-HA_DOJI_FRACTION = 0.25            # a DOJI is an HA body this small relative
-                                   # to the biggest body in the trend run that
-                                   # led into it. Scale-free, so it adapts per
-                                   # symbol instead of needing a fixed price
-                                   # threshold. Entry happens ON the doji -
-                                   # price does NOT have to come back and
-                                   # retest anything
-HA_RR = 3.0                        # first target = 3x the stop distance
-HA_PARTIAL = 0.5                   # fraction booked there; the stop then moves
-                                   # to entry and the remainder is held until
-                                   # the HA flips against the trade
-STOP_LOOKBACK = 7                  # the stop is the extreme of the LAST N
-                                   # REAL candles ending at the doji - low
-                                   # for a long, high for a short. 1 restores
-                                   # the old behaviour (the doji candle's own
-                                   # extreme). Wider stops are not a bug: the
-                                   # 1 Aug ledger showed WINNERS carried the
-                                   # wider stops (median 0.537% vs the
-                                   # losers' 0.471%) and every max-width cap
-                                   # tested made the book worse
-MIN_STOP_PCT = 0.25                # skip entries whose stop sits closer than
-                                   # this % of price - sub-noise stops just churn
-
-# --- alerts ---------------------------------------------------------------
-ALERT_ENTRIES = True
-ALERT_LIFECYCLE = True             # target, runner, stop and breakeven alerts
-
-# --- execution ------------------------------------------------------------
-EXEC_LIVE = True                   # place real orders
-EXEC_LOG_ORDERS = True             # write every sized order to orders.log.
-                                   # This is an audit trail only - it has never
-                                   # gated execution. EXEC_LIVE alone decides
-                                   # whether real orders are sent
-EXEC_TESTNET = False               # False = MAINNET, real money
-EXEC_MARGIN_MODE = "cross"         # "isolated" or "cross". CROSS as of
-                                   # 3 Aug, reverting the isolated switch he
-                                   # made earlier the same day. Cross lets
-                                   # one bad position draw on the whole
-                                   # account, but it keeps every position in
-                                   # the SAME pool that free_collateral()
-                                   # reads, which is the reporting the guard
-                                   # was rebuilt around. The other
-                                   # mode is still tried as a fallback,
-                                   # since some markets refuse one of them.
-                                   # ONLY AFFECTS NEW ENTRIES - positions
-                                   # already open stay as they were opened
-EXEC_HALT_FILE = "/opt/btc-agent/EXEC_HALT"
-CLOSE_REQ_DIR = Path(__file__).parent / "close_requests"   # the dashboard
-#   drops one marker file per symbol here; the agent closes that position on
-#   its next scan and removes the file. A directory of markers rather than a
-#   shared JSON file, so the two processes never write the same bytes   # touch this to stop new entries
-EXEC_SIZING = "margin"             # "margin"   = a FIXED DOLLAR AMOUNT of
-                                   #   COLLATERAL per trade. Position size is
-                                   #   margin x leverage, so the agent must
-                                   #   also SET the leverage or the figure is
-                                   #   a guess - see EXEC_LEVERAGE below
-                                   # "notional" = a fixed dollar POSITION
-                                   #   size, whatever collateral that needs
-                                   # "risk"     = fixed dollar LOSS at the
-                                   #   stop; the position size then varies
-EXEC_MARGIN_USD = 30.0             # collateral per trade in "margin" mode
-EXEC_LEVERAGE = 999                # MAX leverage: eff_leverage() clamps this
-                                   # to each market's own maximum, so 999
-                                   # simply means "whatever this market
-                                   # allows". Position size then varies a lot
-                                   # by venue - a 40x market gets 4x the
-                                   # position of a 10x one for the same
-                                   # collateral. The leverage the agent SETS
-                                   # before entering, clamped to that market's
-                                   # maximum. Sizing uses the same number, so
-                                   # the margin actually posted is the figure
-                                   # above rather than an assumption about
-                                   # whatever the account happened to be set
-                                   # to. A symbol left at 3x would otherwise
-                                   # post 3x the intended collateral.
-EXEC_NOTIONAL_USD = 30.0           # size of each position in "notional" mode
-EXEC_RISK_USD = 2.0                # dollar loss at the stop in "risk" mode
-EXEC_MAX_NOTIONAL_USD = 8000       # cap on position value. Must be at
-                                   # least EXEC_RISK_USD / MIN_STOP_PCT or
-                                   # the cap silently trims the position and
-                                   # the risk with it: at $20 risk and a
-                                   # 0.25% stop the trade needs $8,000, and
-                                   # a $2,500 cap would have cut the actual
-                                   # risk to $6.25
-EXEC_MAX_POSITIONS = 0             # concurrent live positions. 0 = NO CAP:
-                                   # the only remaining limits are the halt
-                                   # file, EXEC_MAX_NOTIONAL_USD per trade,
-                                   # and whatever margin the account has
-EXEC_DAILY_LOSS_LIMIT_USD = 40.0   # INERT: needs realised USD from the ledger,
-                                   # which is not tracked yet
-
-# --- plumbing -------------------------------------------------------------
-STATE_FILE = Path(__file__).parent / "btc_agent_state.json"
-TRADES_LOG = Path(__file__).parent / "trades.log"
-ORDERS_LOG = Path(__file__).parent / "orders.log"
-TIMEZONE = "America/Chicago"
-LOCAL_TZ = ZoneInfo(TIMEZONE)
-
-MS = {"5m": 300_000, "15m": 900_000, "30m": 1_800_000, "1h": 3_600_000,
-      "4h": 14_400_000}
-_TF_ALIASES = {"5min": "5m", "15min": "15m", "30min": "30m",
-               "60m": "1h", "60min": "1h", "1hr": "1h"}
-TF = _TF_ALIASES.get(TF.strip().lower(), TF.strip().lower())
-SCAN_EVERY = _TF_ALIASES.get(SCAN_EVERY.strip().lower(),
-                             SCAN_EVERY.strip().lower())
-for _n, _v in (("TF", TF), ("SCAN_EVERY", SCAN_EVERY)):
-    if _v not in MS:
-        raise SystemExit(f"CONFIG ERROR: {_n}={_v!r} is not a known "
-                         f"timeframe - use one of {sorted(MS)}")
-
-# the fetcher ignores the caller's count and uses this map - a value that is
-# too small silently starves whatever depends on that interval
-LOOKBACK = {"5m": 300, "15m": 400, "30m": 400, "1h": 500, "4h": 300}
-
-REQUEST_TIMEOUT_S = 8              # fail fast: a throttled API must not burn 20s
-FETCH_DELAY_S = 0.12
-RETRY_ON_429 = 2                   # retries when the API throttles or 5xxs
-RETRY_BACKOFF_S = 0.8              # doubles each attempt
-DISCOVERY_TTL_S = 1800             # the tradable universe barely moves
-                                   # intraday, so re-listing venues and
-                                   # markets every 5 min is pure API burn
-RUN_BUDGET_S = 480                 # hard per-run budget; the rest resume next
-                                   # run via a rotating cursor
-REPLAY_CANDLES = 3                 # candles replayed per run (covers a run gap)
-
-
-# --------------------------- small helpers ---------------------------------
-def fmt_ts(ms, fmt="%Y-%m-%d %I:%M %p %Z"):
-    return datetime.fromtimestamp(ms / 1000, tz=LOCAL_TZ).strftime(fmt)
-
-
-def log(msg):
-    ts = datetime.now(LOCAL_TZ)
-    print(f"[{ts.strftime('%Y-%m-%d %H:%M:%S %Z')}] {msg}", flush=True)
-
-
-def fmt_px(p):
-    # two more decimals than the original bands (0/2/6), so AVAX prints
-    # 6.5676 rather than 6.57 - the doji levels are often separated by less
-    # than a cent and the rounded form made distinct prices look identical
-    return f"{p:,.2f}" if p >= 10000 else f"{p:,.4f}" if p >= 1 else f"{p:,.8f}"
-
-
-def pnl_pct(trade, exit_px):
-    sign = 1 if trade["verdict"] == "LONG" else -1
-    return sign * (exit_px - trade["entry"]) / trade["entry"] * 100
-
-
-def esc(s):
-    return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-
-def now_ms():
-    return int(time.time() * 1000)
-
-
-# --------------------------- run summary -----------------------------------
-RUN_ALERTS = []
-RUN_STATUS = []
-RUN_UNIVERSE = [0]                 # [universe size] for the run summary
-
-
-def write_run_summary():
-    n = len(RUN_STATUS)
-    armed = [s for s in RUN_STATUS if "BROKE-" in s]
-    open_t = sum(1 for s in RUN_STATUS if "IN_TRADE" in s)
-    if RUN_ALERTS:
-        headline = "ALERT SENT: " + " | ".join(RUN_ALERTS)
-    else:
-        extras = []
-        if armed:
-            extras.append("armed: " + "; ".join(armed)[:120])
-        if open_t:
-            extras.append(f"{open_t} in trade")
-        headline = (f"No signal - {n} of {RUN_UNIVERSE[0] or n} markets scanned"
-                    + (f" ({', '.join(extras)})" if extras else ""))
-    log("SUMMARY: " + headline)
-    try:
-        (Path(__file__).parent / "run_summary.txt").write_text(headline + "\n")
-    except OSError:
-        pass
-
-
-# --------------------------- data sources ----------------------------------
-def http_json(url, payload=None, timeout=None, retries=RETRY_ON_429):
-    """One HTTP call, retrying on throttling. A 429 that is simply swallowed
-    is the worst outcome: the caller then behaves as if the data does not
-    exist rather than as if it could not be reached."""
-    timeout = timeout or REQUEST_TIMEOUT_S
-    headers = {"Content-Type": "application/json",
-               "User-Agent": "Mozilla/5.0 (ha-agent/1.0)"}
-    data = json.dumps(payload).encode() if payload is not None else None
-    req = urllib.request.Request(url, data=data, headers=headers,
-                                 method="POST" if payload is not None else "GET")
-    for attempt in range(retries + 1):
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as r:
-                return json.loads(r.read().decode())
-        except urllib.error.HTTPError as e:
-            if e.code in (429, 500, 502, 503) and attempt < retries:
-                wait = RETRY_BACKOFF_S * (2 ** attempt)
-                log(f"HTTP {e.code} - backing off {wait:.1f}s and retrying")
-                time.sleep(wait)
-                continue
-            raise
-
-
-def fetch_hyperliquid(coin, interval, lookback):
-    end = now_ms()
-    start = end - lookback * MS[interval]
-    data = http_json("https://api.hyperliquid.xyz/info", {
-        "type": "candleSnapshot",
-        "req": {"coin": coin, "interval": interval,
-                "startTime": start, "endTime": end},
-    })
-    return [{"t": c["t"], "o": float(c["o"]), "h": float(c["h"]),
-             "l": float(c["l"]), "c": float(c["c"]), "v": float(c["v"])}
-            for c in data]
-
-
-def btc_trend():
-    """BTC's smoothed-HA colour, run length and % move over that run.
-
-    Read with BTC_TREND_SMOOTH (5,5), NOT the signal smoothing (10,10).
-    Lighter smoothing turns sooner, so this reports where BTC is NOW rather
-    than confirming it several candles late - which is what you want from
-    context that is only ever displayed, never traded on.
-
-    Cached for BTC_TREND_TTL_S so a scan of 35 symbols costs one fetch.
-    Returns (up, candles_in_run, pct_move) or None if it cannot be read."""
-    now = time.time()
-    if _BTC_CACHE["t"] and now - _BTC_CACHE["t"] < BTC_TREND_TTL_S:
-        return _BTC_CACHE["v"]
-    try:
-        c = fetch_hyperliquid("BTC", TF, LOOKBACK.get(TF, 400))
-        ha = smoothed_ha(c, *BTC_TREND_SMOOTH)
-        if len(ha) < 3:
-            return None
-        up = ha_green(ha[-1])
-        n = 1
-        while n < len(ha) and ha_green(ha[-1 - n]) == up:
-            n += 1
-        move = (c[-1]["c"] - c[-n]["o"]) / c[-n]["o"] * 100 if n <= len(c) \
-            else 0.0
-        # IS BITCOIN STALLING? A SAME-COLOUR doji - a small trend-coloured
-        # body at the end of the run - is the earliest read on exhaustion,
-        # printing BEFORE the colour turns. The entry detector waits for the
-        # flip; the gate does not, because BTC leads the alts and by the
-        # time BTC has flipped the alt move is already under way.
-        # want_long=True means "a red run ending", so it detects a stalling
-        # DOWNtrend; that is the one to look for when BTC is currently red.
-        stalling = bool(ha_doji(ha, len(ha) - 1, not up, colour="same"))
-        val = (up, n, move, stalling)
-    except Exception as e:
-        log(f"btc_trend() failed: {type(e).__name__}: {e}")
-        val = None
-    _BTC_CACHE.update({"t": now, "v": val})
-    return val
-
-
-def btc_context_line():
-    """One line of BTC context for an alert. CONTEXT ONLY - nothing is
-    filtered on it, so an alt signal against BTC still fires and still
-    says so."""
-    v = btc_trend()
-    if not v:
-        return "<i>\u20bf trend: unavailable</i>"
-    up, n, move, stalling = v
-    arrow = "\u2197\ufe0f UP" if up else "\u2198\ufe0f DOWN"
-    stall = " \u00b7 stalling" if stalling else ""
-    return (f"<i>\u20bf BTC {arrow} \u00b7 {n} candles \u00b7 "
-            f"{move:+.2f}%{stall} \u00b7 sets the direction</i>")
-
-
-def fetch_binance(sym, interval, lookback):
-    data = http_json(f"https://api.binance.com/api/v3/klines"
-                     f"?symbol={sym}&interval={interval}&limit={lookback}")
-    return [{"t": k[0], "o": float(k[1]), "h": float(k[2]),
-             "l": float(k[3]), "c": float(k[4]), "v": float(k[5])} for k in data]
-
-
-def fetch_kraken(pair, interval, lookback):
-    mins = MS[interval] // 60000
-    data = http_json(f"https://api.kraken.com/0/public/OHLC"
-                     f"?pair={pair}&interval={mins}")
-    key = next(k for k in data["result"] if k != "last")
-    return [{"t": k[0] * 1000, "o": float(k[1]), "h": float(k[2]),
-             "l": float(k[3]), "c": float(k[4]), "v": float(k[6])}
-            for k in data["result"][key]]
-
-
-def fetch_fallback(spec, interval, lookback):
-    provider, _, ident = spec.partition(":")
-    return {"binance": fetch_binance,
-            "kraken": fetch_kraken}[provider](ident, interval, lookback)
-
-
-def fetch(asset, interval, min_candles):
-    lookback = LOOKBACK.get(interval, 400)
-    sources = [(f"HL {asset['hl_coin']}",
-                lambda: fetch_hyperliquid(asset["hl_coin"], interval, lookback))]
-    for spec in asset.get("fallbacks", []):
-        sources.append((spec,
-                        lambda s=spec: fetch_fallback(s, interval, lookback)))
-    for name, fn in sources:
-        try:
-            candles = fn()
-            if candles and len(candles) >= min_candles:
-                return name, candles
-        except Exception as e:
-            log(f"{asset['symbol']}: {name} {interval} failed: {e}")
-    return None, None
-
-
-# --------------------------- universe --------------------------------------
-def base_name(name):
-    """Strip only the venue prefix Hyperliquid includes ('xyz:GOLD').
-
-    It used to also .upper().lstrip("K"), meant to undo kPEPE-style
-    multipliers - but "kPEPE" IS the perp's real name on Hyperliquid, so
-    stripping the k produced "PEPE", which is not in the universe. Every
-    k-prefixed market and every ticker simply starting with K (KAITO ->
-    AITO) silently failed its universe lookup and never executed. Case is
-    preserved too: the exchange matches names exactly.
-    """
-    return name.split(":")[-1]
-
-
-def executable(symbol):
-    """Can the agent place orders on this market itself?
-
-    Builder-venue markets ("xyz:GOLD") are alert-only UNLESS their dex is
-    listed in EXEC_BUILDER_DEXES, in which case the SDK client was built
-    with perp_dexs=[...] and can reach them. Nothing that cannot execute may
-    consume the live position budget.
-    """
-    if ":" not in symbol:
-        return True
-    if symbol.split(":")[0] not in EXEC_BUILDER_DEXES:
-        return False
-    # the client may have fallen back to main-dex-only at build time
-    return _EXEC["ex"] is None or bool(_EXEC.get("dexes"))
-
-
-def is_commodity(name):
-    """Exact match only - see the note on COMMODITY_TICKERS."""
-    return base_name(name).upper() in COMMODITY_TICKERS
-
-
-def list_dexes():
-    """The main dex plus every HIP-3 builder dex."""
-    if not DISCOVER_DEXES:
-        return DEXES
-    try:
-        data = http_json("https://api.hyperliquid.xyz/info",
-                         {"type": "perpDexs"})
-        dexes = []
-        for d in data:
-            if d is None:
-                dexes.append("")                  # the main dex slot
-            elif isinstance(d, str):
-                dexes.append(d)
-            elif isinstance(d, dict) and d.get("name"):
-                dexes.append(d["name"])
-        if dexes:
-            if "" not in dexes:
-                dexes.insert(0, "")
-            return dexes
-    except Exception as e:
-        log(f"Dex discovery failed ({e}) - using configured DEXES list")
-    return DEXES
-
-
-def discover_assets():
-    found = []
-    dexes = list_dexes()
-    if len(dexes) > 2:
-        log(f"Scanning {len(dexes)} dexes: "
-            + ", ".join(d or "main" for d in dexes))
-    excluded = {base_name(x).upper() for x in EXCLUDE}
-    for dex in dexes:
-        payload = {"type": "metaAndAssetCtxs"}
-        if dex:
-            payload["dex"] = dex
-        try:
-            meta, ctxs = http_json("https://api.hyperliquid.xyz/info", payload)
-        except Exception as e:
-            log(f"Discovery failed for dex '{dex or 'main'}': {e}")
-            continue
-        for u, ctx in zip(meta.get("universe", []), ctxs):
-            if u.get("isDelisted"):
-                continue
-            try:
-                vol = float(ctx.get("dayNtlVlm") or 0)
-            except (TypeError, ValueError):
-                vol = 0.0
-            name = u["name"]
-            if base_name(name).upper() in excluded:
-                continue
-            if dex:
-                if is_commodity(name):
-                    if not ADMIT_COMMODITIES or vol < COMMODITY_MIN_VOLUME_USD:
-                        continue
-                    cls = "commodity"
-                elif dex in STOCK_DEXES:
-                    if not ADMIT_STOCKS or vol < STOCK_MIN_VOLUME_USD:
-                        continue
-                    cls = "stock"
-                else:
-                    continue                      # unknown venue class: skip
-            else:
-                if vol < MIN_DAY_VOLUME_USD:
-                    continue
-                cls = "crypto"
-            coin = name if (":" in name or not dex) else f"{dex}:{name}"
-            found.append({"symbol": coin, "hl_coin": coin, "vol": vol,
-                          "cls": cls, "lev": u.get("maxLeverage"),
-                          "label": f"{base_name(name)}-PERP"
-                                   + (f" ({dex})" if dex else ""),
-                          "fallbacks": []})
-    found.sort(key=lambda a: a["vol"], reverse=True)
-    return found[:MAX_ASSETS]
-
-
-def _not_excluded(a):
-    return (base_name(a["symbol"]).upper()
-            not in {base_name(x).upper() for x in EXCLUDE})
-
-
-_UNIVERSE = {"t": 0.0, "assets": []}
-
-
-def active_assets():
-    if ONLY:
-        picked = [a for a in ASSETS if a["symbol"] in ONLY] or ASSETS[:1]
-        return [a for a in picked if _not_excluded(a)]
-    if not DISCOVER_ALL:
-        return [a for a in ASSETS if _not_excluded(a)]
-    if _UNIVERSE["assets"] and \
-            time.time() - _UNIVERSE["t"] < DISCOVERY_TTL_S:
-        return _UNIVERSE["assets"]
-    assets = discover_assets()
-    if assets:
-        _UNIVERSE.update(t=time.time(), assets=assets)
-        auto = sum(1 for a in assets if executable(a["symbol"]))
-        hand = len(assets) - auto
-        n_com = sum(1 for a in assets if a.get("cls") == "commodity")
-        n_stk = sum(1 for a in assets if a.get("cls") == "stock")
-        # say what is ACTUALLY tradable rather than assuming every builder
-        # market is alert-only - EXEC_BUILDER_DEXES can now make them live
-        log(f"Discovered {len(assets)} markets: {auto} auto-traded"
-            + (f", {hand} alert-only (placed by hand)" if hand else "")
-            + f" - {n_com} commodities, {n_stk} equities"
-            + (f", builder dexes live: {', '.join(EXEC_BUILDER_DEXES)}"
-               if EXEC_BUILDER_DEXES else ""))
-        return assets
-    log("Discovery returned nothing - falling back to the manual ASSETS list.")
-    return ASSETS
-
-
-# --------------------------- smoothed heikin ashi --------------------------
-def ema(vals, n):
-    """Plain EMA, seeded on the first value so the series has no None gap."""
-    k = 2.0 / (n + 1)
-    out, prev = [], None
-    for v in vals:
-        prev = v if prev is None else v * k + prev * (1 - k)
-        out.append(prev)
-    return out
-
-
-def smoothed_ha(candles, n_in=None, n_out=None):
-    """EMA the OHLC, build Heikin Ashi on that, then EMA the result. The
-    output is a derived band, NOT tradeable prices - its highs and lows are
-    averages and may never have printed."""
-    n_in, n_out = n_in or HA_SMOOTH_IN, n_out or HA_SMOOTH_OUT
-    if not candles:
-        return []
-    o = ema([c["o"] for c in candles], n_in)
-    h = ema([c["h"] for c in candles], n_in)
-    lo = ema([c["l"] for c in candles], n_in)
-    cl = ema([c["c"] for c in candles], n_in)
-    ha, p_o, p_c = [], None, None
-    for i in range(len(candles)):
-        close = (o[i] + h[i] + lo[i] + cl[i]) / 4
-        open_ = close if p_o is None else (p_o + p_c) / 2
-        ha.append({"o": open_, "c": close})
-        p_o, p_c = open_, close
-    so = ema([x["o"] for x in ha], n_out)
-    sc = ema([x["c"] for x in ha], n_out)
-    sh = ema(h, n_out)
-    sl = ema(lo, n_out)
-    return [{"t": candles[i]["t"], "o": so[i], "c": sc[i],
-             "h": max(sh[i], so[i], sc[i]), "l": min(sl[i], so[i], sc[i])}
-            for i in range(len(candles))]
-
-
-def ha_green(x):
-    return x["c"] > x["o"]
-
-
-def ha_body(x):
-    return abs(x["c"] - x["o"])
-
-
-def confirmed(ha, candles, d, i, want_long, final=True):
-    """Did the doji at d actually take, by candle i?
-
-    Every HA candle after the doji must run the trade's way with a body
-    LARGER than the one before it - a stall that resumes the old trend, or
-    one that peters out, never reaches here. On the final bar the REAL
-    candle must close that way as well, which is the part the HA cannot
-    fake: HA closes are averages of four prices and drift green while the
-    market prints red."""
-    prev = ha_body(ha[d])
-    for k in range(d + 1, i + 1):
-        if ha_green(ha[k]) != want_long:
-            return False, f"bar {k - d} turned back"
-        b = ha_body(ha[k])
-        if b <= prev:
-            return False, f"bar {k - d} did not expand"
-        prev = b
-    if not final:
-        # mid-flight: the expansion has held so far, but the real-close test
-        # belongs to the LAST bar only. Applying it early would report a
-        # perfectly healthy sequence as failed.
-        return True, ""
-    c = candles[i]
-    real_up = c["c"] > c["o"]
-    if real_up != want_long:
-        return False, "real candle closed the wrong way"
-    return True, ""
-
-
-def gate_status(ha, candles, i):
-    """Where this symbol sits in the entry chain, for the dashboard.
-
-    ha_doji returns None with no reason, so nothing downstream can say WHY
-    a symbol is not trading. This mirrors its checks in order and names the
-    first one that fails. It is a REPORT, never a decision - fire_entry
-    still asks ha_doji. If the two ever disagree, ha_doji is right.
-
-    Returns {stage, detail, run, need} - cheap, pure arithmetic on a series
-    already in memory."""
-    if i < 1:
-        return {"stage": "warming up", "detail": "", "run": 0}
-    # A DOJI ALREADY IN FLIGHT beats anything this candle could be: report
-    # how its confirmation is going rather than starting the chain over.
-    for k in range(1, HA_CONFIRM_BARS + 1):
-        dd = i - k
-        if dd < 0:
-            break
-        for sig_long in (True, False):
-            if not ha_doji(ha, dd, sig_long):
-                continue
-            ok, why = confirmed(ha, candles, dd, i, sig_long,
-                                final=(k == HA_CONFIRM_BARS))
-            side = "LONG" if sig_long else "SHORT"
-            bt = btc_trend()
-            if bt:
-                side = "LONG" if bt[0] else "SHORT"
-            return {"run": k, "trend": "up" if sig_long else "down",
-                    "dir": side, "need": HA_CONFIRM_BARS,
-                    "stage": "confirming" if ok else "confirmation failed",
-                    "detail": (f"{k}/{HA_CONFIRM_BARS} bars"
-                               if ok else why)}
-    # the run BELOW the current candle, whichever colour it is
-    cur = ha_green(ha[i])
-    r = i - 1
-    while r >= 0 and ha_green(ha[r]) == ha_green(ha[i - 1]):
-        r -= 1
-    r += 1
-    run = ha[r:i]
-    n_run = len(run)
-    trend_up = ha_green(ha[i - 1])
-    want_long = not trend_up          # a red run turns us long
-    d = {"run": n_run, "trend": "up" if trend_up else "down",
-         "dir": "LONG" if want_long else "SHORT", "need": 1}
-
-    if not run:
-        d.update(stage="no run", detail="nothing to measure against")
-        return d
-    bodies = [ha_body(x) for x in run]
-    biggest = max(bodies)
-    scale = abs(ha[i]["c"]) or 1.0
-    if HA_MIN_BODY_PCT and biggest < HA_MIN_BODY_PCT / 100.0 * scale:
-        d.update(stage="trend too flat",
-                 detail=f"{biggest / scale * 100:.3f}% vs "
-                        f"{HA_MIN_BODY_PCT}%")
-        return d
-    body = ha_body(ha[i])
-    if body > HA_DOJI_FRACTION * biggest:
-        d.update(stage="waiting for doji",
-                 detail=f"body {body / biggest * 100:.0f}% of biggest")
-        return d
-    if HA_MIN_FLIP_BODY_PCT and \
-            body / (abs(ha[i]["o"]) or 1.0) * 100 < HA_MIN_FLIP_BODY_PCT:
-        d.update(stage="doji too small", detail="under the flip floor")
-        return d
-    if HA_DOJI_COLOUR == "flip" and ha_green(ha[i]) != want_long:
-        d.update(stage="waiting for flip",
-                 detail="doji is still trend-coloured")
-        return d
-    # a doji is not a trade any more - HA_CONFIRM_BARS candles have to keep
-    # going its way, each bigger than the last, and the final REAL candle
-    # has to close that way. Report how far along that is.
-    bt = btc_trend()
-    if bt:
-        d["dir"] = "LONG" if bt[0] else "SHORT"
-    if HA_CONFIRM_BARS:
-        d.update(stage="doji, awaiting confirmation",
-                 detail=f"0/{HA_CONFIRM_BARS} bars")
-        return d
-    d.update(stage="ready", detail="doji confirmed")
-    return d
-
-
-def ha_doji(ha, i, want_long, colour=None):
-    """Is HA candle i a DOJI that turns a real trend?
-
-    A doji is a body small relative to the trend that produced it - the
-    smoothed HA stalling. That stall IS the signal: the trade is taken on
-    this candle, in the direction OPPOSITE the trend that led in. Price does
-    not have to come back and retest anything.
-
-    Returns (doji_index, run_start) or None.
-    """
-    # want_long means the trend into the doji was RED, so the doji turns us
-    # long. HA_DOJI_COLOUR decides which colour that doji has to be: "same"
-    # takes the trend-coloured stall (a red doji ending a downtrend), "flip"
-    # waits for the colour to actually turn first.
-    if HA_MIN_FLIP_BODY_PCT:
-        # a colour change of essentially zero is not a turn
-        if abs(ha[i]["c"] - ha[i]["o"]) / ha[i]["o"] * 100 < HA_MIN_FLIP_BODY_PCT:
-            return None
-    mode = colour or HA_DOJI_COLOUR
-    if mode == "flip" and ha_green(ha[i]) != want_long:
-        return None
-    if mode == "same" and ha_green(ha[i]) == want_long:
-        return None
-    r = i - 1
-    while r >= 0 and ha_green(ha[r]) != want_long:
-        r -= 1
-    r += 1
-    run = ha[r:i]                            # the trend, excluding the doji
-    # NO MINIMUM RUN LENGTH as of 3 Aug, his call. One trend-coloured candle
-    # is enough to be a run. The only guard left is that there IS one - an
-    # empty run has no biggest body to measure the doji against.
-    if not run:
-        return None
-    bodies = [ha_body(x) for x in run]
-    biggest = max(bodies)
-    scale = abs(ha[i]["c"]) or 1.0
-
-    # the trend has to be VISIBLE. A flat smoothed series is nothing BUT
-    # dojis, so without this every quiet symbol would trade continuously.
-    if HA_MIN_BODY_PCT and biggest < HA_MIN_BODY_PCT / 100.0 * scale:
-        return None
-    # the doji itself: small against what came before it
-    if ha_body(ha[i]) > HA_DOJI_FRACTION * biggest:
-        return None
-    return i, r
-
-
-# --------------------------- telegram --------------------------------------
-def send_telegram(text):
-    resp = http_json(
-        f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-        {"chat_id": TELEGRAM_CHAT_ID, "text": text,
-         "parse_mode": "HTML", "disable_web_page_preview": True})
-    if not resp.get("ok"):
-        raise RuntimeError(f"Telegram send failed: {resp.get('description')}")
-
-
-# --------------------------- messages --------------------------------------
-def entry_message(asset, direction, plan, zhi, zlo, source, t, trigger):
-    e = "\U0001F7E2" if direction == "LONG" else "\U0001F534"
-    return "\n".join([
-        f"{e} <b>{direction} ENTRY \u00b7 {esc(asset['symbol'])}</b>",
-        f"<i>{esc(asset['label'])} \u00b7 {TF} \u00b7 smoothed HA \u00b7 "
-        f"{esc(fmt_ts(t))}</i>",
-        "",
-        "\U0001F4CA <b>Setup</b>: "
-        + (f"HA zone ${fmt_px(zlo)} - ${fmt_px(zhi)}; " if zhi else "")
-        + f"{esc(trigger)}",
-        "",
-        "\U0001F4CB <b>Plan</b>",
-        f"Entry: <code>${fmt_px(plan['entry'])}</code>",
-        f"Stop:  <code>${fmt_px(plan['stop'])}</code>  (HA zone low)",
-        f"TP:    <code>${fmt_px(plan['tp'])}</code>  "
-        f"({HA_RR}x the stop \u00b7 {HA_PARTIAL:.0%} booked there)",
-        f"<i>data: {esc(source)}</i>",
-        btc_context_line(),
-    ])
-
-
-def lifecycle_message(asset, kind, trade, exit_px, event_t, note):
-    emoji, title, sub = {
-        "TP_HALF": ("\U0001F3AF", "TARGET HIT",
-                    f"{HA_RR}R reached \u00b7 {HA_PARTIAL:.0%} booked, "
-                    "stop moved to entry"),
-        "RUNNER": ("\u2705", "RUNNER CLOSED",
-                   "smoothed HA flipped against the trade"),
-        "BE": ("\u27a1\ufe0f", "STOPPED AT ENTRY",
-               "the runner came back to breakeven"),
-        "STOP": ("\u274c", "STOPPED OUT", "stop level hit"),
-        "MANUAL": ("\u270b", "CLOSED BY HAND",
-                   "closed from the dashboard at market"),
-        "TP": ("\u2705", "TAKE PROFIT HIT", "target reached"),
-    }[kind]
-    pnl = pnl_pct(trade, exit_px)
-    return "\n".join([
-        f"{emoji} <b>{title} \u00b7 {esc(asset['symbol'])} "
-        f"{trade['verdict']}</b>  <code>{pnl:+.2f}%</code>",
-        f"{sub} at ${fmt_px(exit_px)} (entry ${fmt_px(trade['entry'])})",
-        esc(note) if note else "",
-        f"<i>{esc(asset['label'])} \u00b7 {esc(fmt_ts(event_t))}</i>",
-    ])
-
-
-# --------------------------- trade ledger ----------------------------------
-def already_closed(sym, trade, exit_px, kind):
-    """True if an identical close is already in the ledger - makes duplicate
-    close alerts structurally impossible."""
-    try:
-        lines = TRADES_LOG.read_text().splitlines()[-200:]
-    except OSError:
-        return False
-    for ln in lines:
-        try:
-            r = json.loads(ln)
-        except json.JSONDecodeError:
-            continue
-        if (r.get("sym") == sym and r.get("dir") == trade["verdict"]
-                and r.get("kind") == kind
-                and abs(r.get("entry", 0) - trade["entry"]) < 1e-12
-                and abs(r.get("exit", 0) - exit_px) < 1e-12):
-            return True
-    return False
-
-
-def record_close(sym, trade, exit_px, kind, t_event=None, frac=1.0):
-    """Append a closed trade to the ledger. t_event = the actual market time
-    of the exit, so late reconciliations book to the day they happened."""
-    try:
-        with open(TRADES_LOG, "a") as f:
-            f.write(json.dumps({
-                "t": int(t_event or now_ms()), "sym": sym,
-                "dir": trade["verdict"], "entry": trade["entry"],
-                "exit": exit_px, "kind": kind, "frac": frac,
-                "pnl_pct": round(pnl_pct(trade, exit_px) * frac, 3)}) + "\n")
-    except OSError:
-        pass
-
-
-def log_order(rec):
-    try:
-        with open(ORDERS_LOG, "a") as f:
-            f.write(json.dumps(rec) + "\n")
-    except Exception as e:
-        log(f"orders.log write failed: {type(e).__name__}")
-
-
-# --------------------------- state -----------------------------------------
-def blank_asset_state():
-    return {"phase": "SCAN", "last_candle_t": 0, "setup": None,
-            "traded": None, "trade": None}
-
-
-def load_state():
-    try:
-        raw = json.loads(STATE_FILE.read_text())
-    except (OSError, json.JSONDecodeError):
-        return {}
-    return raw if isinstance(raw, dict) else {}
-
-
-def save_state(state):
-    STATE_FILE.write_text(json.dumps(state, indent=2) + "\n")
-
-
-STATE_VIEW = {}
-
-
-# --------------------------- open-trade management -------------------------
-def ensure_flat(asset, trade, kind):
-    """The ledger just booked a close - make the exchange agree.
-
-    Two ways they drift apart. A STOP is detected from CANDLE data, which is
-    last-trade prints, while the exchange triggers its resting stop on MARK
-    price: a wick that moves the last trade but not the mark closes the
-    trade here and leaves the position open there. A RUNNER is worse - there
-    is no resting order for it at all, because the take-profit covered only
-    the partial, so nothing on the exchange ever closes it.
-
-    So: read the real position, and if it is not flat, close it at market.
-    """
-    if not EXEC_LIVE or not executable(asset["symbol"]) or not trade.get("size"):
-        return
-    ex = exec_client()
-    if not ex:
-        return
-    sym = exec_symbol(asset["symbol"])
-    try:
-        state = _EXEC["info"].user_state(_EXEC["addr"]) or {}
-        szi = 0.0
-        for p in state.get("assetPositions", []):
-            pos = p.get("position") or {}
-            if pos.get("coin") == sym:
-                szi = float(pos.get("szi") or 0)
-                break
-    except Exception as e:
-        log(f"{sym}: could not read the exchange position after {kind} "
-            f"({type(e).__name__}: {e}) - check it by hand")
-        return
-    if abs(szi) < 1e-12:
-        return                      # the exchange agrees, nothing to do
-    log(f"{sym}: ledger booked {kind} but the exchange still shows {szi} "
-        "open - closing at market")
-    try:
-        ex.market_close(sym)
-        log(f"{sym}: reconciling market close sent")
-    except Exception as e:
-        log(f"{sym}: reconciling close FAILED ({type(e).__name__}: {e})")
-        try:
-            send_telegram(f"\u26a0\ufe0f {esc(sym)} booked {kind} but is "
-                          f"STILL OPEN on Hyperliquid ({szi}) and the "
-                          "market close failed - close it by hand")
-        except Exception:
-            pass
-        return
-    for oid in (trade.get("stop_oid"), trade.get("tp_oid")):
-        if oid:
-            try:
-                ex.cancel(sym, oid)
-            except Exception:
-                pass
-
-
-def _close_trade(asset, trade, px, kind, event_t, note="", frac=None):
-    """Alert, log and book a close of `frac` of the position."""
-    sym = asset["symbol"]
-    frac = trade.get("left", 1.0) if frac is None else frac
-    if already_closed(sym, trade, px, kind):
-        log(f"{sym}: duplicate {kind} close suppressed")
-        return None, True
-    if ALERT_LIFECYCLE:
-        try:
-            send_telegram(lifecycle_message(asset, kind, trade, px,
-                                            event_t, note))
-        except Exception as e:
-            log(f"{sym}: {kind} alert failed: {type(e).__name__}: {e}")
-    log(f"{sym}: {kind} at ${fmt_px(px)}{' (intrabar)' if note else ''}")
-    record_close(sym, trade, px, kind, event_t, frac=frac)
-    plan_manage_orders(asset, kind, px)
-    # EVERY _close_trade call ends the position - the partial books through
-    # record_close directly, never here. The old `frac >= 0.999` guard was
-    # therefore wrong: a RUNNER closing its remaining half passes frac 0.5,
-    # so reconciliation was skipped on exactly the case that has NO resting
-    # order and most needs it. Seen live on HYPE, closed by hand.
-    ensure_flat(asset, trade, kind)
-    RUN_ALERTS.append(f"{sym} {kind} ({pnl_pct(trade, px) * frac:+.2f}%)")
-    return None, True
-
-
-def _book_partial(asset, trade, px, event_t):
-    """HA_PARTIAL comes off at the target, the stop moves to entry, and the
-    remainder runs until the HA flips. Booked as its own ledger row with
-    frac set, so partial P&L stays partial."""
-    sym = asset["symbol"]
-    record_close(sym, trade, px, "TP_HALF", event_t, frac=HA_PARTIAL)
-    trade["half"] = True
-    trade["left"] = round(1.0 - HA_PARTIAL, 6)
-    trade["stop"] = trade["entry"]
-    if ALERT_LIFECYCLE:
-        try:
-            send_telegram(lifecycle_message(asset, "TP_HALF", trade, px,
-                                            event_t, ""))
-        except Exception as e:
-            log(f"{sym}: TP_HALF alert failed: {type(e).__name__}")
-    log(f"{sym}: target hit at ${fmt_px(px)} - {HA_PARTIAL:.0%} booked, "
-        f"stop moved to entry ${fmt_px(trade['entry'])}, "
-        f"{trade['left']:.0%} running")
-    RUN_ALERTS.append(f"{sym} target hit, {HA_PARTIAL:.0%} booked")
-    move_stop_live(asset, trade)
-
-
-def process_open_trade(asset, trade, candles, ha, last_closed_t):
-    """Stop / target watch. Before the partial the stop is the HA zone low;
-    after it the stop is entry and the exit trigger is an HA flip against
-    the trade. The stop is always checked first within a candle."""
-    long = trade["verdict"] == "LONG"
-    changed = False
-    by_t = {h["t"]: h for h in ha}
-    for c in candles:
-        if c["t"] <= trade["checked_t"] or c["t"] > last_closed_t:
-            continue
-        changed = True
-        trade["checked_t"] = c["t"]
-        event_t = c["t"] + MS[TF]
-        if (c["l"] <= trade["stop"]) if long else (c["h"] >= trade["stop"]):
-            kind = "BE" if trade.get("half") else "STOP"
-            return _close_trade(asset, trade, trade["stop"], kind, event_t)
-        if not trade.get("half"):
-            if (c["h"] >= trade["tp"]) if long else (c["l"] <= trade["tp"]):
-                _book_partial(asset, trade, trade["tp"], event_t)
-            continue
-        h = by_t.get(c["t"])
-        if h and ha_green(h) != long:
-            return _close_trade(asset, trade, c["c"], "RUNNER", event_t,
-                                "smoothed HA flipped against the trade")
-
-    # ---- intrabar on the LIVE candle -------------------------------------
-    # a fast move can blow through the stop mid-candle. checked_t is NOT
-    # advanced here, and this block computes its own timestamp: the loop
-    # above may not have run this pulse, so its variables must never be
-    # referenced from here.
-    live = candles[-1]
-    if live["t"] > last_closed_t:
-        t_now = now_ms()
-        if (live["l"] <= trade["stop"]) if long else (live["h"] >= trade["stop"]):
-            kind = "BE" if trade.get("half") else "STOP"
-            return _close_trade(asset, trade, trade["stop"], kind, t_now,
-                                "Intrabar - stop traded before the close.")
-        if not trade.get("half"):
-            if (live["h"] >= trade["tp"]) if long else (live["l"] <= trade["tp"]):
-                _book_partial(asset, trade, trade["tp"], t_now)
-    return trade, changed
-
-
-# --------------------------- execution -------------------------------------
-_EXEC = {"ex": None, "info": None, "addr": None, "meta": None, "err": None,
-         "dexes": []}
-
-
-def exec_base_url():
-    return ("https://api.hyperliquid-testnet.xyz" if EXEC_TESTNET
-            else "https://api.hyperliquid.xyz")
-
-
-def exec_client():
-    """Lazily build the SDK client. Returns None (with a logged reason) if
-    the SDK, the key or the network is unavailable - never raises."""
-    if _EXEC["ex"] or _EXEC["err"]:
-        return _EXEC["ex"]
-    key = os.environ.get("HL_API_KEY", "").strip()
-    if not key:
-        _EXEC["err"] = "HL_API_KEY not set"
-    else:
-        try:
-            from eth_account import Account
-            from hyperliquid.exchange import Exchange
-            from hyperliquid.info import Info
-            wallet = Account.from_key(key)
-            addr = os.environ.get("HL_ACCOUNT_ADDRESS", "").strip() \
-                or wallet.address
-            base = exec_base_url()
-            dexes = [d for d in EXEC_BUILDER_DEXES if d]
-            ex = None
-            if dexes:
-                # The MAIN dex must be listed too. Passing only the builder
-                # names REPLACES the SDK's asset map instead of extending
-                # it, and every main-dex coin then raises KeyError - seen
-                # live as "could NOT set leverage to 3x (KeyError:
-                # 'CASHCAT')" on a plain main-dex market.
-                for attempt in ([""] + dexes, [None] + dexes):
-                    try:
-                        ex = Exchange(wallet, base, account_address=addr,
-                                      perp_dexs=attempt)
-                        log(f"execution client built with perp_dexs="
-                            f"{attempt}")
-                        break
-                    except Exception as e:
-                        log(f"perp_dexs={attempt} rejected "
-                            f"({type(e).__name__}: {e})")
-            if ex is None:
-                # Builder dexes are a bonus; main-dex trading is the job.
-                # Never let the extra feature take execution down with it.
-                ex = Exchange(wallet, base, account_address=addr)
-                if dexes:
-                    log("falling back to a MAIN-DEX-ONLY client - builder "
-                        "markets will be refused, main-dex trading is fine")
-                    dexes = []
-            _EXEC.update(ex=ex, info=Info(base, skip_ws=True), addr=addr)
-            _EXEC["dexes"] = dexes
-            # the universe check must know every market the client can
-            # reach, or builder symbols are refused as "not in the perp
-            # universe" even though the client could trade them
-            universe = list((_EXEC["info"].meta() or {}).get("universe", []))
-            for d in dexes:
-                try:
-                    extra = _EXEC["info"].meta(dex=d) or {}
-                    for u in extra.get("universe", []):
-                        # the dex meta may return names bare ("GOLD") or
-                        # ALREADY prefixed ("xyz:GOLD") - prefixing blindly
-                        # gives "xyz:xyz:GOLD", which matches nothing
-                        nm = u["name"]
-                        universe.append({**u,
-                                         "name": nm if ":" in nm
-                                         else f"{d}:{nm}"})
-                    log(f"builder dex '{d}': "
-                        f"{len(extra.get('universe', []))} markets tradable")
-                except Exception as e:
-                    log(f"builder dex '{d}' meta failed ({type(e).__name__}: "
-                        f"{e}) - its markets stay alert-only")
-            _EXEC["meta"] = {"universe": universe}
-            log(f"execution client ready on "
-                f"{'TESTNET' if EXEC_TESTNET else 'MAINNET'} for {addr[:10]}...")
-        except Exception as e:
-            _EXEC["err"] = f"{type(e).__name__}: {e}"
-    if _EXEC["err"]:
-        log(f"execution client unavailable ({_EXEC['err']}) - "
-            "alerts and order logging only, nothing will be sent")
-    return _EXEC["ex"]
-
-
-def sz_decimals(sym):
-    """Hyperliquid rejects sizes carrying too many decimals."""
-    meta = _EXEC.get("meta") or {}
-    for a in meta.get("universe", []):
-        if a.get("name") in (base_name(sym), sym):
-            return int(a.get("szDecimals", 4))
-    return 4
-
-
-def round_px(px):
-    """Perp prices: max 5 significant figures."""
-    if px <= 0:
-        return px
-    from decimal import Decimal
-    d = Decimal(repr(float(px)))
-    return float(round(d, -d.adjusted() + 4))
-
-
-def exec_blocked(open_count, day_pnl_usd):
-    """Reasons a live entry must not be sent."""
-    if os.path.exists(EXEC_HALT_FILE):
-        return "EXEC_HALT file present"
-    if EXEC_MAX_POSITIONS and open_count >= EXEC_MAX_POSITIONS:
-        return f"{open_count} positions already open (max {EXEC_MAX_POSITIONS})"
-    if day_pnl_usd <= -abs(EXEC_DAILY_LOSS_LIMIT_USD):
-        return f"daily loss limit hit ({day_pnl_usd:+.2f})"
-    return None
-
-
-def exec_symbol(symbol):
-    """The name the EXCHANGE expects. Builder markets keep their full
-    "xyz:GOLD" form now that the client is built with perp_dexs; only a
-    main-dex symbol is passed bare. place_entry_live and ensure_flat had
-    this inline while close_position_live and move_stop_live still used
-    base_name - so a manual close or a stop move on a commodity would have
-    been sent as "GOLD", which the client does not know."""
-    return symbol if ":" in symbol else base_name(symbol)
-
-
-def only_isolated(symbol):
-    """Does the VENUE forbid cross margin on this market?
-
-    Hyperliquid marks such assets in the perp meta - CASHCAT carries
-    onlyIsolated: True and marginMode: "strictIsolated". Reading the flag
-    beats discovering it by sending a cross request and being refused: one
-    less round trip, and the log stops implying something went wrong when
-    nothing did."""
-    sym = exec_symbol(symbol)
-    for a in (_EXEC.get("meta") or {}).get("universe", []):
-        if a.get("name") == sym:
-            return bool(a.get("onlyIsolated")) or \
-                a.get("marginMode") == "strictIsolated"
-    return False
-
-
-def eff_leverage(asset):
-    """The leverage the agent will actually use: the configured value, never
-    above what the market allows."""
-    cap = asset.get("lev") or EXEC_LEVERAGE
-    try:
-        return max(1, min(int(EXEC_LEVERAGE), int(cap)))
-    except (TypeError, ValueError):
-        return max(1, int(EXEC_LEVERAGE))
-
-
-def free_collateral():
-    """FREE INITIAL MARGIN: account value minus margin already committed.
-    None if the read fails.
-
-    NOT "withdrawable". That field answers a different question - how much
-    cash could leave the account right now - and it also nets off margin
-    reserved by resting orders. Measured live 3 Aug with 8 cross positions
-    and 15 resting stops/TPs: accountValue $372.53, totalMarginUsed
-    $225.02, so $147.51 of headroom, while withdrawable read 0.0. The guard
-    was refusing every entry on an account with room for four more.
-
-    Returning None rather than 0.0 on failure matters: the caller treats
-    None as "unknown, proceed" so a bad read cannot silently block every
-    entry. A real zero still blocks, and the venue is the final backstop -
-    if Hyperliquid disagrees it rejects the order and the NOT PLACED path
-    reports it honestly."""
-    try:
-        st = _EXEC["info"].user_state(_EXEC["addr"]) or {}
-        ms = st.get("crossMarginSummary") or st.get("marginSummary") or {}
-        return max(0.0, float(ms["accountValue"])
-                   - float(ms["totalMarginUsed"]))
-    except Exception as e:
-        log(f"free_collateral() failed: {type(e).__name__}: {e}")
-        return None
-
-
-def plan_entry_orders(asset, trade, live_px=None):
-    """Size the trade by fixed dollar risk and describe the orders. Logged
-    to orders.log. Returns the plan, or None.
-
-    Sizing uses `live_px` - the price of the still-forming candle - rather
-    than trade["entry"], which is the DOJI candle's close and is already
-    stale by the time the order goes out. Size is fixed at send time but the
-    fill lands at whatever the market is doing now, so sizing off the stale
-    price makes the realised risk drift: measured on his own fills it ranged
-    from $0.65 to $2.19 against a $2.00 target.
-    """
-    sym = asset["symbol"]
-    entry, stop, tp = trade["entry"], trade["stop"], trade["tp"]
-    long_ = trade["verdict"] == "LONG"
-    size_px = entry
-    if live_px:
-        live_gap = (live_px - stop) if long_ else (stop - live_px)
-        if live_gap > 0:
-            size_px = live_px          # only if it still leaves real risk
-    per_unit = abs(size_px - stop)
-    if per_unit <= 0:
-        return None
-    if EXEC_SIZING == "margin":
-        # collateral x leverage = position value. lev is clamped to the
-        # market's maximum, and place_entry_live SETS that same leverage on
-        # the exchange, so the two cannot disagree.
-        lev = eff_leverage(asset)
-        size = (EXEC_MARGIN_USD * lev) / size_px
-    elif EXEC_SIZING == "notional":
-        # the SAME dollar amount goes into every trade. What that costs if
-        # the stop hits then depends on the stop width: a 0.25% stop loses
-        # 0.25% of the position, a 3% stop loses 3%.
-        size = EXEC_NOTIONAL_USD / size_px
-    else:
-        size = EXEC_RISK_USD / per_unit
-    if size_px != entry:
-        log(f"{sym}: sizing off the live {fmt_px(size_px)} rather than the "
-            f"doji close {fmt_px(entry)} "
-            f"(stop {per_unit / size_px * 100:.3f}% vs "
-            f"{abs(entry - stop) / entry * 100:.3f}%)")
-    notional = size * size_px
-    capped = ""
-    if notional > EXEC_MAX_NOTIONAL_USD:
-        size = EXEC_MAX_NOTIONAL_USD / size_px
-        notional = EXEC_MAX_NOTIONAL_USD
-        capped = f" [notional capped, risk now ${size * per_unit:.2f}]"
-    rec = {"t": now_ms(), "sym": sym,
-           "mode": "live" if EXEC_LIVE else "sim",
-           "event": "ENTRY", "side": "buy" if long_ else "sell",
-           "size": round(size, 8), "entry": entry, "stop": stop, "tp": tp,
-           "notional_usd": round(notional, 2),
-           "risk_usd": round(size * per_unit, 2),
-           "stop_pct": round(per_unit / entry * 100, 3),
-           "orders": [
-               {"kind": "entry", "type": "market-IOC",
-                "side": "buy" if long_ else "sell", "size": round(size, 8)},
-               {"kind": "stop", "type": "stop-market", "reduce_only": True,
-                "trigger": stop, "size": round(size, 8)},
-               {"kind": "tp", "type": "limit", "reduce_only": True,
-                "price": tp, "size": round(size, 8)}]}
-    if EXEC_LOG_ORDERS:
-        log_order(rec)
-        log(f"{sym}: SIZED - {rec['side']} {size:.6g} @ ${fmt_px(entry)} = "
-            f"${notional:,.0f} notional, ${rec['risk_usd']:.2f} risk "
-            f"({rec['stop_pct']}% stop); stop ${fmt_px(stop)}, "
-            f"TP ${fmt_px(tp)}{capped}")
-    return rec
-
-
-def plan_manage_orders(asset, event, price):
-    if not EXEC_LOG_ORDERS:
-        return
-    action = {"STOP": "stop filled - flat",
-              "TP": "target filled - flat",
-              "TP_HALF": f"target filled - {HA_PARTIAL:.0%} booked, "
-                         "stop to entry",
-              "RUNNER": "HA flipped - runner closed at market",
-              "MANUAL": "closed by hand from the dashboard",
-              "BE": "runner stopped at entry - flat",
-              }.get(event)
-    if not action:
-        return
-    log_order({"t": now_ms(), "sym": asset["symbol"],
-               "mode": "live" if EXEC_LIVE else "sim",
-               "event": event, "price": price, "action": action})
-
-
-def rebase_to_fill(sym, trade, fill, long_):
-    """Re-derive the trade from the price actually paid. The stop is a
-    structural level - the HA zone low - so it does NOT move; the
-    target does, because 2R has to be measured from the real entry. Without
-    this, market-IOC slippage silently changes the risk:reward: a fill worse
-    than the candle close sits closer to the stop and further from the
-    target than the plan assumed."""
-    if not fill:
-        return
-    risk = (trade["stop"] - fill) if not long_ else (fill - trade["stop"])
-    if risk <= 0:
-        log(f"{sym}: filled at ${fmt_px(fill)}, through its own stop "
-            f"${fmt_px(trade['stop'])} - protective orders will close it")
-        return
-    slip = (fill - trade["entry"]) / trade["entry"] * 100
-    trade["entry"], trade["risk0"] = fill, risk
-    trade["tp"] = fill + HA_RR * risk if long_ else fill - HA_RR * risk
-    stop_pct = risk / fill * 100
-    log(f"{sym}: filled ${fmt_px(fill)} ({slip:+.3f}% vs plan) - TP re-based "
-        f"to ${fmt_px(trade['tp'])}, real stop {stop_pct:.3f}%")
-    if MIN_STOP_PCT and stop_pct < MIN_STOP_PCT:
-        log(f"{sym}: WARNING slippage left the stop {stop_pct:.3f}% away, "
-            f"under the {MIN_STOP_PCT}% floor")
-
-
-def resp_error(resp):
-    """Hyperliquid signals failure by RETURNING an error, not by raising.
-    Two shapes: {'status': 'err', 'response': '<msg>'} for account actions
-    like update_leverage, and a nested statuses[0]['error'] for orders. A
-    plain try/except catches neither. Seen live on xyz:SMSN: update_leverage
-    returned "Cross margin is not allowed for this asset." and the agent
-    carried on believing it had set 10x."""
-    if not isinstance(resp, dict):
-        return None if resp else "no response from the exchange"
-    if resp.get("status") == "err":
-        return str(resp.get("response") or "unspecified error")
-    return None
-
-
-def order_error(resp):
-    """Hyperliquid returns status 'ok' at the TOP level even when the order
-    was rejected - the real result sits in statuses[0]. Seen live on
-    xyz:SMSN: {'status': 'ok', ... 'statuses': [{'error': 'Insufficient
-    margin to place order.'}]}. Reading only the outer status made the agent
-    believe it held a position: it then placed a stop and a take-profit
-    against nothing, wrote a size onto the trade, and reported the alert as
-    placed. Returns the error string, or None if the order really went
-    through."""
-    try:
-        st = resp["response"]["data"]["statuses"][0]
-    except (KeyError, IndexError, TypeError):
-        return None if resp else "no response from the exchange"
-    if isinstance(st, dict) and st.get("error"):
-        return str(st["error"])
-    return None
-
-
-def fill_size(resp):
-    """How much of a market order ACTUALLY filled. A slippage-bounded IOC on
-    a thin book fills partially, and every protective order has to be sized
-    against the real position, not the requested one."""
-    try:
-        return float(resp["response"]["data"]["statuses"][0]["filled"]["totalSz"])
-    except (KeyError, IndexError, TypeError, ValueError):
-        return None
-
-
-def _req_file(sym):
-    safe = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in sym)
+from urllib.parse import urlparse, parse_qs
+
+STATE_FILE = Path("/opt/btc-agent/btc_agent_state.json")
+TRADES_LOG = Path("/opt/btc-agent/trades.log")
+DASH_KEY = os.environ.get("DASH_KEY", "")
+# Paste the id from a saved TradingView layout that already has Smoothed
+# Heiken Ashi applied, e.g. the "AbCd1234" in
+# https://www.tradingview.com/chart/AbCd1234/ - cards then open THAT layout
+# with the symbol swapped in, so the indicator comes with it. Indicators
+# cannot be passed as URL parameters; a saved layout is the only free route.
+# Left blank, cards open a plain chart instead.
+TV_LAYOUT = os.environ.get("TV_LAYOUT", "").strip().strip("/")
+CLOSE_REQ_DIR = STATE_FILE.parent / "close_requests"
+
+# The dashboard closes positions ITSELF so a manual close is immediate rather
+# than waiting up to SCAN_EVERY for the agent to notice. It reuses the
+# agent's own execution code - same client, same rounding, same order
+# sequence - instead of a second implementation that could drift.
+try:
+    import btc_alert_agent as agent          # same directory on the droplet
+except BaseException as _e:                  # dashboard must still run alone
+    # BaseException, not Exception: the agent calls raise SystemExit on a bad
+    # config value, and SystemExit is NOT an Exception - catching only
+    # Exception would let it kill the dashboard at import time
+    agent = None
+    print(f"agent module unavailable ({type(_e).__name__}: {_e}) - "
+          "manual closes will be queued for the agent instead")
+
+
+def _req_path(sym):
+    safe = "".join(c if c.isalnum() or c in "._-" else "_" for c in sym)
     return CLOSE_REQ_DIR / (safe + ".req")
 
 
-def close_requested(sym):
-    """The dashboard's close request for this symbol, or None.
-
-    `done: True` means the DASHBOARD already closed it on the exchange and
-    already booked the ledger row - all that is left is clearing state, and
-    the agent must NOT close or book again.
-    """
+def pending_closes():
+    """Symbols already closed here and waiting for the agent to clear state.
+    They are hidden from the panels so a closed position does not linger."""
+    out = set()
     try:
-        f = _req_file(sym)
-        if not f.exists():
-            return None
-        return json.loads(f.read_text())
-    except (OSError, json.JSONDecodeError):
-        return {}          # unreadable marker still means "close this"
-
-
-def clear_close_request(sym):
-    try:
-        _req_file(sym).unlink()
+        for f in CLOSE_REQ_DIR.glob("*.req"):
+            try:
+                r = json.loads(f.read_text())
+            except (OSError, json.JSONDecodeError):
+                continue
+            if r.get("done") and r.get("sym"):
+                out.add(r["sym"])
     except OSError:
+        pass
+    return out
+
+
+def request_close(sym, shown=None):
+    """Close this position NOW at the price the card is showing.
+
+    Only symbols the agent currently holds a trade on are accepted, so a
+    stray request cannot act on a position that does not exist.
+
+    `shown` is the "now" price the button was displaying. It is used when it
+    agrees with the server's own mid, so the P&L booked is the one the user
+    was looking at when they tapped. It is NEVER trusted blindly - a stale
+    tab or a hand-edited URL could otherwise book any figure it liked.
+    """
+    state, _ = read_state()
+    ast = state.get(sym)
+    if not isinstance(ast, dict) or not ast.get("trade"):
+        return False, "no open trade on that symbol"
+    trade = dict(ast["trade"])
+
+    mid = (prices() or {}).get(sym)
+    px = mid
+    if shown and mid and abs(shown - mid) / mid <= 0.05:
+        px = shown                     # within 5% of the live mid: use it
+    elif shown and not mid:
+        px = shown                     # no server price, the card had one
+    if not px:
+        # Never fall back to the entry price. That silently books a 0.00%
+        # close, which is a fabricated result sitting in the ledger the
+        # strategy is being judged on.
+        return False, "no live price for that symbol - not closing blind"
+
+    done, note = False, "queued for the agent"
+    if agent is not None:
+        try:
+            if agent.EXEC_LIVE and agent.executable(sym) and trade.get("size"):
+                agent.close_position_live({"symbol": sym, "hl_coin": sym,
+                                           "label": sym, "fallbacks": []},
+                                          trade)
+                note = "closed at market"
+            else:
+                note = ("alert-only symbol - nothing to close on the exchange"
+                        if not agent.executable(sym) else "no live position")
+            # book it here too, so P&L updates immediately. record_close
+            # appends a single line in "a" mode, which is atomic enough for
+            # two processes.
+            agent.record_close(sym, trade, px, "MANUAL",
+                               int(time.time() * 1000),
+                               frac=trade.get("left", 1.0))
+            done = True
+        except Exception as e:
+            return False, f"close failed ({type(e).__name__}: {e})"
+
+    try:
+        CLOSE_REQ_DIR.mkdir(parents=True, exist_ok=True)
+        _req_path(sym).write_text(json.dumps(
+            {"sym": sym, "asked": time.time(), "done": done, "exit": px}))
+    except OSError as e:
+        return False, f"closed, but the state marker failed ({type(e).__name__})"
+    return True, note
+PORT = int(os.environ.get("DASH_PORT", "8080"))
+
+_price_cache = {"t": 0.0, "mids": {}}
+
+
+def _mids_for(dex=None):
+    """allMids for one venue. Builder venues need an explicit dex arg;
+    their keys may come back bare ('GOLD') or prefixed ('xyz:GOLD')."""
+    payload = {"type": "allMids"}
+    if dex:
+        payload["dex"] = dex
+    req = urllib.request.Request(
+        "https://api.hyperliquid.xyz/info",
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=6) as r:
+        raw = json.loads(r.read())
+    out = {}
+    for k, v in raw.items():
+        try:
+            px = float(v)
+        except (TypeError, ValueError):
+            continue
+        out[k] = px
+        if dex and ":" not in k:
+            out[f"{dex}:{k}"] = px          # match how the agent names them
+    return out
+
+
+_btc = {"t": 0.0, "px": None, "chg": None, "prev": None}
+
+
+def btc_prev_close():
+    """Yesterday's BTC price. Changes once a day, so cache it for 10 minutes.
+    The LIVE price comes from allMids, which the dashboard already fetches."""
+    if _btc["prev"] is not None and time.time() - _btc["t"] < 600:
+        return _btc["prev"]
+    try:
+        req = urllib.request.Request(
+            "https://api.hyperliquid.xyz/info",
+            data=json.dumps({"type": "metaAndAssetCtxs"}).encode(),
+            headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=6) as r:
+            meta, ctxs = json.loads(r.read())
+        idx = next(i for i, a in enumerate(meta["universe"])
+                   if a["name"] == "BTC")
+        ctx = ctxs[idx]
+        _btc.update(t=time.time(),
+                    prev=float(ctx.get("prevDayPx") or 0) or None)
+    except Exception:
+        _btc["t"] = time.time()          # do not hammer on failure
+    return _btc["prev"]
+
+
+def _btc_now(mids):
+    """Live BTC price straight from the mids we already fetched."""
+    px = mids.get("BTC")
+    prev = btc_prev_close()
+    return {"px": px,
+            "chg": ((px - prev) / prev * 100) if (px and prev) else None}
+
+
+MIDS_TTL_S = 3.0        # allMids is fetched once per venue, so the SSE tick
+                        # rate used to multiply straight into API calls
+
+
+def prices():
+    if time.time() - _price_cache["t"] < MIDS_TTL_S:
+        return _price_cache["mids"]
+    mids = {}
+    try:
+        mids.update(_mids_for())
+    except Exception:
+        pass
+    # every venue that appears in state (xyz, km, ...) gets its own call
+    state, _ = read_state()
+    # venue list changes only when the universe does - no need to re-derive
+    dexes = sorted({k.split(":")[0] for k in state
+                    if isinstance(k, str) and ":" in k and not k.startswith("_")})
+    for dex in dexes:
+        try:
+            mids.update(_mids_for(dex))
+        except Exception:
+            continue
+    if mids:
+        _price_cache.update(t=time.time(), mids=mids)
+    return _price_cache["mids"]
+
+
+SSE_TICK_S = 2.0        # how often the stream pushes a fresh snapshot
+BUILD = str(int(os.path.getmtime(__file__)))   # changes on every deploy
+
+
+def read_state():
+    try:
+        return json.loads(STATE_FILE.read_text()), STATE_FILE.stat().st_mtime
+    except Exception:
+        return {}, 0
+
+
+def journal_events(n=400, keep=25):
+    try:
+        out = subprocess.run(
+            ["journalctl", "-u", "btc-agent", "-n", str(n), "--no-pager",
+             "-o", "cat"], capture_output=True, text=True, timeout=5).stdout
+    except Exception:
+        return []
+    events = []
+    for line in out.splitlines():
+        if any(k in line for k in ("ALERT SENT", "ENTRY",
+                                   "LIVE", "SIZED", "UNPROTECTED",
+                                   "order blocked", "execution client",
+                                   "smoothed HA flipped", "target hit",
+                                   "stop moved to entry", "too tight",
+                                   "HA flipped against", "setup cleared",
+                                   "TP_HALF", "RUNNER", "BE", "STOPPED OUT",
+                                   "skipped", "SUMMARY")):
+            events.append(line.strip())
+    return events[-keep:][::-1]
+
+
+_TALLY = {"t": 0.0, "v": None}
+TALLY_TTL_S = 120.0          # one journalctl call every 2 min, not every tick
+
+
+def signal_tally(hours=24):
+    """How many doji signals fired, how many were TAKEN, and why the rest
+    were refused. The question this answers is whether MIN_STOP_PCT is
+    protecting the account or starving it - and the event log alone cannot
+    say, because you would have to scroll and count.
+    """
+    now = time.time()
+    if _TALLY["v"] is not None and now - _TALLY["t"] < TALLY_TTL_S:
+        return _TALLY["v"]
+    taken = tight = norisk = 0
+    try:
+        out = subprocess.run(
+            ["journalctl", "-u", "btc-agent", "--since", f"{hours} hours ago",
+             "--no-pager", "-o", "cat"],
+            capture_output=True, text=True, timeout=8).stdout
+        for line in out.splitlines():
+            if "SIZED -" in line:
+                taken += 1
+            elif "too tight to be worth fees" in line:
+                tight += 1
+            elif "no risk distance" in line:
+                norisk += 1
+    except Exception:
+        return _TALLY["v"] or {"signals": 0, "taken": 0, "tight": 0,
+                               "norisk": 0, "hours": hours}
+    v = {"signals": taken + tight + norisk, "taken": taken, "tight": tight,
+         "norisk": norisk, "hours": hours}
+    _TALLY["t"], _TALLY["v"] = now, v
+    return v
+
+
+def merge_partials(raw):
+    """One TRADE, one row. A partial books TP_HALF and the remainder books
+    RUNNER or BE later, so a single trade writes two ledger lines - and
+    counting them separately double-counts the wins and the trade total.
+
+    There is no trade id in the ledger, so rows are paired on
+    (symbol, direction, entry). The pnl_pct values are already weighted by
+    `frac`, so summing them gives the whole trade's return. The merged row
+    is dated and priced by the FINAL close.
+    """
+    out, index = [], {}
+    for r in raw:
+        key = (r.get("sym"), r.get("dir"), round(r.get("entry", 0), 10))
+        prev = index.get(key)
+        # only merge into a trade that is still incomplete - once the frac
+        # reaches 1.0 the next TP_HALF on the same symbol and price is a
+        # genuinely new trade
+        if prev is not None and prev["frac"] < 0.999:
+            prev["pnl_pct"] = round(prev["pnl_pct"] + r.get("pnl_pct", 0), 3)
+            prev["frac"] = round(prev["frac"] + r.get("frac", 1.0), 6)
+            prev["exit"] = r.get("exit", prev["exit"])
+            prev["t"] = max(prev.get("t", 0), r.get("t", 0))
+            prev["kind"] = ("TP_RUNNER" if r.get("kind") == "RUNNER"
+                            else "TP_BE" if r.get("kind") == "BE"
+                            else r.get("kind", prev["kind"]))
+            continue
+        row = dict(r)
+        row["frac"] = r.get("frac", 1.0)
+        row["pnl_pct"] = r.get("pnl_pct", 0)
+        out.append(row)
+        index[key] = row
+    return out
+
+
+def closed_trades(keep=200):
+    try:
+        lines = TRADES_LOG.read_text().splitlines()[-2000:]
+    except OSError:
+        # must match the shape window() returns below, per period - returning
+        # bare floats here is what used to throw in the browser and show
+        # OFFLINE whenever trades.log was missing
+        empty = {"pnl": 0.0, "w": 0, "l": 0}
+        return [], {"d": dict(empty), "w": dict(empty), "m": dict(empty)}
+    raw = []
+    for ln in lines:
+        try:
+            raw.append(json.loads(ln))
+        except json.JSONDecodeError:
+            continue
+    rows = merge_partials(raw)
+    now_ms = time.time() * 1000
+    def window(days):
+        cut = now_ms - days * 86400_000
+        sub = [r for r in rows if r.get("t", 0) >= cut]
+        return {"pnl": round(sum(r.get("pnl_pct", 0) for r in sub), 2),
+                "w": sum(1 for r in sub if r.get("pnl_pct", 0) > 0),
+                "l": sum(1 for r in sub if r.get("pnl_pct", 0) < 0)}
+    pnl = {"d": window(1), "w": window(7), "m": window(30)}
+    # Sort by the CLOSE time, newest first. File order is not close order:
+    # merge_partials folds a RUNNER into the TP_HALF row that came before it,
+    # and that row keeps its original position in the file. So a trade whose
+    # partial booked hours ago and whose runner just closed would sit buried
+    # in the middle of the list instead of at the top where it belongs.
+    rows.sort(key=lambda r: r.get("t", 0), reverse=True)
+    return rows[:keep], pnl
+
+
+def _lvl(v):
+    """Level as a display string, tolerant of sub-dollar markets."""
+    if v is None:
+        return "?"
+    # two more decimals than before, matching fmt_px in the agent
+    return f"{v:,.8f}".rstrip("0").rstrip(".") if v < 1 else f"{v:,.4f}"
+
+
+def scan_age_s(state, mtime):
+    """Seconds since the agent last completed a scan. Prefers the explicit
+    heartbeat the agent writes into _meta; falls back to the file mtime."""
+    last = (state.get("_meta") or {}).get("last_scan_utc")
+    if last:
+        try:
+            return int(time.time() - datetime.fromisoformat(last).timestamp())
+        except (ValueError, TypeError):
+            pass
+    return int(time.time() - mtime) if mtime else None
+
+
+def build_data():
+    state, mtime = read_state()
+    mids = prices()
+    trades, runners, gates = [], [], []
+    closing = pending_closes()
+    scanned = 0
+    for sym, ast in state.items():
+        if sym.startswith("_") or not isinstance(ast, dict):
+            continue
+        scanned += 1
+        mid = mids.get(sym)
+        tr = ast.get("trade")
+        if tr and sym in closing:
+            continue          # closed from here, waiting for the agent
+
+        g = ast.get("gate")
+        if g and not tr:
+            # only symbols with NO open trade - once it is in a trade the
+            # gate chain is behind it and the open-trades panel owns the row
+            gates.append(dict(g, sym=sym, mid=mid))
+
+        if tr:
+            sign = 1 if tr["verdict"] == "LONG" else -1
+            tp = tr.get("tp")
+            risk = tr.get("risk0") or abs(tr["entry"] - tr["stop"]) or 1
+            pnl = r_now = None
+            if mid:
+                pnl = sign * (mid - tr["entry"]) / tr["entry"] * 100
+                r_now = sign * (mid - tr["entry"]) / risk
+            # a trade that has booked its partial is a RUNNER: risk-free,
+            # stop at entry, closing only when the HA flips. It gets its own
+            # list so the open-trades panel stays "still at risk"
+            (runners if tr.get("half") else trades).append(
+                          {"sym": sym, "dir": tr["verdict"],
+                           "half": bool(tr.get("half")),
+                           "left": tr.get("left", 1.0),
+                           "lev": ast.get("lev"), "risk": risk,
+                           "entry": tr["entry"], "stop": tr["stop"],
+                           "tp": tp, "mid": mid, "pnl": pnl, "r": r_now,
+                           "rr": tr.get("rr"),
+                           "opened_t": tr.get("opened_t", 0)})
+
+    # fullest bar at the top. The open-trade bar is one scale - stop at 0%,
+    # entry at 40%, target at 100% - so sorting by R puts the trade closest
+    # to its target first and the one closest to its stop last. Rebuilt on
+    # every SSE tick, so the order re-shuffles live as prices move.
+    trades.sort(key=lambda t: (t["r"] is None,
+                               -(t["r"] if t["r"] is not None else 0),
+                               t["sym"]))
+    # best-performing runner first - it is the one closest to being given
+    # back if the HA turns
+    runners.sort(key=lambda t: -(t["r"] if t["r"] is not None else -99))
+    # closest to firing first: "ready" at the top, then whoever has the
+    # longest run behind them, since that is the one nearest a doji
+    _ORDER = {"ready": 0, "confirming": 1, "doji, awaiting confirmation": 2,
+              "confirmation failed": 3, "waiting for flip": 4,
+              "doji too small": 5, "waiting for doji": 6,
+              "trend too flat": 7, "no run": 8, "warming up": 9}
+    gates.sort(key=lambda x: (_ORDER.get(x.get("stage"), 9),
+                              -(x.get("run") or 0), x["sym"]))
+    closed, pnl = closed_trades()
+    return {"now": time.time(),
+            "state_age_s": scan_age_s(state, mtime),
+            # TradingView's interval code for whatever TF the agent runs, so
+            # a card never opens a different timeframe from the one traded
+            # render every timestamp in the AGENT's timezone, not the
+            # browser's - otherwise a phone in another zone shows closed
+            # trades at times that do not match the agent's own logs
+            "tz": (state.get("_meta") or {}).get("tz", "America/Chicago"),
+            # opened_t is the candle's OPEN time but the entry happens at its
+            # CLOSE, so the age needs one candle added to be honest
+            "tf_ms": {"5m": 300_000, "15m": 900_000, "30m": 1_800_000,
+                      "1h": 3_600_000, "4h": 14_400_000}.get(
+                (state.get("_meta") or {}).get("tf", "15m"), 900_000),
+            "tv_interval": {"5m": "5", "15m": "15", "30m": "30",
+                            "1h": "60", "4h": "240"}.get(
+                (state.get("_meta") or {}).get("tf", "15m"), "15"),
+            # the agent publishes its own pulse, so the staleness threshold
+            # follows SCAN_EVERY instead of assuming the old 5m loop. Two
+            # missed scans plus a minute of slack before anything is wrong.
+            "stale_after_s": 2 * int((state.get("_meta") or {})
+                                     .get("scan_every_s", 300)) + 60,
+            "scanned": scanned, "trades": trades, "runners": runners,
+            "gates": gates,
+            "tally": signal_tally(),
+            "closed": closed, "pnl": pnl, "build": BUILD,
+            "btc": _btc_now(mids),
+            "events": journal_events()}
+
+
+PAGE = """<!DOCTYPE html><html><head>
+<script>
+/* FIRST script on the page, deliberately separate and tiny. A parse error in
+   the main script block kills every listener registered INSIDE that block,
+   which is why a broken page showed no banner and no badge - the handler
+   never existed. Registered here, it survives whatever happens later. */
+window.__err = null;
+/* WebKit reports a bare "Script error." with no line for same-origin inline
+   code, so the error message cannot tell us WHERE it died. This does: every
+   stage calls step(), and whatever the last recorded stage is, that is the
+   line that failed. Always on - it is a handful of string appends. */
+window.__steps = [];
+window.__rendered = false;   /* set true by the first successful render */
+window.__debug = (location.search.indexOf('debug') >= 0);
+function step(name) {
+  window.__steps.push(name);
+  if (window.__steps.length > 14) window.__steps.shift();   /* keep it short */
+  /* Once a render has succeeded the page is demonstrably working, so the
+     trace is just noise - it only stays visible while something is wrong,
+     or when ?debug is in the URL. */
+  var b = document.getElementById('jstrace');
+  if (!b) return;
+  if (window.__rendered && !window.__debug) { b.style.display = 'none'; return; }
+  b.style.display = 'block';
+  b.textContent = 'trace: ' + window.__steps.join(' > ');
+}
+step('early');
+window.onerror = function (m, src, line, col) {
+  window.__err = m + '  [line ' + line + ':' + col + ']';
+  show__err();
+  return false;
+};
+function show__err() {
+  if (!window.__err) return;
+  /* WebKit reports a bare masked "Script error." for things that are not
+     fatal. If the page has rendered at least once it is working, so do not
+     alarm with a banner unless ?debug is set. */
+  if (window.__rendered && !window.__debug
+      && String(window.__err).indexOf('Script error') === 0) {
+    window.__err = null; return;
+  }
+  var b = document.getElementById('jserr');
+  if (!b) return;
+  b.style.display = 'block';
+  b.textContent = 'JS ERROR: ' + window.__err;
+  var s = document.getElementById('status');
+  if (s) { s.textContent = 'JS ERROR'; s.className = 'badge warn'; }
+}
+document.addEventListener('DOMContentLoaded', show__err);
+window.addEventListener('load', function () {
+  /* window.onerror reports a bare "Script error." with no line in some
+     WebKit builds even for same-origin inline code, so it cannot say WHERE.
+     This marker can: the main block sets __mainOK on its very last line, so
+     if it is missing the block never finished parsing - a completely
+     different fault from a render or fetch failure. */
+  if (!window.__mainOK) {
+    window.__err = (window.__err ? window.__err + '   |   ' : '')
+      + 'MAIN SCRIPT NEVER FINISHED PARSING';
+  }
+  show__err();
+});
+</script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Signal Agent</title><style>
+body{background:#0d1117;color:#e6edf3;font-family:-apple-system,Segoe UI,sans-serif;
+     margin:0;padding:12px;font-size:14px}
+h1{font-size:17px;margin:4px 0 12px}
+.lev{font-size:10.5px;font-weight:800;color:#8b949e;background:#21262d;
+     padding:2px 7px;border-radius:999px;vertical-align:middle}
+.badge{display:inline-block;padding:2px 9px;border-radius:10px;font-size:12px;
+       font-weight:600;margin-left:8px}
+.ok{background:#12351f;color:#3fb950}.warn{background:#3a2b12;color:#d29922}
+.closebtn{background:transparent;border:0.5px solid #6e7681;color:#c9d1d9;
+  font:12px inherit;padding:8px 16px;border-radius:10px;cursor:pointer;
+  min-height:34px;touch-action:manipulation}
+.closebtn:hover:enabled{border-color:#f85149;color:#f85149}
+.closebtn:disabled{opacity:.55;cursor:default}
+.card.tv{cursor:pointer}
+.card.tv:hover{border-color:#3d444d}
+.card{background:#161b22;border:1px solid #21262d;border-radius:10px;
+      padding:11px 13px;margin-bottom:9px}
+.sym{font-weight:700;font-size:15px}
+.long{color:#3fb950}.short{color:#f85149}
+.num{font-family:Menlo,monospace}
+.row{display:flex;justify-content:space-between;margin:3px 0}
+.muted{color:#8b949e;font-size:12px}
+.bar{height:6px;background:#21262d;border-radius:3px;margin:7px 0 2px;overflow:hidden}
+.fill{height:100%;border-radius:3px}
+.section{margin:16px 0 8px;font-size:12px;letter-spacing:1.5px;color:#8b949e;
+         text-transform:uppercase}
+.event{font-family:Menlo,monospace;font-size:11px;color:#8b949e;
+       padding:3px 0;border-bottom:1px solid #161b22;word-break:break-all}
+.pnl-pos{color:#3fb950;font-weight:700}.pnl-neg{color:#f85149;font-weight:700}
+.tabs{display:flex;gap:6px}
+.tab{flex:1;text-align:center;padding:6px 0;border-radius:8px;font-size:12px;
+     font-weight:600;color:#8b949e;background:#0d1117;border:1px solid #21262d}
+.tab.active{color:#e6edf3;background:#21262d}
+.total{font-size:30px;font-weight:800;font-family:Menlo,monospace;
+       text-align:center;margin:8px 0 10px}
+.shead{cursor:pointer;-webkit-user-select:none;user-select:none}
+.chev{display:inline-block;width:13px}
+.cnt{color:#e6edf3;background:#21262d;border-radius:8px;padding:0 7px;
+     margin-left:6px;font-size:11px}
+</style></head><body>
+<h1>Signal Agent <span id=status class=badge></span>
+<span id=meta class=muted style="font-weight:400;font-size:12px"></span></h1>
+<div id=tally class=muted style="font-size:12px;margin:-4px 0 10px 2px"></div>
+<div id=jstrace style="display:none;background:#161b22;
+ border:0.5px solid #30363d;color:#8b949e;border-radius:12px;
+ padding:8px 12px;margin-bottom:8px;font:11px ui-monospace,Menlo,monospace;
+ word-break:break-all"></div>
+<div id=jserr style="display:none;background:#3d1418;border:0.5px solid #f85149;
+ color:#ffa198;border-radius:12px;padding:10px 14px;margin-bottom:10px;
+ font:12px ui-monospace,Menlo,monospace;white-space:pre-wrap"></div>
+<div id=btcbar class=card style="display:flex;justify-content:space-between;
+     align-items:center;padding:9px 13px;position:sticky;top:0;z-index:20;
+     backdrop-filter:blur(8px);background:rgba(22,27,34,.92)">
+  <span style="font-weight:800;font-size:14px">BTC</span>
+  <span id=btcpx style="font-family:ui-monospace,monospace;font-size:15px">-</span>
+  <span id=btcchg style="font-weight:800;font-size:13px">-</span>
+</div>
+<div class=card>
+  <div id=total class=total>-</div>
+  <div id=wl class=muted style="text-align:center;margin:-6px 0 10px"></div>
+  <div class=tabs>
+    <div class="tab active" data-p=d onclick="setP('d')">DAY</div>
+    <div class=tab data-p=w onclick="setP('w')">WEEK</div>
+    <div class=tab data-p=m onclick="setP('m')">MONTH</div>
+  </div>
+</div>
+<div class="section shead" onclick="toggle('trades')"><span class=chev id=c-trades>\u25be</span>Open trades<span class=cnt id=n-trades>0</span></div><div id=trades></div>
+<div class="section shead" onclick="toggle('runners')"><span class=chev id=c-runners>\u25be</span>Runners<span class=cnt id=n-runners>0</span></div><div id=runners></div>
+<div class="section shead" onclick="toggle('gates')"><span class=chev id=c-gates>\u25be</span>Setup pipeline<span class=cnt id=n-gates>0</span> <span id=gsub class=muted style="float:right;text-transform:none;letter-spacing:0"></span></div><div id=gates></div>
+<div class="section shead" onclick="toggle('closed')"><span class=chev id=c-closed>\u25be</span>Closed trades<span class=cnt id=n-closed>0</span> <span id=csub class=muted style="float:right;text-transform:none;letter-spacing:0"></span></div><div id=closed></div>
+<div class="section shead" onclick="toggle('events')"><span class=chev id=c-events>\u25be</span>Recent events<span class=cnt id=n-events>0</span></div><div id=events></div>
+<script>
+const CLOSED_CARDS=50;   // cards drawn; the badge always shows the true count
+let TVINT='15';   // replaced from _meta.tf on the first poll
+let TZ='America/Chicago';   // replaced from _meta.tz on the first poll
+const TVLAYOUT=__TV_LAYOUT__;
+// a saved layout carries its indicators; a bare /chart/ does not
+const TVBASE='https://www.tradingview.com/chart/'+(TVLAYOUT?TVLAYOUT+'/':'')+'?symbol=';
+// inline onclick handlers run in GLOBAL scope, so these must live at the top
+// level - defined inside a render function they are invisible to the cards.
+// Main-dex perps are HYPERLIQUID:<TICKER>USDC.P; builder-venue symbols
+// (xyz:ARM, xyz:CL) are equities and commodities TradingView carries under
+// their own tickers, so the bare name resolves better.
+function tradeAge(openedT){
+  // how long the position has been on. opened_t is the candle open, the fill
+  // is at its close, so add one candle.
+  if(!openedT) return '';
+  var ms = Date.now() - (openedT + (window.__tfms||900000));
+  if(ms < 0) return 'just now';
+  var m = Math.floor(ms/60000), h = Math.floor(m/60), dd = Math.floor(h/24);
+  if(dd >= 1) return dd + 'd ' + (h%24) + 'h';
+  if(h >= 1)  return h + 'h ' + (m%60) + 'm';
+  return m + 'm';
+}
+
+// Every market here is a Hyperliquid perp and TradingView carries them
+// ALL - the builder dex included, as "<NAME>USDC.P" on the Trade[XYZ]
+// HIP-3 venue. That is the SAME instrument the agent trades, so there is
+// nothing left to map: no futures proxies (BZ1! was ~7% off), no guessed
+// foreign listings (KRX quotes in won, ~600x off), no no-chart list for
+// SpaceX or the in-house baskets - they all have real charts here.
+//   main dex    BTC       -> HYPERLIQUID:BTCUSDC.P
+//   builder dex xyz:GOLD  -> GOLDUSDC.P
+function tvSym(sym){
+  if(sym.indexOf(':')>=0)
+    return encodeURIComponent(sym.split(':').pop()+'USDC.P');
+  // main-dex perps keep their exact Hyperliquid name, k-prefix included
+  return encodeURIComponent('HYPERLIQUID:'+sym+'USDC.P');
+}
+// iPadOS and iOS have no popup windows - every browser there, Brave included,
+// runs on WebKit. window.open with a feature string is treated as a popup and
+// blocked, and a _blank retry is blocked too because the click gesture is
+// already spent. A synthetic anchor click is ordinary link navigation, which
+// is never blocked, and a named target still reuses a single tab.
+const TOUCH = (navigator.maxTouchPoints || 0) > 1 ||
+              !window.matchMedia('(hover: hover)').matches;
+
+function closeRunner(ev, sym){
+  ev.stopPropagation();          // the card itself opens TradingView
+  // GRAB THE BUTTON FIRST. ev.currentTarget is only valid while the event
+  // is being dispatched, and confirm() BLOCKS - on iOS the dispatch has
+  // finished by the time the dialog returns, so currentTarget is null and
+  // reading .disabled or .getAttribute on it throws. That killed the
+  // handler before fetch ever ran: the button simply did nothing.
+  var b = ev.currentTarget || ev.target;
+  var shown = (b && b.getAttribute('data-px')) || '';
+  // Never write a backslash escape in this file: PAGE is a non-raw
+  // triple-quoted Python string, so it resolves when Python parses the
+  // file and lands as a REAL newline in the served HTML - which breaks
+  // whatever string or comment it sits in. Keep this text on one line.
+  if(!confirm('Close '+sym+' at market NOW? This sends the order immediately '
+      +'and cancels the resting stop and target.')) return;
+  if(b){ b.disabled = true; b.textContent = 'closing...'; }
+  fetch('/close?sym='+encodeURIComponent(sym)
+        +(shown?'&px='+encodeURIComponent(shown):'')
+        +(KEY?'&key='+KEY:''), {method:'POST'})
+    .then(r=>r.json())
+    .then(j=>{ if(b) b.textContent = j.ok ? 'closed' : 'failed';
+               if(!j.ok){ if(b) b.disabled=false;
+                          alert(j.msg||'close failed'); } })
+    .catch(e=>{ if(b){ b.textContent='failed'; b.disabled=false; }
+                alert('close failed: '+(e&&e.message?e.message:e)); });
+}
+
+function tvOpen(sym){
+  const url = TVBASE + tvSym(sym) + '&interval=' + TVINT;
+  if (TOUCH) {
+    const a = document.createElement('a');
+    a.href = url; a.target = 'tvchart'; a.rel = 'noopener';
+    document.body.appendChild(a); a.click(); a.remove();
+    return;
+  }
+  // desktop: a NAMED, sized window, so a second card replaces the chart in
+  // the same popup instead of stacking tabs
+  const w = Math.min(1400, Math.round(screen.availWidth * 0.72));
+  const h = Math.min(900,  Math.round(screen.availHeight * 0.8));
+  const l = Math.round((screen.availWidth - w) / 2);
+  const t = Math.round((screen.availHeight - h) / 2);
+  const win = window.open(url, 'tvchart',
+    `popup=yes,width=${w},height=${h},left=${l},top=${t},` +
+    'toolbar=no,menubar=no,location=no,status=no');
+  if (win) { win.focus(); return; }
+  const a = document.createElement('a');       // popup blocked - fall back to
+  a.href = url; a.target = 'tvchart';          // plain link navigation
+  document.body.appendChild(a); a.click(); a.remove();
+}
+const KEY=new URLSearchParams(location.search).get('key')||'';
+let PERIOD='d', LAST=null;
+let COLLAPSED={};
+try{COLLAPSED=JSON.parse(localStorage.getItem('dashCollapsed')||'{}')}catch(e){}
+function applyCollapse(){['trades','runners','gates','closed','events'].forEach(id=>{
+ const el=document.getElementById(id), ch=document.getElementById('c-'+id);
+ if(el)el.style.display=COLLAPSED[id]?'none':'';
+ if(ch)ch.textContent=COLLAPSED[id]?'\u25b8':'\u25be'})}
+function toggle(id){COLLAPSED[id]=!COLLAPSED[id];
+ try{localStorage.setItem('dashCollapsed',JSON.stringify(COLLAPSED))}catch(e){}
+ applyCollapse()}
+const DAYS={d:1,w:7,m:30}, LABEL={d:'last 24h',w:'last 7 days',m:'last 30 days'};
+function setP(p){PERIOD=p;
+ document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.dataset.p===p));
+ if(LAST)render(LAST);}
+function px(p){if(p==null)return '-';
+ return p>=10000?p.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})
+ :p>=1?p.toFixed(4):p.toFixed(8)}
+function render(d){
+ if(d.btc&&d.btc.px!=null){
+   document.getElementById('btcpx').textContent='$'+d.btc.px.toLocaleString(
+     undefined,{minimumFractionDigits:0,maximumFractionDigits:0});
+   const e=document.getElementById('btcchg');
+   if(d.btc.chg!=null){e.textContent=(d.btc.chg>=0?'+':'')+d.btc.chg.toFixed(2)+'% 24h';
+     e.style.color=d.btc.chg>=0?'#3fb950':'#f85149';}
+   else{e.textContent='';}
+ }
+ // the page never reloads on its own - if the server was redeployed, the tab
+ // is running stale JavaScript, so refresh it once
+ if(d.build){ if(window.__build===undefined){window.__build=d.build;}
+              else if(d.build!==window.__build){location.reload();return;} }
+  LAST=d;
+  const pw=d.pnl?d.pnl[PERIOD]:{pnl:0,w:0,l:0};
+  const tot=pw.pnl;
+  const te=document.getElementById('total');
+  te.textContent=(tot>=0?'+':'')+tot.toFixed(2)+'%';
+  te.className='total '+(tot>=0?'pnl-pos':'pnl-neg');
+  const n=pw.w+pw.l;
+  document.getElementById('wl').innerHTML=n?
+   `<span class=pnl-pos>${pw.w}W</span> · <span class=pnl-neg>${pw.l}L</span> · ${Math.round(pw.w/n*100)}% win rate`
+   :'no closed trades yet';
+  const st=document.getElementById('status');
+  step('r-start');
+  if(d.tv_interval) TVINT=d.tv_interval;
+  if(d.tz) TZ=d.tz;
+  if(d.tf_ms) window.__tfms=d.tf_ms;
+  const limit=d.stale_after_s||480;
+  const fresh=d.state_age_s!=null&&d.state_age_s<limit;
+  st.textContent=fresh?'LIVE':'STALE '+(d.state_age_s==null?'':Math.round(d.state_age_s/60)+'m');
+  const age=d.state_age_s==null?'':' · scan '+(d.state_age_s<60?d.state_age_s+'s':Math.round(d.state_age_s/60)+'m')+' ago';
+  st.className='badge '+(fresh?'ok':'warn');
+  document.getElementById('meta').textContent=d.scanned+' markets'+age;
+  // signal tally: is MIN_STOP_PCT protecting the account or starving it?
+  const tl=d.tally;
+  const tb=document.getElementById('tally');
+  if(tb){
+    if(!tl||!tl.signals){ tb.textContent='no doji signals in the last '
+        +((tl&&tl.hours)||24)+'h'; }
+    else {
+      const pct=Math.round(tl.taken/tl.signals*100);
+      let why=[];
+      if(tl.tight)  why.push(tl.tight+' too tight');
+      if(tl.norisk) why.push(tl.norisk+' no risk distance');
+      tb.textContent=tl.signals+' signals \u00b7 '+tl.taken+' taken ('+pct+'%)'
+        +(why.length?' \u00b7 '+why.join(', '):'')
+        +' \u00b7 last '+tl.hours+'h';
+    }
+  }
+  step('r-hdr');
+  document.getElementById('trades').innerHTML=d.trades.length?d.trades.map(t=>{
+   const cls=t.dir==='LONG'?'long':'short';
+   const sgn=t.dir==='LONG'?1:-1;
+   // each trade's true RR from its own prices (targets vary: 2R..3R/structure)
+   const RRT=(t.tp!=null&&t.risk)?Math.abs((t.tp-t.entry)/t.risk)
+     :((t.tp!=null&&t.entry!==t.stop)?Math.abs((t.tp-t.entry)/(t.entry-t.stop)):2);
+   // freeze the card once TP or stop has traded - the agent confirms the
+   // close on its next scan (<=5 min) and the card moves to Closed trades
+   // latch the freeze per trade: once TP or the stop trades, this card stops
+   // updating even if price wanders back through the level
+   const fkey=`${t.sym}:${t.opened_t}`;
+   window.__froz=window.__froz||{};
+   // There is NO target freeze any more. Reaching the target never closes
+   // the position under this engine - it books HA_PARTIAL and the rest
+   // runs - so latching the card at the target price stopped the live
+   // price and P&L updating for the whole life of the runner. Only the
+   // STOP still fully closes a trade, and only before the partial: after
+   // it the stop sits at entry, so hitting it is a breakeven close.
+   if(window.__froz[fkey]==='tp') delete window.__froz[fkey];   // stale latch
+   if(t.r!=null && t.r<=-1) window.__froz[fkey]='sl';
+   const slDone=window.__froz[fkey]==='sl';
+   const showR=slDone?-1:t.r;
+   const showPnl=slDone?sgn*(t.stop-t.entry)/t.entry*100:t.pnl;
+   // "target reached" is now computed LIVE, never latched
+   // this panel only holds trades still at full risk - once the partial
+   // books they move to the Runners list
+   const atTarget=t.r!=null && t.r>=RRT;
+   const badge=atTarget?'<span class="badge ok">target reached · booking half</span>'
+     :slDone?'<span class="badge warn">stop hit · closing</span>':'';
+   // one scale: stop = 0%, entry = 40%, TP = 100% - the fill IS closeness to TP
+   const rp=showR==null?0:Math.max(0,Math.min(100,(showR+1)/(1+RRT)*100));
+   const rc=showR==null?'#8b949e':showR>=0?'#3fb950':'#f85149';
+   const rlbl=showR==null?''
+     :slDone?'Stop traded - waiting for the close confirmation'
+     :atTarget?`${showR.toFixed(2)}R \u00b7 target reached, booking half`
+     :showR>=0
+     ?`${showR.toFixed(2)}R · ${Math.round(Math.min(100,showR/RRT*100))}% of the way to TP`
+     :`${showR.toFixed(2)}R · ${Math.round(Math.min(100,-showR*100))}% of the way to stop`;
+   return `<div class="card tv" onclick="tvOpen('${t.sym}')" title="open ${t.sym} on TradingView">
+    <div class=row><span class=sym>${t.sym} <span class=${cls}>${t.dir}</span>${t.lev?` <span class=lev>${t.lev}x</span>`:''}${t.opened_t?` <span class=muted style="font-size:11px;font-weight:400">${tradeAge(t.opened_t)}</span>`:''} ${badge}</span>
+    <span class="num ${showPnl>=0?'pnl-pos':'pnl-neg'}">${showPnl==null?'-':(showPnl>=0?'+':'')+showPnl.toFixed(2)+'%'}</span></div>
+    <div class=row><span class=muted>entry <span class=num>$${px(t.entry)}</span></span>
+    <span class=muted>${slDone?'exit':'now'} <span class=num>$${px(slDone?t.stop:t.mid)}</span></span></div>
+    <div class=row><span class=muted>stop <span class=num>$${px(t.stop)}</span></span>
+    <span class=muted>TP <span class=num>$${px(t.tp)}</span></span></div>
+    <div class=bar><div class=fill style="width:${rp}%;background:${rc}"></div></div>
+    <div class=muted>${rlbl}</div></div>`
+  }).join(''):'<div class="card muted">none</div>';
+  // RUNNERS: partial booked, stop at entry, riding until the HA flips.
+  // Everything is measured from the ORIGINAL entry, and nothing here ever
+  // freezes - these are live positions with no target left to hit.
+  step('r-trades');
+  document.getElementById('runners').innerHTML=d.runners.length?d.runners.map(t=>{
+   const cls=t.dir==='LONG'?'long':'short';
+   const R=t.r==null?null:t.r;
+   // the bar shows how far PAST the target the runner has travelled, so a
+   // trade that has doubled its target reads full
+   const rp=R==null?0:Math.max(0,Math.min(100,(R/(t.rr*2))*100));
+   const peak=R!=null&&R>=t.rr*2;
+   return `<div class="card tv" onclick="tvOpen('${t.sym}')" title="open ${t.sym} on TradingView">
+    <div class=row><span class=sym>${t.sym} <span class=${cls}>${t.dir}</span>${t.lev?` <span class=lev>${t.lev}x</span>`:''}${t.opened_t?` <span class=muted style="font-size:11px;font-weight:400">${tradeAge(t.opened_t)}</span>`:''} <span class="badge ok">${Math.round(t.left*100)}% running</span></span>
+    <span class="num ${t.pnl>=0?'pnl-pos':'pnl-neg'}">${t.pnl==null?'-':(t.pnl>=0?'+':'')+t.pnl.toFixed(2)+'%'}</span></div>
+    <div class=row><span class=muted>entry <span class=num>$${px(t.entry)}</span></span>
+    <span class=muted>now <span class=num>$${px(t.mid)}</span></span></div>
+    <div class=row><span class=muted>stop <span class=num>$${px(t.stop)}</span> · risk-free</span>
+    <span class=muted>booked at <span class=num>$${px(t.tp)}</span></span></div>
+    <div class=bar><div class=fill style="width:${rp}%;background:${peak?'#3fb950':'#58a6ff'}"></div></div>
+    <div class=row style="align-items:center">
+      <span class=muted>${R==null?'':R.toFixed(2)+'R from entry'} · closes when the HA flips</span>
+      <button class=closebtn data-px="${t.mid==null?'':t.mid}" onclick="closeRunner(event,'${t.sym}')">close now</button>
+    </div></div>`
+  }).join(''):'<div class="card muted">none</div>';
+  step('r-runners');
+  // SETUP PIPELINE: where every un-traded symbol sits in the entry chain.
+  // Report only - the agent decides, this just says why nothing fired.
+  const G=d.gates||[];
+  const READY='ready';
+  document.getElementById('n-gates').textContent=G.length;
+  document.getElementById('gsub').textContent=
+    G.filter(g=>g.stage===READY).length+' ready';
+  document.getElementById('gates').innerHTML=G.length?G.map(g=>{
+    const cls=g.dir==='LONG'?'long':'short';
+    const done=g.stage===READY;
+    // there is no minimum run length any more, so the run is DESCRIPTIVE -
+    // how long the current trend has been, not progress toward a threshold
+    return `<div class="card tv" onclick="tvOpen('${g.sym}')" `
+      +`title="open ${g.sym} on TradingView"><div class=row>
+      <span class=sym>${done?'\u25cf':'\u25cb'} ${g.sym} `
+      +`<span class=${cls}>${g.dir||''}</span></span>
+      <span class=muted>${g.stage}</span></div><div class=row>
+      <span class=muted>${g.run||0} candle${(g.run||0)===1?'':'s'} `
+      +`${g.trend||''}</span>
+      <span class=muted>${g.detail||''}</span></div></div>`;
+  }).join(''):'<div class="card muted">no symbols scanned yet</div>';
+  step('r-gates');
+  const cut=Date.now()-DAYS[PERIOD]*86400000;
+  // inPeriod is EVERY trade closed in the selected window - that is the
+  // number the P&L above is computed from, so it is the number the badge
+  // must show. `shown` is only how many cards get drawn.
+  const inPeriod=d.closed.filter(c=>c.t>=cut);
+  const shown=inPeriod.slice(0,CLOSED_CARDS);
+  document.getElementById('csub').textContent=LABEL[PERIOD]
+    +(inPeriod.length>shown.length
+      ? ' \u00b7 showing '+shown.length+' of '+inPeriod.length : '');
+  // a partial and its runner are merged server-side into ONE trade, so
+  // these compound kinds appear in place of the raw ledger events
+  const KINDS={TP_RUNNER:'target + runner', TP_BE:'target, runner to BE',
+               TP_HALF:'target hit', RUNNER:'runner', BE:'breakeven',
+               STOP:'stopped'};
+  // outcome, not event type: anything closed in profit gets a checkmark.
+  // BE keeps its own mark because breakeven is neither.
+  const iconFor=c=>c.kind==='BE'?'➡️':(c.pnl_pct>=0?'✅':'❌');
+  document.getElementById('closed').innerHTML=shown.length?shown.map(c=>{
+   const cls=c.dir==='LONG'?'long':'short';
+   const when=new Date(c.t).toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',timeZone:TZ});
+   return `<div class="card tv" onclick="tvOpen('${c.sym}')" title="open ${c.sym} on TradingView"><div class=row>
+    <span class=sym>${iconFor(c)} ${c.sym} <span class=${cls}>${c.dir}</span>
+    <span class=muted style="font-weight:400">${KINDS[c.kind]||c.kind}</span>${c.frac&&c.frac<1?` <span class=muted style="font-size:10.5px">${Math.round(c.frac*100)}% closed</span>`:''}</span>
+    <span class="num ${c.pnl_pct>=0?'pnl-pos':'pnl-neg'}">${(c.pnl_pct>=0?'+':'')+c.pnl_pct.toFixed(2)}%</span></div>
+    <div class=row><span class=muted>$${px(c.entry)} → $${px(c.exit)}</span>
+    <span class=muted>${when}</span></div></div>`
+  }).join(''):'<div class="card muted">none in this period</div>';
+  document.getElementById('events').innerHTML=
+   d.events.map(e=>`<div class=event>${e.replace(/</g,'&lt;')}</div>`).join('')||'<div class="card muted">none</div>';
+  document.getElementById('n-trades').textContent=d.trades.length;
+  document.getElementById('n-runners').textContent=d.runners.length;
+  document.getElementById('n-closed').textContent=inPeriod.length;
+  step('r-closed');
+  document.getElementById('n-events').textContent=d.events.length;
+  applyCollapse();
+  step('r-done');
+}
+// These route through show__err() like the early handler does, so ONE rule
+// decides what reaches the banner. Writing to it directly here meant a
+// masked "Script error." still raised the banner on a page that had already
+// rendered fine, contradicting the suppression in show__err.
+window.addEventListener('unhandledrejection',function(ev){
+  window.__err='promise: '+(ev.reason&&ev.reason.message
+                            ? ev.reason.message : ev.reason);
+  show__err();
+});
+
+function offline(){document.getElementById('status').textContent='OFFLINE';
+ document.getElementById('status').className='badge warn'}
+async function poll(){
+  try{
+    step('fetch');
+    var r = await fetch('/data'+(KEY?'?key='+KEY:''));
+    step('http-'+r.status);
+    var d = await r.json();
+    step('json-ok');
+    render(d);
+    renderOK();
+    step('render-ok');
+  }
+  catch(e){
+    // the masked "Script error." cannot say WHERE - this can
+    window.__err='poll: '+(e&&e.message?e.message:e)
+      +(e&&e.stack?'   at '+String(e.stack).slice(0,120):'');
+    show__err(); offline();
+  }}
+function renderOK(){
+  // a render succeeded, from EITHER path: the page is demonstrably working,
+  // so clear the diagnostics
+  window.__rendered = true;
+  window.__err = null;
+  if (window.__debug) return;
+  var eb = document.getElementById('jserr');
+  if (eb) { eb.style.display = 'none'; }
+  var sb = document.getElementById('jstrace');
+  if (sb) { sb.style.display = 'none'; }
+}
+
+let ES=null, lastMsg=0;
+function connect(){
+ try{if(ES)ES.close()}catch(e){}
+ try{
+  ES=new EventSource('/stream'+(KEY?'?key='+KEY:''));
+  ES.onmessage=e=>{lastMsg=Date.now();
+    try{ render(JSON.parse(e.data)); renderOK(); }
+    catch(err){ window.__err='render: '+(err&&err.message?err.message:err);
+                window.__rendered=false; show__err(); }};
+  ES.onerror=()=>{offline()};
+ }catch(e){offline()}
+}
+// watchdog: if the stream goes quiet (backgrounded tab, dropped
+// connection), poll once and rebuild the stream
+setInterval(()=>{if(Date.now()-lastMsg>12000){poll();connect()}},6000);
+document.addEventListener('visibilitychange',()=>{
+ if(!document.hidden){poll();if(Date.now()-lastMsg>6000)connect()}});
+step('main-parsed');
+try {
+  poll(); connect();
+  step('startup-ok');
+} catch (e) {
+  window.__err = 'startup: ' + (e && e.message ? e.message : String(e))
+    + (e && e.stack ? '   at ' + String(e.stack).slice(0, 120) : '');
+  show__err();
+}
+window.__mainOK = true;   // last statement: proves the block parsed
+</script></body></html>"""
+
+
+class Handler(BaseHTTPRequestHandler):
+    def _send(self, code, body, ctype):
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        # iOS WebKit (Safari, and Brave/Chrome which are WebKit underneath)
+        # will happily re-serve a cached document on no-store alone, which
+        # meant a deploy that fixed broken page JS still showed the broken
+        # page. Belt and braces: the full no-cache set, an explicitly stale
+        # Expires, and an ETag that changes on every deploy so a conditional
+        # request can never be answered from cache.
+        self.send_header("Cache-Control",
+                         "no-store, no-cache, must-revalidate, max-age=0")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
+        self.send_header("ETag", f'"{BUILD}"')
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self):
+        self.do_GET()          # same routing and the same key check
+
+    def do_GET(self):
+        url = urlparse(self.path)
+        if DASH_KEY:
+            key = (parse_qs(url.query).get("key") or [""])[0]
+            if key != DASH_KEY:
+                self._send(403, b"forbidden", "text/plain")
+                return
+        if url.path == "/close":
+            q = parse_qs(url.query)
+            sym = (q.get("sym") or [""])[0]
+            try:
+                shown = float((q.get("px") or [""])[0])
+            except ValueError:
+                shown = None
+            ok, msg = (request_close(sym, shown) if sym
+                       else (False, "no symbol"))
+            self._send(200 if ok else 400,
+                       json.dumps({"ok": ok, "msg": msg}).encode(),
+                       "application/json")
+        elif url.path == "/data":
+            self._send(200, json.dumps(build_data()).encode(),
+                       "application/json")
+        elif url.path == "/stream":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            try:
+                while True:
+                    payload = json.dumps(build_data())
+                    self.wfile.write(f"data: {payload}\n\n".encode())
+                    self.wfile.flush()
+                    time.sleep(SSE_TICK_S)
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                return
+        elif url.path == "/":
+            page = PAGE.replace("__TV_LAYOUT__", json.dumps(TV_LAYOUT))
+            self._send(200, page.encode(), "text/html; charset=utf-8")
+        else:
+            self._send(404, b"not found", "text/plain")
+
+    def log_message(self, *a):
         pass
 
 
-def close_position_live(asset, trade):
-    """Close whatever is left at market, then cancel the resting orders.
-
-    Closes FIRST: if the market order fails the protective stop is still on
-    the book, so the position is never left naked by this path.
-    """
-    if not EXEC_LIVE or not executable(asset["symbol"]) or not trade.get("size"):
-        return
-    ex = exec_client()
-    if not ex:
-        return
-    sym = exec_symbol(asset["symbol"])
-    try:
-        r = ex.market_close(sym)
-        log(f"{sym}: LIVE manual close sent {r}")
-    except Exception as e:
-        log(f"{sym}: LIVE manual close FAILED {type(e).__name__}: {e}")
-        try:
-            send_telegram(f"\u26a0\ufe0f {esc(sym)} manual close FAILED - "
-                          "the position is still open, close it by hand")
-        except Exception:
-            pass
-        return
-    for label, oid in (("stop", trade.get("stop_oid")),
-                       ("TP", trade.get("tp_oid"))):
-        if not oid:
-            continue
-        try:
-            ex.cancel(sym, oid)
-        except Exception as e:
-            log(f"{sym}: could not cancel the resting {label} "
-                f"({type(e).__name__}) - it is reduce-only, so harmless "
-                "with no position, but it will linger in the order book")
-
-
-def order_oid(resp):
-    """The exchange id of a resting order, so it can be cancelled later."""
-    try:
-        st = resp["response"]["data"]["statuses"][0]
-        return st.get("resting", {}).get("oid")
-    except (KeyError, IndexError, TypeError, AttributeError):
-        return None
-
-
-def move_stop_live(asset, trade):
-    """After the partial the stop belongs at entry. That means cancelling the
-    resting stop and replacing it for what is left - without this the
-    exchange still holds a stop at the HA zone low while the bot believes
-    the runner is risk-free."""
-    if not EXEC_LIVE or not executable(asset["symbol"]) or not trade.get("size"):
-        return
-    ex = exec_client()
-    if not ex:
-        return
-    sym = exec_symbol(asset["symbol"])
-    long_ = trade["verdict"] == "LONG"
-    left = round(trade["size"] * trade["left"], sz_decimals(asset["symbol"]))
-    try:
-        if trade.get("stop_oid"):
-            ex.cancel(sym, trade["stop_oid"])
-        r = ex.order(sym, not long_, left, round_px(trade["entry"]),
-                     {"trigger": {"triggerPx": round_px(trade["entry"]),
-                                  "isMarket": True, "tpsl": "sl"}},
-                     reduce_only=True)
-        trade["stop_oid"] = order_oid(r)
-        log(f"{sym}: LIVE stop moved to entry ${fmt_px(trade['entry'])} "
-            f"for the remaining {left}")
-    except Exception as e:
-        log(f"{sym}: could NOT move the live stop ({type(e).__name__}: {e}) - "
-            "the exchange stop is still at its original level")
-        try:
-            send_telegram(f"\u26a0\ufe0f {esc(sym)} partial booked but the "
-                          "stop could not be moved to entry - check manually")
-        except Exception:
-            pass
-
-
-def fill_price(resp):
-    """The average price actually paid, from a market_open response."""
-    try:
-        return float(resp["response"]["data"]["statuses"][0]["filled"]["avgPx"])
-    except (KeyError, IndexError, TypeError, ValueError):
-        return None
-
-
-def place_entry_live(asset, trade, plan):
-    """Entry, then the protective stop, then the TP. If the protective
-    orders cannot be placed the position is closed immediately - never sit
-    unprotected."""
-    # NEVER return silently from here. A sized entry that does not reach the
-    # exchange still gets tracked and still books to the ledger, so a silent
-    # skip leaves a paper trade that looks real - and the journal cannot say
-    # why. Every refusal below names itself.
-    if not EXEC_LIVE:
-        log(f"{asset['symbol']}: live execution OFF (EXEC_LIVE=False) - "
-            "tracked only, no order sent")
-        return None
-    ex = exec_client()
-    if not ex:
-        log(f"{asset['symbol']}: execution client UNAVAILABLE - no order "
-            "sent, but the trade is still being tracked")
-        try:
-            send_telegram(f"\u26a0\ufe0f {esc(asset['symbol'])} sized but "
-                          "the execution client is unavailable - tracked "
-                          "only, nothing was sent to Hyperliquid")
-        except Exception:
-            pass
-        return None
-    # builder-venue markets (xyz:NBIS, ...) are not in the main perp meta the
-    # SDK client was built against - it raises KeyError on the asset lookup.
-    # Alert on them, but never try to trade them.
-    if not executable(asset["symbol"]):
-        log(f"{asset['symbol']}: live execution skipped - builder-venue "
-            "market and its dex is not in EXEC_BUILDER_DEXES (alert only)")
-        return None
-    # a builder market keeps its full "dex:coin" name for the SDK; a
-    # main-dex market is just its own name
-    sym = exec_symbol(asset["symbol"])
-    if not any(a.get("name") == sym
-               for a in (_EXEC.get("meta") or {}).get("universe", [])):
-        log(f"{sym}: live execution skipped - not in the perp universe")
-        return None
-    long_ = trade["verdict"] == "LONG"
-    dec = sz_decimals(asset["symbol"])
-    size = round(plan["size"], dec)
-    if size <= 0:
-        log(f"{sym}: size rounds to zero - not sent")
-        return None
-    # SET the leverage before entering. Without this, sizing in "margin"
-    # mode is only an assumption: a symbol left at 3x on the account would
-    # post three times the intended collateral for the same position.
-    if EXEC_SIZING == "margin":
-        lev = eff_leverage(asset)
-        err = None
-        # EXEC_MARGIN_MODE decides the FIRST attempt; the other mode is the
-        # fallback, because some markets refuse one or the other and say so
-        # by RETURNING an error rather than raising.
-        # the venue's own flag wins over the preference - a strictIsolated
-        # market can never take cross, so do not ask
-        forced = only_isolated(asset["symbol"])
-        first = False if forced else (EXEC_MARGIN_MODE != "isolated")
-        if forced:
-            log(f"{sym}: venue marks this market ISOLATED-ONLY - not "
-                "attempting cross")
-        prev_err = ""
-        for is_cross in (first, not first):
-            try:
-                r = ex.update_leverage(lev, sym, is_cross)
-            except Exception as e:
-                err = f"{type(e).__name__}: {e}"
-                break
-            err = resp_error(r)
-            if not err:
-                mode = "cross" if is_cross else "ISOLATED"
-                if is_cross != first:
-                    log(f"{sym}: {EXEC_MARGIN_MODE} refused ({prev_err}) - "
-                        f"set {lev}x {mode} instead")
-                else:
-                    log(f"{sym}: leverage {lev}x {mode}")
-                break
-            prev_err = err
-            low = err.lower()
-            if "cross" not in low and "isolated" not in low:
-                break
-        if err:
-            log(f"{sym}: could NOT set leverage to {lev}x ({err}) - "
-                "refusing the entry rather than sizing against unknown "
-                "collateral")
-            try:
-                send_telegram(f"\u26a0\ufe0f {esc(sym)} entry refused - "
-                              f"could not set {lev}x leverage: {esc(err)}")
-            except Exception:
-                pass
-            return None
-    # MARGIN IS THE ONLY REAL CONSTRAINT now the position cap is off, and
-    # nothing else guards it. Check it here so a short account produces a
-    # named skip instead of an "Insufficient margin" rejection from the
-    # venue - the order was never going to fill either way.
-    need = size * trade["entry"] / max(eff_leverage(asset), 1)
-    avail = free_collateral()
-    if avail is not None and avail < need * 1.05:
-        log(f"{sym}: ENTRY SKIPPED - needs ${need:.2f} margin, "
-            f"${avail:.2f} free")
-        return None
-    try:
-        r = ex.market_open(sym, long_, size)
-        log(f"{sym}: LIVE entry sent {r}")
-        err = order_error(r)
-        if err:
-            # never place protective orders against a position that does
-            # not exist, and never let the alert claim this was placed
-            log(f"{sym}: ENTRY REJECTED by the exchange - {err}")
-            try:
-                send_telegram(f"\u26a0\ufe0f {esc(sym)} entry REJECTED - "
-                              f"{esc(err)}")
-            except Exception:
-                pass
-            return None
-        got = fill_size(r)
-        if got is not None and abs(got - size) > 10 ** -dec:
-            log(f"{sym}: PARTIAL FILL - asked {size}, filled {got} "
-                f"({got / size:.0%}); protective orders sized to the fill")
-            size = got
-        if not size:
-            log(f"{sym}: nothing filled - no position to protect")
-            return None
-        rebase_to_fill(sym, trade, fill_price(r), long_)
-    except Exception as e:
-        log(f"{sym}: LIVE entry FAILED {type(e).__name__}: {e}")
-        try:
-            send_telegram(f"\u26a0\ufe0f {esc(sym)} entry order failed - "
-                          "no position")
-        except Exception:
-            pass
-        return None
-    trade["size"] = size
-    per_unit = abs(trade["entry"] - trade["stop"])
-    target = ({"margin": f"${EXEC_MARGIN_USD:.2f} margin at "
-                         f"{eff_leverage(asset)}x",
-               "notional": f"${EXEC_NOTIONAL_USD:.2f} in"}
-              .get(EXEC_SIZING, f"${EXEC_RISK_USD:.2f} risk"))
-    log(f"{sym}: position {size} units = ${size * trade['entry']:.2f} in, "
-        f"loses ${size * per_unit:.2f} at the stop (target {target})")
-    try:
-        r_stop = ex.order(sym, not long_, size, round_px(trade["stop"]),
-                          {"trigger": {"triggerPx": round_px(trade["stop"]),
-                                       "isMarket": True, "tpsl": "sl"}},
-                          reduce_only=True)
-        trade["stop_oid"] = order_oid(r_stop)
-        # the target only takes HA_PARTIAL of the position - the rest runs
-        # until the HA flips, so it must NOT be resting at the target
-        part = round(size * HA_PARTIAL, dec)
-        r_tp = ex.order(sym, not long_, part, round_px(trade["tp"]),
-                        {"limit": {"tif": "Gtc"}}, reduce_only=True)
-        trade["tp_oid"] = order_oid(r_tp)
-        log(f"{sym}: LIVE stop ${fmt_px(trade['stop'])} (full size) and TP "
-            f"${fmt_px(trade['tp'])} ({HA_PARTIAL:.0%}) placed")
-    except Exception as e:
-        log(f"{sym}: LIVE protective orders FAILED ({type(e).__name__}) - "
-            "closing the position")
-        try:
-            ex.market_close(sym)
-            send_telegram(f"\u26a0\ufe0f {esc(sym)} stop could not be placed - "
-                          "position closed immediately")
-        except Exception:
-            try:
-                send_telegram(f"\U0001F6A8 {esc(sym)} UNPROTECTED POSITION - "
-                              "close it manually now")
-            except Exception:
-                pass
-        return None
-    return True
-
-
-# --------------------------- entry -----------------------------------------
-def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger,
-               live_px=None):
-    """Risk checks, override handling, alert, trade creation and (when
-    enabled) the live order. Returns True if a trade was opened."""
-    sym = asset["symbol"]
-    short = direction == "SHORT"
-    entry = c["c"]
-    risk = (stop - entry) if short else (entry - stop)
-    if risk <= 0:
-        return False
-    if MIN_STOP_PCT and entry and risk / entry * 100 < MIN_STOP_PCT:
-        log(f"{sym}: stop only {risk / entry * 100:.3f}% away "
-            f"(min {MIN_STOP_PCT}%) - too tight to be worth fees, waiting")
-        return False
-    tp = entry - HA_RR * risk if short else entry + HA_RR * risk
-    plan = {"entry": entry, "stop": stop, "tp": tp}
-    event_t = c["t"] + MS[TF]
-
-    # overrides are gone: check_asset never evaluates a symbol that already
-    # holds a trade, so fire_entry is only ever reached flat
-    if ast.get("trade"):
-        log(f"{sym}: {direction} signal ignored - a trade is already open")
-        ast["setup"] = None
-        return False
-
-    # count BEFORE recording the new trade: ast is the same object STATE_VIEW
-    # holds, so counting afterwards makes the trade count itself and a cap of
-    # 1 then blocks every live order that could ever be sent
-    # only symbols that CAN execute count toward the live cap - builder-venue
-    # trades are placed by hand and must not starve the automated ones
-    open_now = sum(1 for k, v in STATE_VIEW.items()
-                   if isinstance(v, dict) and v.get("trade") and executable(k))
-    ast["trade"] = {"verdict": direction, "entry": entry, "stop": stop,
-                    "tp": tp, "opened_t": c["t"], "checked_t": c["t"],
-                    "rr": HA_RR, "risk0": risk, "half": False, "left": 1.0}
-    # remember WHICH setup this came from so it cannot fire a second time
-    if ast.get("setup"):
-        ast["traded"] = {"ft": ast["setup"].get("ft"), "dir": direction}
-    order_plan = plan_entry_orders(asset, ast["trade"], live_px)
-    placed, why_not = False, ""
-    if not EXEC_LIVE:
-        why_not = "live execution is OFF"
-    elif not order_plan:
-        why_not = "the trade could not be sized"
-    else:
-        # the daily loss limit needs realised USD from the ledger, which is
-        # not tracked yet - only the halt file and the position cap bite
-        why = exec_blocked(open_now, 0.0)
-        if why:
-            why_not = why
-            log(f"{sym}: live order blocked - {why}")
-        else:
-            place_entry_live(asset, ast["trade"], order_plan)
-            # place_entry_live returns None on every refusal path, so the
-            # only reliable proof an order reached the exchange is the size
-            # it wrote back onto the trade
-            placed = bool(ast["trade"].get("size"))
-            if not placed:
-                why_not = "the order did not reach the exchange"
-
-    # ALERT LAST, from the trade as it now stands. Sending it before the
-    # order meant Telegram carried the PLANNED levels (the doji candle's
-    # close) while the dashboard showed the REBASED ones (the actual fill),
-    # so the two disagreed on entry, stop distance and target for every
-    # executed trade. Now both read from the same numbers.
-    t = ast["trade"]
-    filled = abs(t["entry"] - entry) > 1e-12
-    alert_plan = dict(plan, entry=t["entry"], stop=t["stop"], tp=t["tp"])
-    if ALERT_ENTRIES:
-        try:
-            msg = entry_message(asset, direction, alert_plan, hi, lo,
-                                source, event_t, trigger)
-            if not placed:
-                # An alert that looks identical whether or not a position
-                # exists is worse than no alert. Say so on its own line.
-                msg += (f"\n\n\u26a0\ufe0f NOT PLACED on Hyperliquid - "
-                        f"{esc(why_not)}. Tracked only.")
-            send_telegram(msg)
-        except Exception as e:
-            log(f"{sym}: entry alert failed: {type(e).__name__}: {e}")
-    log(f"ALERT SENT -> telegram: {sym} {direction} ENTRY @ "
-        f"${fmt_px(t['entry'])} ({trigger})"
-        + (f" [filled, planned ${fmt_px(entry)}]" if filled else "")
-        + ("" if placed else f" [NOT PLACED - {why_not}]"))
-    RUN_ALERTS.append(f"{sym} {direction} entry @ ${fmt_px(t['entry'])}")
-    ast["phase"], ast["setup"] = "IN_TRADE", None
-    return True
-
-
-# --------------------------- the strategy ----------------------------------
-def process_candle(asset, ast, candles, ha, i):
-    """A visible trend, then a DOJI - an HA body small against that trend.
-    The doji is the turn, and the trade is taken on it. No pullback, no
-    retest, no confirming candle.
-
-    Everything is re-derived from the series on every scan, so a restart
-    cannot lose half a signal.
-    """
-    sym = asset["symbol"]
-    c = candles[i]
-    hd = ha[i]
-
-    # record where this symbol sits in the chain, for the dashboard. Report
-    # only - it never gates anything. Written every scan so the panel is
-    # never staler than the last candle close.
-    try:
-        g = gate_status(ha, candles, i)
-        g["t"] = hd["t"]
-        g["px"] = c["c"]
-        ast["gate"] = g       # save_state runs at the end of every scan
-    except Exception as e:
-        log(f"{sym}: gate_status failed: {type(e).__name__}: {e}")
-
-    # the doji sits HA_CONFIRM_BARS candles back; THIS candle is the one
-    # that confirms it, and the one we enter on
-    d = i - HA_CONFIRM_BARS
-    if d < 0:
-        return False
-    for signal_long in (True, False):
-        found = ha_doji(ha, d, signal_long)
-        if not found:
-            continue
-        if HA_CONFIRM_BARS:
-            ok, why = confirmed(ha, candles, d, i, signal_long)
-            if not ok:
-                continue
-        # BITCOIN DECIDES THE DIRECTION, 3 Aug, his call. The alt's own doji
-        # is TIMING ONLY - it says a turn is happening here, not which way to
-        # take it. So an alt doji that ends an UPTREND, a short setup on its
-        # own chart, becomes a LONG while BTC is green. The old gate would
-        # have refused that signal; this reverses it instead.
-        # BTC itself still trades its own doji - it cannot follow itself.
-        want_long = signal_long
-        if sym != "BTC":
-            bt = btc_trend()
-            if bt:
-                want_long = bt[0]
-            else:
-                log(f"{sym}: BTC trend unreadable - falling back to the "
-                    "alt's own doji direction")
-        direction = "LONG" if want_long else "SHORT"
-        dt = hd["t"]                         # identify by TIMESTAMP, never by
-        #                                      index - the fetch window rolls
-        rt = ha[found[1]]["t"]               # timestamp of the RUN's first
-        #                                     candle - the dedupe key
-
-        # ONE TRADE PER TREND RUN. The signal is re-derived every scan, so
-        # without this the same setup fires again on the next pass at a
-        # slightly different price into the identical stop. Seen live 31 Jul
-        # on AAVE, CASHCAT, KAITO and SOL: -6.13% of a -14.53% book.
-        #
-        # Keyed on the RUN START, not the doji. Under HA_DOJI_COLOUR="same"
-        # the doji is TREND-COLOURED, so it does not end the run - the next
-        # candle can be another small trend-coloured body, a fresh doji
-        # timestamp, and the identical trade. Keying on the run start means
-        # one trade per trend, however many stalls it prints. Under "flip"
-        # the doji ends the run anyway, so this is equivalent there.
-        done = ast.get("traded") or {}
-        if done.get("ft") == rt and done.get("dir") == direction:
-            continue
-
-        # The doji marks WHERE the turn happened, but the stop is taken from
-        # the REAL candle at that point, not the HA one. HA highs and lows
-        # are EMA averages that need never have printed, so an HA-derived
-        # stop is a price the market may never trade to. The real candle's
-        # extreme is a level that actually exists on the book.
-        # It also guarantees positive risk: for a long, low <= close always.
-        lo = max(0, i - STOP_LOOKBACK + 1)
-        window = candles[lo:i + 1]
-        stop = (min(x["l"] for x in window) if want_long
-                else max(x["h"] for x in window))
-        entry = c["c"]
-        risk = (entry - stop) if want_long else (stop - entry)
-        if risk <= 0:
-            log(f"{sym}: {direction} doji but the candle closed at its own "
-                f"{'low' if want_long else 'high'} - no risk distance, "
-                "skipped")
-            continue
-
-        ast["setup"] = {"dir": direction, "zhi": c["h"], "zlo": c["l"],
-                        "ft": rt, "departed": True, "touched": True,
-                        "frozen": True, "t": c["t"]}
-        log(f"{sym}: HA DOJI CONFIRMED after {HA_CONFIRM_BARS} bar(s) - "
-            f"turning {direction}, stop at the {len(window)}-candle "
-            f"{'low' if want_long else 'high'} ${fmt_px(stop)} "
-            f"(doji was {fmt_ts(ha[d]['t'])})")
-        # candles[-1] is the still-forming candle: its close is the current
-        # price, free, with no extra API call
-        fire_entry(asset, ast, direction, c, stop, c["h"], c["l"], "HA",
-                   f"HA doji after a {'down' if want_long else 'up'}trend, "
-                   f"confirmed by {HA_CONFIRM_BARS} expanding bar(s) and a "
-                   f"real close - stop at the {len(window)}-candle "
-                   f"{'low' if want_long else 'high'}",
-                   live_px=candles[-1]["c"])
-        return True
-
-    if ast.get("setup"):
-        ast["setup"] = None
-    return False
-
-
-# --------------------------- per-asset scan --------------------------------
-def check_asset(asset, state):
-    sym = asset["symbol"]
-    ast = state.get(sym) or blank_asset_state()
-    for k, v in blank_asset_state().items():
-        ast.setdefault(k, v)
-    if asset.get("lev"):
-        ast["lev"] = asset["lev"]              # max leverage, for the dashboard
-    changed = False
-    cs = None
-    source = None
-
-    # ---- IN_TRADE: watch stop / TP first ---------------------------------
-    if ast["trade"]:
-        source, cs = fetch(asset, TF, 60)
-        # a manual close from the dashboard beats everything else, including
-        # the stop and target watch - the request is only cleared once the
-        # position is actually flat, so a failed close is retried next scan
-        req = close_requested(sym)
-        if req is not None:
-            if req.get("done"):
-                # the dashboard already closed it and booked the row
-                log(f"{sym}: manually closed from the dashboard at "
-                    f"${fmt_px(req.get('exit') or 0)} - clearing state")
-            else:
-                px = cs[-1]["c"] if cs else ast["trade"]["entry"]
-                log(f"{sym}: manual close requested from the dashboard")
-                close_position_live(asset, ast["trade"])
-                _close_trade(asset, ast["trade"], px, "MANUAL", now_ms(),
-                             "closed by hand from the dashboard")
-            ast["trade"] = None
-            ast["phase"] = "SCAN"
-            clear_close_request(sym)
-            RUN_STATUS.append(f"{sym} manually closed")
-            state[sym] = ast
-            return True
-        if cs:
-            trade, ch = process_open_trade(asset, ast["trade"], cs,
-                                           smoothed_ha(cs), cs[-2]["t"])
-            ast["trade"] = trade
-            changed = changed or ch
-            if trade is None:
-                ast["phase"] = "SCAN"
-        # exits win over overrides (the watch ran first). Fall through to the
-        # candle walk when the trade just closed, or when overrides are on.
-        if ast["trade"]:
-            RUN_STATUS.append(f"{sym} IN_TRADE")
-            state[sym] = ast
-            return changed
-
-    # ---- skip the fetch entirely when no new candle can exist ------------
-    # ~60 markets re-fetched every pulse is what triggers HTTP 429. A symbol
-    # with no open trade has nothing new to say until its next candle closes.
-    if cs is None and not ast["trade"]:
-        boundary = (now_ms() // MS[TF]) * MS[TF] - MS[TF]
-        if ast["last_candle_t"] >= boundary:
-            RUN_STATUS.append(f"{sym} up to date")
-            state[sym] = ast
-            return changed
-
-    if not cs:
-        source, cs = fetch(asset, TF, 300)
-    if not cs:
-        RUN_STATUS.append(f"{sym} feed failed")
-        state[sym] = ast
-        return changed
-
-    ha = smoothed_ha(cs)
-    last_closed = len(cs) - 2
-    cutoff = cs[last_closed]["t"] - REPLAY_CANDLES * MS[TF]
-    if ast["last_candle_t"] < cutoff:
-        ast["last_candle_t"] = cutoff
-    for i in range(len(cs)):
-        if i > last_closed or cs[i]["t"] <= ast["last_candle_t"]:
-            continue
-        changed = process_candle(asset, ast, cs, ha, i) or changed
-        ast["last_candle_t"] = cs[i]["t"]
-        if ast["trade"] and ast["trade"].get("opened_t") == cs[i]["t"]:
-            break                              # a trade opened on this candle
-
-    # an open trade always reports IN_TRADE, even when a fresh setup is armed
-    # on the same symbol - otherwise the run summary undercounts open trades
-    setup = ast.get("setup")
-    armed_dir = setup["dir"] if setup else None
-    if ast["trade"]:
-        stage = "IN_TRADE"
-    elif setup:
-        stage = ("HA-" + armed_dir
-                 + (" pulled back" if setup.get("touched") else " waiting"))
-    else:
-        stage = ast["phase"]
-    RUN_STATUS.append(f"{sym} {stage}")
-    state[sym] = ast
-    return changed
-
-
-# --------------------------- the run --------------------------------------
-def check_once():
-    RUN_ALERTS.clear()
-    RUN_STATUS.clear()
-    state = load_state()
-    STATE_VIEW.clear()
-    STATE_VIEW.update(state)
-    changed = False
-    failures = 0
-    start = time.time()
-    assets = active_assets()
-    RUN_UNIVERSE[0] = len(assets)
-    meta = state.get("_meta") or {}
-    cursor = meta.get("cursor", 0) % max(len(assets), 1)
-    rotated = assets[cursor:] + assets[:cursor]        # rotate for fairness
-    # symbols holding an open trade go FIRST every run - an exit check must
-    # never wait for the cursor to come around
-    held = {a["symbol"] for a in rotated
-            if (state.get(a["symbol"]) or {}).get("trade")}
-    order = [a for a in rotated if a["symbol"] in held] + \
-            [a for a in rotated if a["symbol"] not in held]
-    stopped_at = None
-    rot_done = 0                                       # non-priority assets done
-    try:
-        for n, asset in enumerate(order):
-            if time.time() - start > RUN_BUDGET_S:
-                stopped_at = (cursor + rot_done) % len(assets)
-                log(f"Run budget ({RUN_BUDGET_S}s) reached after {n} assets "
-                    f"({len(held)} open trades checked first) - resuming from "
-                    f"{assets[stopped_at]['symbol']} next run")
-                break
-            if asset["symbol"] not in held:
-                rot_done += 1
-            try:
-                had = bool((state.get(asset["symbol"]) or {}).get("trade"))
-                changed = check_asset(asset, state) or changed
-                has = bool((state.get(asset["symbol"]) or {}).get("trade"))
-                if had != has:
-                    save_state(state)      # opened OR closed: persist NOW, so
-                                           # a restart cannot resurrect it
-            except Exception as e:
-                failures += 1
-                log(f"{asset['symbol']}: check failed: "
-                    f"{type(e).__name__}: {e}")
-                RUN_STATUS.append(f"{asset['symbol']} error")
-            time.sleep(FETCH_DELAY_S)
-
-        # zombie sweep: open trades on symbols that have dropped out of the
-        # universe still get monitored - a trade must never go unwatched
-        scanned = {a["symbol"] for a in assets}
-        for sym, ast in list(state.items()):
-            if sym.startswith("_") or not isinstance(ast, dict):
-                continue
-            if ast.get("trade") and sym not in scanned:
-                ghost = {"symbol": sym, "hl_coin": sym,
-                         "label": f"{sym}-PERP", "fallbacks": [],
-                         "cls": ("commodity" if is_commodity(sym) else "stock")
-                         if ":" in sym else "crypto"}
-                try:
-                    changed = check_asset(ghost, state) or changed
-                    RUN_UNIVERSE[0] += 1   # it appends a RUN_STATUS row, so the
-                                           # denominator has to count it too
-                    if not (state.get(sym) or {}).get("trade"):
-                        save_state(state)
-                    log(f"{sym}: monitored outside the universe (open trade)")
-                except Exception as e:
-                    log(f"{sym}: zombie-trade check failed: "
-                        f"{type(e).__name__}: {e}")
-
-        new_cursor = stopped_at if stopped_at is not None else 0
-        if meta.get("cursor", 0) != new_cursor:
-            state["_meta"] = {"cursor": new_cursor}
-            changed = True
-        # the state file always gets written: its contents double as the
-        # dashboard's liveness heartbeat
-        state["_meta"] = dict(state.get("_meta") or {},
-                              cursor=new_cursor,
-                              scan_every_s=MS[SCAN_EVERY] // 1000,
-                              tf=TF,
-                              tz=TIMEZONE,
-                              last_scan_utc=datetime.now(timezone.utc)
-                              .isoformat(timespec="seconds"))
-        save_state(state)
-        if failures:
-            log(f"{failures} asset(s) failed this run - they retry next cycle.")
-    finally:
-        write_run_summary()
-
-
-def seconds_to_next_close(buffer_s=15):
-    period = MS[SCAN_EVERY] // 1000
-    return period - (time.time() % period) + buffer_s
-
-
-def run_loop():
-    log("smoothed HA agent started (loop mode). Ctrl+C to stop.")
-    check_once()
-    while True:
-        wait = seconds_to_next_close()
-        log(f"Next scan in {wait / 60:.1f} min")
-        try:
-            time.sleep(wait)
-        except KeyboardInterrupt:
-            log("Stopped by user.")
-            return
-        check_once()
-
-
-def main():
-    args = set(sys.argv[1:])
-    if "--test" in args:
-        send_telegram("\u2705 <b>smoothed HA agent</b> - test message, "
-                      "Telegram wiring is good.")
-        log("test message sent")
-        return
-    if "--loop" in args:
-        run_loop()
-        return
-    check_once()
-
-
 if __name__ == "__main__":
-    main()
+    print(f"Dashboard on port {PORT}" + (" (key required)" if DASH_KEY else ""))
+    ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
