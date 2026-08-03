@@ -185,6 +185,15 @@ HA_RR = 3.0                        # first target = 3x the stop distance
 HA_PARTIAL = 0.5                   # fraction booked there; the stop then moves
                                    # to entry and the remainder is held until
                                    # the HA flips against the trade
+STOP_LOOKBACK = 5                  # the stop is the extreme of the LAST N
+                                   # REAL candles ending at the doji - low
+                                   # for a long, high for a short. 1 restores
+                                   # the old behaviour (the doji candle's own
+                                   # extreme). Wider stops are not a bug: the
+                                   # 1 Aug ledger showed WINNERS carried the
+                                   # wider stops (median 0.537% vs the
+                                   # losers' 0.471%) and every max-width cap
+                                   # tested made the book worse
 MIN_STOP_PCT = 0.25                # skip entries whose stop sits closer than
                                    # this % of price - sub-noise stops just churn
 
@@ -1690,7 +1699,10 @@ def process_candle(asset, ast, candles, ha, i):
         # stop is a price the market may never trade to. The real candle's
         # extreme is a level that actually exists on the book.
         # It also guarantees positive risk: for a long, low <= close always.
-        stop = c["l"] if want_long else c["h"]
+        lo = max(0, i - STOP_LOOKBACK + 1)
+        window = candles[lo:i + 1]
+        stop = (min(x["l"] for x in window) if want_long
+                else max(x["h"] for x in window))
         entry = c["c"]
         risk = (entry - stop) if want_long else (stop - entry)
         if risk <= 0:
@@ -1702,7 +1714,8 @@ def process_candle(asset, ast, candles, ha, i):
         ast["setup"] = {"dir": direction, "zhi": c["h"], "zlo": c["l"],
                         "ft": rt, "departed": True, "touched": True,
                         "frozen": True, "t": c["t"]}
-        log(f"{sym}: HA DOJI - turning {direction}, stop at the real candle "
+        log(f"{sym}: HA DOJI - turning {direction}, stop at the "
+            f"{len(window)}-candle "
             f"{'low' if want_long else 'high'} ${fmt_px(stop)} "
             f"(HA {'low' if want_long else 'high'} was "
             f"${fmt_px(hd['l'] if want_long else hd['h'])})")
@@ -1710,7 +1723,7 @@ def process_candle(asset, ast, candles, ha, i):
         # price, free, with no extra API call
         fire_entry(asset, ast, direction, c, stop, c["h"], c["l"], "HA",
                    f"HA doji after a {'down' if want_long else 'up'}trend - "
-                   f"stop at the real candle "
+                   f"stop at the {len(window)}-candle "
                    f"{'low' if want_long else 'high'}",
                    live_px=candles[-1]["c"])
         return True
