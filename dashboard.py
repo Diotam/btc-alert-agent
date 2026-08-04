@@ -370,7 +370,7 @@ def scan_age_s(state, mtime):
 def build_data():
     state, mtime = read_state()
     mids = prices()
-    trades = []
+    trades, gates = [], []
     closing = pending_closes()
     scanned = 0
     for sym, ast in state.items():
@@ -381,6 +381,12 @@ def build_data():
         tr = ast.get("trade")
         if tr and sym in closing:
             continue          # closed from here, waiting for the agent
+
+        g = ast.get("gate")
+        if g and not tr:
+            # the agent writes None for anything that has not reached a
+            # flip, so this list is already only the symbols in play
+            gates.append(dict(g, sym=sym, mid=mid))
 
         if tr:
             sign = 1 if tr["verdict"] == "LONG" else -1
@@ -409,6 +415,10 @@ def build_data():
     # entry at 40%, target at 100% - so sorting by R puts the trade closest
     # to its target first and the one closest to its stop last. Rebuilt on
     # every SSE tick, so the order re-shuffles live as prices move.
+    # closest to firing first
+    _ORDER = {"ready": 0, "flipped": 1, "wick too long": 2,
+              "run was expanding": 3, "run too flat": 4, "missed": 5}
+    gates.sort(key=lambda x: (_ORDER.get(x.get("stage"), 9), x["sym"]))
     trades.sort(key=lambda t: (t["r"] is None,
                                -(t["r"] if t["r"] is not None else 0),
                                t["sym"]))
@@ -439,6 +449,7 @@ def build_data():
             "stale_after_s": 2 * int((state.get("_meta") or {})
                                      .get("scan_every_s", 300)) + 60,
             "scanned": scanned, "trades": trades, "runners": [],
+            "gates": gates,
             "tally": signal_tally(),
             "closed": closed, "pnl": pnl, "build": BUILD,
             "btc": _btc_now(mids),
@@ -572,6 +583,7 @@ h1{font-size:17px;margin:4px 0 12px}
   </div>
 </div>
 <div class="section shead" onclick="toggle('trades')"><span class=chev id=c-trades>\u25be</span>Open trades<span class=cnt id=n-trades>0</span></div><div id=trades></div>
+<div class="section shead" onclick="toggle('gates')"><span class=chev id=c-gates>\u25be</span>Setup pipeline<span class=cnt id=n-gates>0</span> <span id=gsub class=muted style="float:right;text-transform:none;letter-spacing:0"></span></div><div id=gates></div>
 <div class="section shead" onclick="toggle('closed')"><span class=chev id=c-closed>\u25be</span>Closed trades<span class=cnt id=n-closed>0</span> <span id=csub class=muted style="float:right;text-transform:none;letter-spacing:0"></span></div><div id=closed></div>
 <div class="section shead" onclick="toggle('events')"><span class=chev id=c-events>\u25be</span>Recent events<span class=cnt id=n-events>0</span></div><div id=events></div>
 <script>
@@ -646,7 +658,7 @@ const KEY=new URLSearchParams(location.search).get('key')||'';
 let PERIOD='d', LAST=null;
 let COLLAPSED={};
 try{COLLAPSED=JSON.parse(localStorage.getItem('dashCollapsed')||'{}')}catch(e){}
-function applyCollapse(){['trades','closed','events'].forEach(id=>{
+function applyCollapse(){['trades','gates','closed','events'].forEach(id=>{
  const el=document.getElementById(id), ch=document.getElementById('c-'+id);
  if(el)el.style.display=COLLAPSED[id]?'none':'';
  if(ch)ch.textContent=COLLAPSED[id]?'\u25b8':'\u25be'})}
@@ -763,6 +775,26 @@ function render(d){
   // Everything is measured from the ORIGINAL entry, and nothing here ever
   // freezes - these are live positions with no target left to hit.
   step('r-trades');
+  // SETUP PIPELINE - only symbols that have reached a colour flip. The
+  // agent writes null for everything else, so this list is already short.
+  const G=d.gates||[];
+  document.getElementById('n-gates').textContent=G.length;
+  document.getElementById('gsub').textContent=
+    G.filter(g=>g.stage==='ready').length+' ready';
+  document.getElementById('gates').innerHTML=G.length?G.map(g=>{
+    const cls=g.dir==='LONG'?'long':'short';
+    const live=g.stage==='ready'||g.stage==='flipped';
+    return `<div class="card tv" onclick="tvOpen('${g.sym}')" `
+      +`title="open ${g.sym} on TradingView"><div class=row>
+      <span class=sym>${g.stage==='ready'?'\u25cf':'\u25cb'} ${g.sym} `
+      +`<span class=${cls}>${g.dir||''}</span></span>
+      <span class="muted"${live?' style="color:#c9d1d9"':''}>${g.stage}</span>
+      </div><div class=row>
+      <span class=muted>${g.run||0} candle${(g.run||0)===1?'':'s'} `
+      +`${g.trend||''} \u00b7 ${g.age===0?'flip bar':'+'+g.age+' bar'}</span>
+      <span class=muted>${g.detail||''}</span></div></div>`;
+  }).join(''):'<div class="card muted">nothing has flipped</div>';
+  step('r-gates');
   const cut=Date.now()-DAYS[PERIOD]*86400000;
   // inPeriod is EVERY trade closed in the selected window - that is the
   // number the P&L above is computed from, so it is the number the badge
