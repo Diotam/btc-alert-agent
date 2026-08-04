@@ -227,7 +227,19 @@ ALERT_ENTRIES = True
 ALERT_LIFECYCLE = True             # target, runner, stop and breakeven alerts
 
 # --- execution ------------------------------------------------------------
-EXEC_LIVE = True                   # place real orders
+EXEC_LIVE = False                  # place real orders. OFF as of 3 Aug, his
+                                   # call: TRACKED AND ALERTS ONLY. Every
+                                   # entry alert carries "NOT PLACED on
+                                   # Hyperliquid - live execution OFF"; the
+                                   # ledger keeps booking outcomes, so it is
+                                   # a PAPER record from here.
+                                   # This also silences the exchange side of
+                                   # reconciliation: POS_CACHE is only filled
+                                   # when EXEC_LIVE, and protect_position,
+                                   # cancel_stale_orders, close_position_live,
+                                   # move_stop_live and ensure_flat all return
+                                   # early. The agent stops touching the
+                                   # account in any way
 EXEC_LOG_ORDERS = True             # write every sized order to orders.log.
                                    # This is an audit trail only - it has never
                                    # gated execution. EXEC_LIVE alone decides
