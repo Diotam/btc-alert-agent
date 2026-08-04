@@ -225,7 +225,7 @@ STOP_LOOKBACK = 5                  # the stop is the extreme of the LAST N
                                    # wider stops (median 0.537% vs the
                                    # losers' 0.471%) and every max-width cap
                                    # tested made the book worse
-MIN_TARGET_PCT = 0                 # the TARGET must sit at least this far
+MIN_TARGET_PCT = 2.0               # the TARGET must sit at least this far
                                    # from entry, as a % of price. 2.0 as of
                                    # 4 Aug, his call: "each setup needs to be
                                    # at least a 2% move". Expressed on the
