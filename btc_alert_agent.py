@@ -172,6 +172,14 @@ HA_MODE = "reversal"               # what the doji MEANS.
                                    #                    not the end of it.
                                    # Detection is IDENTICAL either way - only
                                    # the resulting side flips
+EMA_FILTER_LEN = 50                # trend filter on the REAL closes. Only
+                                   # SHORT while price is BELOW this EMA and
+                                   # only LONG while it is above, so the
+                                   # reversal is never taken against the
+                                   # bigger trend. Measured on the last
+                                   # CLOSED candle - the no-wick bar - since
+                                   # the entry bar is still forming when the
+                                   # signal is read. 0 disables the filter
 HA_FADE_BARS = 2                   # trailing HA bodies that must SHRINK
                                    # into the turn - "as the candles start
                                    # getting smaller". 0 disables
@@ -788,6 +796,22 @@ def no_wick(c, want_long):
     return wick <= (HA_NOWICK_TOL_PCT / 100.0) * body
 
 
+def ema_side(candles, i, want_long):
+    """Is price on the right side of the EMA for this trade?
+
+    Returns (ok, ema_value, close). The bar tested is the LAST CLOSED one,
+    which at signal time is i-1 - the no-wick candle. Testing the entry bar
+    would read a candle that has barely opened."""
+    if not EMA_FILTER_LEN or i < 1:
+        return True, None, None
+    k = max(0, i - 1)
+    series = ema([c["c"] for c in candles[:k + 1]], EMA_FILTER_LEN)
+    if not series:
+        return True, None, None
+    e, px = series[-1], candles[k]["c"]
+    return ((px > e) if want_long else (px < e)), e, px
+
+
 def ha_nowick_signal(ha, i, want_long):
     """The 4 Aug engine. Entry is at the OPEN of candle i, so everything
     below happened at i-1 or earlier.
@@ -928,7 +952,14 @@ def gate_status(ha, candles, i, sym=None):
         return d
     if age == 1:
         if no_wick(ha[i], want_long):
-            d.update(stage="ready", detail="no-wick bar - entry at next open")
+            ok_ema, ev, epx = ema_side(candles, i + 1, want_long)
+            if not ok_ema:
+                d.update(stage="wrong side of EMA",
+                         detail=f"close {fmt_px(epx)} vs "
+                                f"{EMA_FILTER_LEN} EMA {fmt_px(ev)}")
+            else:
+                d.update(stage="ready",
+                         detail="no-wick bar - entry at next open")
         else:
             side = "upper" if not want_long else "lower"
             w, b = ha_wick(ha[i], upper=not want_long), ha_body(ha[i])
@@ -2247,6 +2278,15 @@ def process_candle(asset, ast, candles, ha, i):
     for signal_long in (True, False):
         found = ha_nowick_signal(ha, i, signal_long)
         if not found:
+            continue
+        # THE 50 EMA DECIDES WHICH SIDE IS ALLOWED. Shorts only below it,
+        # longs only above, so a reversal is never taken against the wider
+        # trend it is turning inside of.
+        ok_ema, ema_v, ema_px = ema_side(candles, i, signal_long)
+        if not ok_ema:
+            log(f"{sym}: {'LONG' if signal_long else 'SHORT'} setup but "
+                f"price ${fmt_px(ema_px)} is on the wrong side of the "
+                f"{EMA_FILTER_LEN} EMA ${fmt_px(ema_v)} - skipped")
             continue
         d = found[0]                         # the FLIP bar - what the stop
         #                                      window sits behind
