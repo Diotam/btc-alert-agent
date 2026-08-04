@@ -91,7 +91,7 @@ MIN_DAY_VOLUME_USD = 2_000_000     # crypto floor, 24h notional
 COMMODITY_MIN_VOLUME_USD = 5_000_000
 STOCK_MIN_VOLUME_USD = 5_000_000
 ONLY = []                          # trade ONLY these symbols ([] = whole universe)
-ONLY_SYMBOLS = ("BTC",)            # if non-empty, the universe is EXACTLY
+ONLY_SYMBOLS = ()                  # if non-empty, the universe is EXACTLY
                                    # these and nothing else - volume floors,
                                    # MAX_ASSETS and dex discovery no longer
                                    # decide anything. BTC-only as of 4 Aug,
@@ -108,8 +108,8 @@ ASSETS = [                         # used when DISCOVER_ALL = False, or when
 ]
 
 # --- strategy dials -------------------------------------------------------
-TF = "30m"                         # execution timeframe
-SCAN_EVERY = "10m"                 # how often the loop wakes. Aligning it to
+TF = "15m"                         # execution timeframe
+SCAN_EVERY = "5m"                  # how often the loop wakes. Aligning it to
                                    # TF means one scan per candle. A shorter
                                    # pulse costs API calls but reacts sooner:
                                    # symbols with no open trade are skipped
@@ -118,8 +118,13 @@ SCAN_EVERY = "10m"                 # how often the loop wakes. Aligning it to
                                    # trades - intrabar stop/target detection
                                    # and moving the stop to entry after the
                                    # partial fills
-HA_SMOOTH_IN = 6                   # EMA applied to OHLC before building HA
-HA_SMOOTH_OUT = 3                  # EMA applied to the HA output
+HA_SMOOTH_IN = 1                   # EMA applied to OHLC before building HA
+HA_SMOOTH_OUT = 1                  # EMA applied to the HA output.
+                                   # 1,1 = REGULAR Heikin Ashi, no smoothing
+                                   # at all - the 4 Aug engine works on raw
+                                   # HA, where wicks are meaningful. Any
+                                   # smoothing averages wicks away and the
+                                   # no-wick test stops meaning anything
 BTC_TREND_SMOOTH = (5, 5)          # smoothing for the BTC CONTEXT line only,
                                    # deliberately lighter than the signal's
                                    # 10,10 so it turns sooner and reports
@@ -167,7 +172,21 @@ HA_MODE = "reversal"               # what the doji MEANS.
                                    #                    not the end of it.
                                    # Detection is IDENTICAL either way - only
                                    # the resulting side flips
-HA_MIN_RUN = 5                     # MINIMUM trend-coloured HA candles before
+HA_FADE_BARS = 2                   # trailing HA bodies that must SHRINK
+                                   # into the turn - "as the candles start
+                                   # getting smaller". 0 disables
+HA_NOWICK_TOL_PCT = 5.0            # a candle counts as NO-WICK when the wick
+                                   # on the trade's side is at most this % of
+                                   # its own body. Exact zeros are rare even
+                                   # on raw HA, so 0 makes the engine almost
+                                   # silent. The side that matters is the one
+                                   # the trade runs AGAINST: upper wick for a
+                                   # short, lower wick for a long - that is
+                                   # the classic HA conviction candle
+ENTRY_AT_OPEN = True               # enter at the OPEN of the candle AFTER
+                                   # the no-wick bar, not at a close. Every
+                                   # engine before 4 Aug entered on a close
+HA_MIN_RUN = 0                     # MINIMUM trend-coloured HA candles before
                                    # the flip counts. Back on 3 Aug at 5,
                                    # after LIT showed a ONE-candle red run
                                    # inside an uptrend being read as a trend
@@ -193,7 +212,7 @@ HA_DOJI_FRACTION = 0.25            # a DOJI is an HA body this small relative
                                    # price does NOT have to come back and
                                    # retest anything
 HA_RR = 3.0                        # first target = 3x the stop distance
-HA_PARTIAL = 0.5                   # fraction booked there; the stop then moves
+HA_PARTIAL = 1.0                   # fraction booked there; the stop then moves
                                    # to entry and the remainder is held until
                                    # the HA flips against the trade
 ADOPT_ORPHANS = "universe"         # a position on the exchange with NO
@@ -289,7 +308,7 @@ EXEC_SIZING = "margin"             # "margin"   = a FIXED DOLLAR AMOUNT of
                                    #   size, whatever collateral that needs
                                    # "risk"     = fixed dollar LOSS at the
                                    #   stop; the position size then varies
-EXEC_MARGIN_USD = 250.0            # collateral per trade in "margin" mode
+EXEC_MARGIN_USD = 30.0             # collateral per trade in "margin" mode
 EXEC_LEVERAGE = 999                # MAX leverage: eff_leverage() clamps this
                                    # to each market's own maximum, so 999
                                    # simply means "whatever this market
@@ -748,6 +767,73 @@ def ha_body(x):
     return abs(x["c"] - x["o"])
 
 
+def ha_wick(c, upper):
+    """Wick length on one side of an HA candle."""
+    body_hi = max(c["o"], c["c"])
+    body_lo = min(c["o"], c["c"])
+    return (c["h"] - body_hi) if upper else (body_lo - c["l"])
+
+
+def no_wick(c, want_long):
+    """Is this the CONVICTION candle - no wick on the side the trade runs
+    against? For a LONG that is the LOWER wick, for a SHORT the UPPER one.
+
+    Tolerance is a fraction of the candle's OWN BODY, not of price, so it
+    scales with the candle instead of with the market. A zero-body candle
+    can never qualify: it is a doji, the opposite of conviction."""
+    body = ha_body(c)
+    if body <= 0:
+        return False
+    wick = ha_wick(c, upper=not want_long)
+    return wick <= (HA_NOWICK_TOL_PCT / 100.0) * body
+
+
+def ha_nowick_signal(ha, i, want_long):
+    """The 4 Aug engine. Entry is at the OPEN of candle i, so everything
+    below happened at i-1 or earlier.
+
+    Reading the sequence backwards from the entry bar:
+      i-1   the NO-WICK candle - new colour, no wick on the trade's side
+      i-2   the COLOUR FLIP - first candle of the new colour
+      ...   before that, a run of the OLD colour whose bodies were SHRINKING
+            into the turn ("as the candles start getting smaller")
+
+    want_long=True means the old run was RED and it flipped GREEN.
+    Returns (flip_index, run_start) or None."""
+    nw, fl = i - 1, i - 2
+    if fl < 1:
+        return None
+    # the no-wick bar and the flip bar must both be the NEW colour
+    if ha_green(ha[nw]) != want_long or ha_green(ha[fl]) != want_long:
+        return None
+    if not no_wick(ha[nw], want_long):
+        return None
+    # ...and the flip bar must be the FIRST of that colour
+    if ha_green(ha[fl - 1]) == want_long:
+        return None
+    # the run it ended, walked back while the colour holds
+    r = fl - 1
+    while r >= 0 and ha_green(ha[r]) != want_long:
+        r -= 1
+    r += 1
+    run = ha[r:fl]
+    if len(run) < max(1, HA_MIN_RUN):
+        return None
+    bodies = [ha_body(x) for x in run]
+    biggest = max(bodies)
+    scale = abs(ha[fl]["c"]) or 1.0
+    if HA_MIN_BODY_PCT and biggest < HA_MIN_BODY_PCT / 100.0 * scale:
+        return None
+    # "as the candles start getting smaller" - the last HA_FADE_BARS bodies
+    # of the run shrink monotonically into the flip. This is what makes it a
+    # move running out of steam rather than one cut off mid-stride.
+    if HA_FADE_BARS and len(bodies) >= HA_FADE_BARS:
+        tail = bodies[-HA_FADE_BARS:]
+        if not all(tail[k] < tail[k - 1] for k in range(1, len(tail))):
+            return None
+    return fl, r
+
+
 def confirmed(ha, candles, d, i, want_long, final=True):
     """Did the doji at d actually take, by candle i?
 
@@ -791,83 +877,67 @@ def traded_side(signal_long, sym=None):
 
 
 def gate_status(ha, candles, i, sym=None):
-    """Where this symbol sits in the entry chain, for the dashboard.
+    """Where a symbol sits in the FLIP + NO-WICK sequence, for the panel.
 
-    ha_doji returns None with no reason, so nothing downstream can say WHY
-    a symbol is not trading. This mirrors its checks in order and names the
-    first one that fails. It is a REPORT, never a decision - fire_entry
-    still asks ha_doji. If the two ever disagree, ha_doji is right.
+    Returns None for anything that has not reached a flip - those are just
+    trends running, and listing every one of them buries the handful that
+    matter. ha_nowick_signal returns None with no reason, so this mirrors
+    its checks and names the first that fails. REPORT ONLY: fire_entry
+    still asks ha_nowick_signal, and if the two ever disagree that one is
+    right.
 
-    Returns {stage, detail, run, need} - cheap, pure arithmetic on a series
-    already in memory."""
-    if i < 1:
-        return {"stage": "warming up", "detail": "", "run": 0}
-    # A DOJI ALREADY IN FLIGHT beats anything this candle could be: report
-    # how its confirmation is going rather than starting the chain over.
-    for k in range(1, HA_CONFIRM_BARS + 1):
-        dd = i - k
-        if dd < 0:
-            break
-        for sig_long in (True, False):
-            if not ha_doji(ha, dd, sig_long):
-                continue
-            ok, why = confirmed(ha, candles, dd, i, sig_long,
-                                final=(k == HA_CONFIRM_BARS))
-            sd = sig_long if HA_MODE == "reversal" else not sig_long
-            side = "LONG" if traded_side(sd, sym) else "SHORT"
-            return {"run": k, "trend": "up" if sig_long else "down",
-                    "dir": side, "need": HA_CONFIRM_BARS,
-                    "stage": "confirming" if ok else "confirmation failed",
-                    "detail": (f"{k}/{HA_CONFIRM_BARS} bars"
-                               if ok else why)}
-    # the run BELOW the current candle, whichever colour it is
-    cur = ha_green(ha[i])
-    r = i - 1
-    while r >= 0 and ha_green(ha[r]) == ha_green(ha[i - 1]):
+    The sequence is strict about position - the no-wick bar must be the
+    candle IMMEDIATELY after the flip - so a row ages out in two bars."""
+    if i < 3:
+        return None
+    # the flip is the first candle of the colour currently running
+    f = i
+    while f > 0 and ha_green(ha[f - 1]) == ha_green(ha[i]):
+        f -= 1
+    age = i - f
+    if f < 1 or age > 2:
+        return None                      # no flip, or the chance has passed
+    want_long = ha_green(ha[f])
+    d = {"dir": "LONG" if want_long else "SHORT",
+         "trend": "down" if want_long else "up",
+         "age": age, "need": 1}
+
+    r = f - 1
+    while r >= 0 and ha_green(ha[r]) != want_long:
         r -= 1
     r += 1
-    run = ha[r:i]
-    n_run = len(run)
-    trend_up = ha_green(ha[i - 1])
-    # a red run turns us LONG under "reversal", SHORT under "continuation"
-    want_long = (not trend_up) if HA_MODE == "reversal" else trend_up
-    need = max(1, HA_MIN_RUN)
-    d = {"run": n_run, "trend": "up" if trend_up else "down",
-         "dir": "LONG" if traded_side(want_long, sym) else "SHORT",
-         "need": need}
-
-    if n_run < need:
-        d.update(stage="building trend", detail=f"{n_run}/{need} candles")
-        return d
+    run = ha[r:f]
+    d["run"] = len(run)
+    if not run:
+        return None
     bodies = [ha_body(x) for x in run]
     biggest = max(bodies)
-    scale = abs(ha[i]["c"]) or 1.0
+    scale = abs(ha[f]["c"]) or 1.0
     if HA_MIN_BODY_PCT and biggest < HA_MIN_BODY_PCT / 100.0 * scale:
-        d.update(stage="trend too flat",
-                 detail=f"{biggest / scale * 100:.3f}% vs "
-                        f"{HA_MIN_BODY_PCT}%")
+        d.update(stage="run too flat",
+                 detail=f"{biggest / scale * 100:.3f}% vs {HA_MIN_BODY_PCT}%")
         return d
-    body = ha_body(ha[i])
-    if body > HA_DOJI_FRACTION * biggest:
-        d.update(stage="waiting for doji",
-                 detail=f"body {body / biggest * 100:.0f}% of biggest")
+    if HA_FADE_BARS and len(bodies) >= HA_FADE_BARS:
+        tail = bodies[-HA_FADE_BARS:]
+        if not all(tail[k] < tail[k - 1] for k in range(1, len(tail))):
+            d.update(stage="run was expanding",
+                     detail="bodies grew into the flip")
+            return d
+    if age == 0:
+        d.update(stage="flipped", detail="needs a no-wick bar next")
         return d
-    if HA_MIN_FLIP_BODY_PCT and \
-            body / (abs(ha[i]["o"]) or 1.0) * 100 < HA_MIN_FLIP_BODY_PCT:
-        d.update(stage="doji too small", detail="under the flip floor")
+    if age == 1:
+        if no_wick(ha[i], want_long):
+            d.update(stage="ready", detail="no-wick bar - entry at next open")
+        else:
+            side = "upper" if not want_long else "lower"
+            w, b = ha_wick(ha[i], upper=not want_long), ha_body(ha[i])
+            pct = (w / b * 100) if b else 999
+            d.update(stage="wick too long",
+                     detail=f"{side} wick {pct:.0f}% of body "
+                            f"(max {HA_NOWICK_TOL_PCT:.0f}%)")
         return d
-    if HA_DOJI_COLOUR == "flip" and ha_green(ha[i]) != want_long:
-        d.update(stage="waiting for flip",
-                 detail="doji is still trend-coloured")
-        return d
-    # a doji is not a trade any more - HA_CONFIRM_BARS candles have to keep
-    # going its way, each bigger than the last, and the final REAL candle
-    # has to close that way. Report how far along that is.
-    if HA_CONFIRM_BARS:
-        d.update(stage="doji, awaiting confirmation",
-                 detail=f"0/{HA_CONFIRM_BARS} bars")
-        return d
-    d.update(stage="ready", detail="doji, needs a real close its way")
+    d.update(stage="missed", detail="no-wick bar did not follow the flip")
     return d
 
 
@@ -1127,8 +1197,17 @@ def _close_trade(asset, trade, px, kind, event_t, note="", frac=None):
 def _book_partial(asset, trade, px, event_t):
     """HA_PARTIAL comes off at the target, the stop moves to entry, and the
     remainder runs until the HA flips. Booked as its own ledger row with
-    frac set, so partial P&L stays partial."""
+    frac set, so partial P&L stays partial.
+
+    AT HA_PARTIAL = 1.0 THERE IS NO REMAINDER: the target takes the whole
+    position and the trade is DONE. Falling through to the partial path
+    would leave a trade marked half-booked with 0% running, which the
+    runner logic would then watch forever."""
     sym = asset["symbol"]
+    if HA_PARTIAL >= 1.0:
+        log(f"{sym}: target hit at ${fmt_px(px)} - full position booked "
+            f"at {HA_RR:.1f}R, no runner")
+        return _close_trade(asset, trade, px, "TP", event_t)
     record_close(sym, trade, px, "TP_HALF", event_t, frac=HA_PARTIAL)
     trade["half"] = True
     trade["left"] = round(1.0 - HA_PARTIAL, 6)
@@ -1831,7 +1910,7 @@ def place_entry_live(asset, trade, plan):
         trade["stop_oid"] = order_oid(r_stop)
         # the target only takes HA_PARTIAL of the position - the rest runs
         # until the HA flips, so it must NOT be resting at the target
-        part = round(size * HA_PARTIAL, dec)
+        part = round(size * HA_PARTIAL, dec)   # == size when HA_PARTIAL is 1.0
         r_tp = ex.order(sym, not long_, part, round_px(trade["tp"]),
                         {"limit": {"tif": "Gtc"}}, reduce_only=True)
         trade["tp_oid"] = order_oid(r_tp)
@@ -1874,7 +1953,7 @@ def protect_position(asset, trade):
                                        "isMarket": True, "tpsl": "sl"}},
                           reduce_only=True)
         trade["stop_oid"] = order_oid(r_stop)
-        part = round(size * HA_PARTIAL, dec)
+        part = round(size * HA_PARTIAL, dec)   # == size when HA_PARTIAL is 1.0
         r_tp = ex.order(sym, not long_, part, round_px(trade["tp"]),
                         {"limit": {"tif": "Gtc"}}, reduce_only=True)
         trade["tp_oid"] = order_oid(r_tp)
@@ -2156,29 +2235,21 @@ def process_candle(asset, ast, candles, ha, i):
     # never staler than the last candle close.
     try:
         g = gate_status(ha, candles, i, sym)
-        g["t"] = hd["t"]
-        g["px"] = c["c"]
+        if g:
+            g["t"] = hd["t"]
+            g["px"] = c["c"]
+        # None means "no flip in the last two bars" - CLEAR the old row
+        # rather than leaving a stale one on the panel forever
         ast["gate"] = g       # save_state runs at the end of every scan
     except Exception as e:
         log(f"{sym}: gate_status failed: {type(e).__name__}: {e}")
 
-    # the doji sits HA_CONFIRM_BARS candles back; THIS candle is the one
-    # that confirms it, and the one we enter on
-    d = i - HA_CONFIRM_BARS
-    if d < 0:
-        return False
     for signal_long in (True, False):
-        found = ha_doji(ha, d, signal_long)
+        found = ha_nowick_signal(ha, i, signal_long)
         if not found:
             continue
-        # ALWAYS check, even at HA_CONFIRM_BARS = 0. With no confirmation
-        # bars, confirmed() reduces to exactly the entry rule: the REAL
-        # candle at the doji must close the trade's way - green for a long,
-        # red for a short. The HA can drift green while the market prints
-        # red, and that is the case this rejects.
-        ok, why = confirmed(ha, candles, d, i, signal_long)
-        if not ok:
-            continue
+        d = found[0]                         # the FLIP bar - what the stop
+        #                                      window sits behind
         # BITCOIN DECIDES THE DIRECTION, 3 Aug, his call. The alt's own doji
         # is TIMING ONLY - it says a turn is happening here, not which way to
         # take it. So an alt doji that ends an UPTREND, a short setup on its
@@ -2226,12 +2297,18 @@ def process_candle(asset, ast, candles, ha, i):
         lo = max(0, d - STOP_LOOKBACK)
         window = candles[lo:d]
         if not window:
-            log(f"{sym}: {direction} doji at the start of the series - no "
+            log(f"{sym}: {direction} flip at the start of the series - no "
                 "candles before it to take a stop from, skipped")
             continue
         stop = (min(x["l"] for x in window) if want_long
                 else max(x["h"] for x in window))
-        entry = c["c"]
+        # ENTRY IS THE OPEN of this candle, not its close: the setup
+        # completed on the previous bar, so the trade is taken as this one
+        # begins. Everything downstream still keys off c, so hand it a copy
+        # whose close IS that open - fire_entry, the alert and the ledger
+        # then all agree on one entry price.
+        entry = c["o"] if ENTRY_AT_OPEN else c["c"]
+        c = dict(c, c=entry)
         risk = (entry - stop) if want_long else (stop - entry)
         if risk <= 0:
             log(f"{sym}: {direction} doji but entry is already through the "
@@ -2250,10 +2327,10 @@ def process_candle(asset, ast, candles, ha, i):
         # candles[-1] is the still-forming candle: its close is the current
         # price, free, with no extra API call
         fire_entry(asset, ast, direction, c, stop, c["h"], c["l"], "HA",
-                   f"HA doji after a {'down' if want_long else 'up'}trend, "
-                   f"confirmed by {HA_CONFIRM_BARS} expanding bar(s) and a "
-                   f"real close - stop at the {len(window)}-candle "
-                   f"extreme before the doji, "
+                   f"HA {'down' if want_long else 'up'}trend faded, flipped "
+                   f"{'green' if want_long else 'red'}, then a no-wick "
+                   f"candle - entered at the next open, stop at the "
+                   f"{len(window)}-candle extreme before the flip, "
                    f"{'low' if want_long else 'high'}",
                    live_px=candles[-1]["c"])
         return True
