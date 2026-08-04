@@ -91,6 +91,12 @@ MIN_DAY_VOLUME_USD = 2_000_000     # crypto floor, 24h notional
 COMMODITY_MIN_VOLUME_USD = 5_000_000
 STOCK_MIN_VOLUME_USD = 5_000_000
 ONLY = []                          # trade ONLY these symbols ([] = whole universe)
+ONLY_SYMBOLS = ("BTC",)            # if non-empty, the universe is EXACTLY
+                                   # these and nothing else - volume floors,
+                                   # MAX_ASSETS and dex discovery no longer
+                                   # decide anything. BTC-only as of 4 Aug,
+                                   # his call. Empty tuple restores the
+                                   # discovered universe
 EXCLUDE = []                       # never trade these (matches the base name
                                    # on any venue). PUMP was removed from
                                    # this list 3 Aug - it trades again
@@ -102,8 +108,8 @@ ASSETS = [                         # used when DISCOVER_ALL = False, or when
 ]
 
 # --- strategy dials -------------------------------------------------------
-TF = "15m"                         # execution timeframe
-SCAN_EVERY = "5m"                  # how often the loop wakes. Aligning it to
+TF = "30m"                         # execution timeframe
+SCAN_EVERY = "10m"                 # how often the loop wakes. Aligning it to
                                    # TF means one scan per candle. A shorter
                                    # pulse costs API calls but reacts sooner:
                                    # symbols with no open trade are skipped
@@ -112,8 +118,8 @@ SCAN_EVERY = "5m"                  # how often the loop wakes. Aligning it to
                                    # trades - intrabar stop/target detection
                                    # and moving the stop to entry after the
                                    # partial fills
-HA_SMOOTH_IN = 10                  # EMA applied to OHLC before building HA
-HA_SMOOTH_OUT = 10                 # EMA applied to the HA output
+HA_SMOOTH_IN = 6                   # EMA applied to OHLC before building HA
+HA_SMOOTH_OUT = 3                  # EMA applied to the HA output
 BTC_TREND_SMOOTH = (5, 5)          # smoothing for the BTC CONTEXT line only,
                                    # deliberately lighter than the signal's
                                    # 10,10 so it turns sooner and reports
@@ -168,7 +174,7 @@ HA_MIN_RUN = 5                     # MINIMUM trend-coloured HA candles before
                                    # and its next green candle as a flip.
                                    # 15 silenced the engine; 1 lets noise
                                    # through. 0 disables the check
-HA_CONFIRM_BARS = 2                # HA candles that must follow the doji
+HA_CONFIRM_BARS = 0                # HA candles that must follow the doji
                                    # before the trade is taken: each in the
                                    # doji's direction, each with a body
                                    # BIGGER than the one before, and on the
@@ -210,7 +216,7 @@ REVERSE_ALERTS = True              # when the smoothed HA flips against an
                                    # because a reverse skips the doji, the
                                    # confirmation bars and the run-length
                                    # floor that every other entry must clear
-STOP_LOOKBACK = 7                  # the stop is the extreme of the LAST N
+STOP_LOOKBACK = 5                  # the stop is the extreme of the LAST N
                                    # REAL candles ending at the doji - low
                                    # for a long, high for a short. 1 restores
                                    # the old behaviour (the doji candle's own
@@ -219,6 +225,18 @@ STOP_LOOKBACK = 7                  # the stop is the extreme of the LAST N
                                    # wider stops (median 0.537% vs the
                                    # losers' 0.471%) and every max-width cap
                                    # tested made the book worse
+MIN_TARGET_PCT = 0                 # the TARGET must sit at least this far
+                                   # from entry, as a % of price. 2.0 as of
+                                   # 4 Aug, his call: "each setup needs to be
+                                   # at least a 2% move". Expressed on the
+                                   # target rather than the stop on purpose -
+                                   # at HA_RR 3.0 it implies a stop of at
+                                   # least 0.667%, but it stays correct if
+                                   # HA_RR changes, and it is the move he
+                                   # actually cares about. Round-trip fees
+                                   # are ~0.083%, so 2% keeps them near 4%
+                                   # of the gross rather than half of it.
+                                   # 0 disables
 MIN_STOP_PCT = 0.25                # skip entries whose stop sits closer than
                                    # this % of price - sub-noise stops just churn
 
@@ -227,8 +245,8 @@ ALERT_ENTRIES = True
 ALERT_LIFECYCLE = True             # target, runner, stop and breakeven alerts
 
 # --- execution ------------------------------------------------------------
-EXEC_LIVE = False                  # place real orders. OFF as of 3 Aug, his
-                                   # call: TRACKED AND ALERTS ONLY. Every
+EXEC_LIVE = True                   # place real orders. Back ON 4 Aug after a
+                                   # night tracked-only. When False: every
                                    # entry alert carries "NOT PLACED on
                                    # Hyperliquid - live execution OFF"; the
                                    # ledger keeps booking outcomes, so it is
@@ -271,7 +289,7 @@ EXEC_SIZING = "margin"             # "margin"   = a FIXED DOLLAR AMOUNT of
                                    #   size, whatever collateral that needs
                                    # "risk"     = fixed dollar LOSS at the
                                    #   stop; the position size then varies
-EXEC_MARGIN_USD = 30.0             # collateral per trade in "margin" mode
+EXEC_MARGIN_USD = 100.0            # collateral per trade in "margin" mode
 EXEC_LEVERAGE = 999                # MAX leverage: eff_leverage() clamps this
                                    # to each market's own maximum, so 999
                                    # simply means "whatever this market
@@ -309,9 +327,9 @@ ORDERS_LOG = Path(__file__).parent / "orders.log"
 TIMEZONE = "America/Chicago"
 LOCAL_TZ = ZoneInfo(TIMEZONE)
 
-MS = {"5m": 300_000, "15m": 900_000, "30m": 1_800_000, "1h": 3_600_000,
-      "4h": 14_400_000}
-_TF_ALIASES = {"5min": "5m", "15min": "15m", "30min": "30m",
+MS = {"5m": 300_000, "10m": 600_000, "15m": 900_000, "30m": 1_800_000,
+      "1h": 3_600_000, "4h": 14_400_000}
+_TF_ALIASES = {"5min": "5m", "10min": "10m", "15min": "15m", "30min": "30m",
                "60m": "1h", "60min": "1h", "1hr": "1h"}
 TF = _TF_ALIASES.get(TF.strip().lower(), TF.strip().lower())
 SCAN_EVERY = _TF_ALIASES.get(SCAN_EVERY.strip().lower(),
@@ -323,7 +341,8 @@ for _n, _v in (("TF", TF), ("SCAN_EVERY", SCAN_EVERY)):
 
 # the fetcher ignores the caller's count and uses this map - a value that is
 # too small silently starves whatever depends on that interval
-LOOKBACK = {"5m": 300, "15m": 400, "30m": 400, "1h": 500, "4h": 300}
+LOOKBACK = {"5m": 300, "10m": 300, "15m": 400, "30m": 400, "1h": 500,
+            "4h": 300}
 
 REQUEST_TIMEOUT_S = 8              # fail fast: a throttled API must not burn 20s
 FETCH_DELAY_S = 0.12
@@ -631,6 +650,17 @@ def discover_assets():
                           "label": f"{base_name(name)}-PERP"
                                    + (f" ({dex})" if dex else ""),
                           "fallbacks": []})
+    if ONLY_SYMBOLS:
+        want = {base_name(x).upper() for x in ONLY_SYMBOLS}
+        found = [a for a in found
+                 if base_name(a["symbol"]).upper() in want]
+        missing = want - {base_name(a["symbol"]).upper() for a in found}
+        if missing:
+            log(f"ONLY_SYMBOLS names markets that are not tradable: "
+                f"{sorted(missing)}")
+        log(f"ONLY_SYMBOLS active - universe restricted to "
+            f"{[a['symbol'] for a in found]}")
+        return found
     found.sort(key=lambda a: a["vol"], reverse=True)
     return found[:MAX_ASSETS]
 
@@ -835,7 +865,7 @@ def gate_status(ha, candles, i, sym=None):
         d.update(stage="doji, awaiting confirmation",
                  detail=f"0/{HA_CONFIRM_BARS} bars")
         return d
-    d.update(stage="ready", detail="doji confirmed")
+    d.update(stage="ready", detail="doji, needs a real close its way")
     return d
 
 
@@ -2026,6 +2056,12 @@ def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger,
             f"(min {MIN_STOP_PCT}%) - too tight to be worth fees, waiting")
         return False
     tp = entry - HA_RR * risk if short else entry + HA_RR * risk
+    tgt_pct = abs(tp - entry) / entry * 100 if entry else 0.0
+    if MIN_TARGET_PCT and tgt_pct < MIN_TARGET_PCT:
+        log(f"{sym}: target only {tgt_pct:.2f}% away "
+            f"(min {MIN_TARGET_PCT}%) - move too small to be worth taking, "
+            "waiting")
+        return False
     plan = {"entry": entry, "stop": stop, "tp": tp}
     event_t = c["t"] + MS[TF]
 
@@ -2133,10 +2169,14 @@ def process_candle(asset, ast, candles, ha, i):
         found = ha_doji(ha, d, signal_long)
         if not found:
             continue
-        if HA_CONFIRM_BARS:
-            ok, why = confirmed(ha, candles, d, i, signal_long)
-            if not ok:
-                continue
+        # ALWAYS check, even at HA_CONFIRM_BARS = 0. With no confirmation
+        # bars, confirmed() reduces to exactly the entry rule: the REAL
+        # candle at the doji must close the trade's way - green for a long,
+        # red for a short. The HA can drift green while the market prints
+        # red, and that is the case this rejects.
+        ok, why = confirmed(ha, candles, d, i, signal_long)
+        if not ok:
+            continue
         # BITCOIN DECIDES THE DIRECTION, 3 Aug, his call. The alt's own doji
         # is TIMING ONLY - it says a turn is happening here, not which way to
         # take it. So an alt doji that ends an UPTREND, a short setup on its
