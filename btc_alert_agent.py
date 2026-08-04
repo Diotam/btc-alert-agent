@@ -289,7 +289,7 @@ EXEC_SIZING = "margin"             # "margin"   = a FIXED DOLLAR AMOUNT of
                                    #   size, whatever collateral that needs
                                    # "risk"     = fixed dollar LOSS at the
                                    #   stop; the position size then varies
-EXEC_MARGIN_USD = 100.0            # collateral per trade in "margin" mode
+EXEC_MARGIN_USD = 250.0            # collateral per trade in "margin" mode
 EXEC_LEVERAGE = 999                # MAX leverage: eff_leverage() clamps this
                                    # to each market's own maximum, so 999
                                    # simply means "whatever this market
@@ -306,13 +306,15 @@ EXEC_LEVERAGE = 999                # MAX leverage: eff_leverage() clamps this
                                    # post 3x the intended collateral.
 EXEC_NOTIONAL_USD = 30.0           # size of each position in "notional" mode
 EXEC_RISK_USD = 2.0                # dollar loss at the stop in "risk" mode
-EXEC_MAX_NOTIONAL_USD = 8000       # cap on position value. Must be at
-                                   # least EXEC_RISK_USD / MIN_STOP_PCT or
-                                   # the cap silently trims the position and
-                                   # the risk with it: at $20 risk and a
-                                   # 0.25% stop the trade needs $8,000, and
-                                   # a $2,500 cap would have cut the actual
-                                   # risk to $6.25
+EXEC_MAX_NOTIONAL_USD = 12000      # cap on position value. Raised from 8000
+                                   # on 4 Aug so it stops binding: in margin
+                                   # mode the position is EXEC_MARGIN_USD x
+                                   # the market max, and $250 x 40 = $10,000
+                                   # was being clamped to $8,000, quietly
+                                   # making the real collateral $200. KEEP
+                                   # THIS ABOVE EXEC_MARGIN_USD x 40 or the
+                                   # cap trims the position and the risk
+                                   # with it, without saying so
 EXEC_MAX_POSITIONS = 0             # concurrent live positions. 0 = NO CAP:
                                    # the only remaining limits are the halt
                                    # file, EXEC_MAX_NOTIONAL_USD per trade,
