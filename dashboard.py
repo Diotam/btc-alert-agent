@@ -411,11 +411,9 @@ def build_data():
                            "rr": tr.get("rr"),
                            "opened_t": tr.get("opened_t", 0)})
 
-    # fullest bar at the top. The open-trade bar is one scale - stop at 0%,
-    # entry at 40%, target at 100% - so sorting by R puts the trade closest
-    # to its target first and the one closest to its stop last. Rebuilt on
-    # every SSE tick, so the order re-shuffles live as prices move.
-    # closest to firing first
+    # closest to firing first for the pipeline; for trades, highest R at the
+    # top, so the one nearest its target leads and the one nearest its stop
+    # sits last. Rebuilt on every SSE tick, so the order re-shuffles live
     _ORDER = {"ready": 0, "flipped": 1, "wrong side of EMA": 2,
               "wick too long": 3, "run was expanding": 4,
               "run too flat": 5, "missed": 6}
@@ -423,10 +421,6 @@ def build_data():
     trades.sort(key=lambda t: (t["r"] is None,
                                -(t["r"] if t["r"] is not None else 0),
                                t["sym"]))
-    # best-performing runner first - it is the one closest to being given
-    # back if the HA turns
-    # closest to firing first: "ready" at the top, then whoever has the
-    # longest run behind them, since that is the one nearest a doji
     closed, pnl = closed_trades()
     return {"now": time.time(),
             "state_age_s": scan_age_s(state, mtime),
@@ -748,10 +742,12 @@ function render(d){
    const showR=slDone?-1:t.r;
    const showPnl=slDone?sgn*(t.stop-t.entry)/t.entry*100:t.pnl;
    // "target reached" is now computed LIVE, never latched
-   // this panel only holds trades still at full risk - once the partial
-   // books they move to the Runners list
-   const atTarget=t.r!=null && t.r>=RRT;
-   const badge=atTarget?'<span class="badge ok">target reached · booking half</span>'
+   // this panel holds EVERY open position - a trade at full risk and a
+   // runner whose partial has booked. There is no separate Runners list
+   const atTarget=!t.half && t.r!=null && t.r>=RRT;
+   const running=Math.round((t.left==null?1:t.left)*100);
+   const badge=t.half?`<span class="badge ok">${running}% running</span>`
+     :atTarget?'<span class="badge ok">target reached · booking half</span>'
      :slDone?'<span class="badge warn">stop hit · closing</span>':'';
    // THE BAR NOW MEASURES WHAT THE LABEL SAYS. It used to run one scale
    // from stop (0%) through entry to TP (100%), so a trade 61% of the way
@@ -764,6 +760,7 @@ function render(d){
    const rlbl=showR==null?''
      :slDone?'Stop traded - waiting for the close confirmation'
      :atTarget?`${showR.toFixed(2)}R \u00b7 target reached, booking half`
+     :t.half?`${showR.toFixed(2)}R from entry \u00b7 runs until the HA flips`
      :showR>=0
      ?`${showR.toFixed(2)}R · ${Math.round(Math.min(100,showR/RRT*100))}% of the way to TP`
      :`${showR.toFixed(2)}R · ${Math.round(Math.min(100,-showR*100))}% of the way to stop`;
@@ -772,14 +769,11 @@ function render(d){
     <span class="num ${showPnl>=0?'pnl-pos':'pnl-neg'}">${showPnl==null?'-':(showPnl>=0?'+':'')+showPnl.toFixed(2)+'%'}</span></div>
     <div class=row><span class=muted>entry <span class=num>$${px(t.entry)}</span></span>
     <span class=muted>${slDone?'exit':'now'} <span class=num>$${px(slDone?t.stop:t.mid)}</span></span></div>
-    <div class=row><span class=muted>stop <span class=num>$${px(t.stop)}</span></span>
-    <span class=muted>TP <span class=num>$${px(t.tp)}</span></span></div>
+    <div class=row><span class=muted>stop <span class=num>$${px(t.stop)}</span>${t.half?' <span style="color:#3fb950">risk-free</span>':''}</span>
+    <span class=muted>${t.half?'booked at':'TP'} <span class=num>$${px(t.tp)}</span></span></div>
     <div class=bar><div class=fill style="width:${rp}%;background:${rc}"></div></div>
     <div class=muted>${rlbl}</div></div>`
   }).join(''):'<div class="card muted">none</div>';
-  // RUNNERS: partial booked, stop at entry, riding until the HA flips.
-  // Everything is measured from the ORIGINAL entry, and nothing here ever
-  // freezes - these are live positions with no target left to hit.
   step('r-trades');
   // SETUP PIPELINE - only symbols that have reached a colour flip. The
   // agent writes null for everything else, so this list is already short.
