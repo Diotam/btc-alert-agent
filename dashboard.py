@@ -417,7 +417,7 @@ def build_data():
     _ORDER = {"ready": 0, "flipped": 1, "too far from EMA": 2,
               "wrong side of EMA": 3, "wick too long": 4,
               "run was expanding": 5, "run too flat": 6,
-              "run too short": 7, "missed": 8}
+              "run went nowhere": 7, "run too short": 8, "missed": 9}
     gates.sort(key=lambda x: (_ORDER.get(x.get("stage"), 9), x["sym"]))
     trades.sort(key=lambda t: (t["r"] is None,
                                -(t["r"] if t["r"] is not None else 0),
