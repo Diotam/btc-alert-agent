@@ -753,8 +753,13 @@ function render(d){
    const atTarget=t.r!=null && t.r>=RRT;
    const badge=atTarget?'<span class="badge ok">target reached · booking half</span>'
      :slDone?'<span class="badge warn">stop hit · closing</span>':'';
-   // one scale: stop = 0%, entry = 40%, TP = 100% - the fill IS closeness to TP
-   const rp=showR==null?0:Math.max(0,Math.min(100,(showR+1)/(1+RRT)*100));
+   // THE BAR NOW MEASURES WHAT THE LABEL SAYS. It used to run one scale
+   // from stop (0%) through entry to TP (100%), so a trade 61% of the way
+   // to its stop drew a 16% bar - the number and the picture disagreed.
+   // Both are now measured FROM ENTRY toward whichever side price is on.
+   const rp=showR==null?0
+     :showR>=0?Math.max(0,Math.min(100,showR/RRT*100))
+     :Math.max(0,Math.min(100,-showR*100));
    const rc=showR==null?'#8b949e':showR>=0?'#3fb950':'#f85149';
    const rlbl=showR==null?''
      :slDone?'Stop traded - waiting for the close confirmation'
