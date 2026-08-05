@@ -255,7 +255,7 @@ REVERSE_ALERTS = True              # when the smoothed HA flips against an
                                    # because a reverse skips the doji, the
                                    # confirmation bars and the run-length
                                    # floor that every other entry must clear
-STOP_SOURCE = "run"                # WHERE the stop level comes from.
+STOP_SOURCE = "percent"            # WHERE the stop level comes from.
                                    #   "turn"  - the extreme of the FLIP bar
                                    #             and the no-wick bar, i.e.
                                    #             the two candles that ARE the
@@ -340,7 +340,7 @@ TRACK_UNPLACED = False             # keep tracking a trade whose order never
                                    # purpose. True restores paper tracking,
                                    # which measures the strategy rather than
                                    # the account
-STOP_WIDEN_PCT = 5.0               # FLOOR that WIDENS. MIN_STOP_PCT skips a
+STOP_WIDEN_PCT = 0                 # FLOOR that WIDENS. MIN_STOP_PCT skips a
                                    # setup whose stop is too tight; this one
                                    # pushes the stop OUT to at least this %
                                    # instead, so every stop lands in a band
@@ -348,7 +348,7 @@ STOP_WIDEN_PCT = 5.0               # FLOOR that WIDENS. MIN_STOP_PCT skips a
                                    # 0 disables. Note the window can still
                                    # hand back something wider - this is a
                                    # floor, not a target
-MAX_STOP_PCT = 15.0                # CLAMP the stop to at most this % from
+MAX_STOP_PCT = 10.0                # CLAMP the stop to at most this % from
                                    # entry. The window can reach back hours
                                    # and find a level 20%+ away; that is
                                    # beyond the LIQUIDATION point on any
