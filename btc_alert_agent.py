@@ -1271,6 +1271,7 @@ def _book_partial(asset, trade, px, event_t):
         log(f"{sym}: target hit at ${fmt_px(px)} - full position booked "
             f"at {HA_RR:.1f}R, no runner")
         return _close_trade(asset, trade, px, "TP", event_t)
+    # returns None on the PARTIAL path so the caller knows the trade lives on
     record_close(sym, trade, px, "TP_HALF", event_t, frac=HA_PARTIAL)
     trade["half"] = True
     trade["left"] = round(1.0 - HA_PARTIAL, 6)
@@ -1356,7 +1357,13 @@ def process_open_trade(asset, trade, candles, ha, last_closed_t):
             return _close_trade(asset, trade, trade["stop"], kind, event_t)
         if not trade.get("half"):
             if (c["h"] >= trade["tp"]) if long else (c["l"] <= trade["tp"]):
-                _book_partial(asset, trade, trade["tp"], event_t)
+                # AT HA_PARTIAL = 1.0 _book_partial CLOSES the trade and
+                # returns _close_trade's (None, True). Discarding that left
+                # the ledger with a TP row while state still tracked the
+                # position as open - PUMP, 5 Aug, in both panels at once.
+                done = _book_partial(asset, trade, trade["tp"], event_t)
+                if done is not None:
+                    return done
             continue
         h = by_t.get(c["t"])
         if h and ha_green(h) != long:
@@ -1379,7 +1386,9 @@ def process_open_trade(asset, trade, candles, ha, last_closed_t):
                                 "Intrabar - stop traded before the close.")
         if not trade.get("half"):
             if (live["h"] >= trade["tp"]) if long else (live["l"] <= trade["tp"]):
-                _book_partial(asset, trade, trade["tp"], t_now)
+                done = _book_partial(asset, trade, trade["tp"], t_now)
+                if done is not None:
+                    return done
     return trade, changed
 
 
