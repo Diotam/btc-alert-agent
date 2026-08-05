@@ -1033,6 +1033,12 @@ def gate_status(ha, candles, i, sym=None):
     d["run"] = len(run)
     if not run:
         return None
+    if len(run) < max(1, HA_MIN_RUN):
+        # ha_nowick_signal refuses this outright, so listing it as "flipped,
+        # needs a no-wick bar next" promises a trade that can never fire
+        d.update(stage="run too short",
+                 detail=f"{len(run)}/{HA_MIN_RUN} candles")
+        return d
     bodies = [ha_body(x) for x in run]
     biggest = max(bodies)
     scale = abs(ha[f]["c"]) or 1.0
@@ -1053,9 +1059,16 @@ def gate_status(ha, candles, i, sym=None):
         if no_wick(ha[i], want_long):
             ok_ema, ev, epx = ema_side(candles, i + 1, want_long)
             if not ok_ema:
-                d.update(stage="wrong side of EMA",
-                         detail=f"close {fmt_px(epx)} vs "
-                                f"{EMA_FILTER_LEN} EMA {fmt_px(ev)}")
+                right_side = (epx > ev) == want_long if (ev and epx) else False
+                gap = (abs(epx - ev) / ev * 100) if ev else 0
+                if right_side:
+                    d.update(stage="too far from EMA",
+                             detail=f"{gap:.2f}% away, needs "
+                                    f"<= {EMA_RETEST_PCT}%")
+                else:
+                    d.update(stage="wrong side of EMA",
+                             detail=f"close {fmt_px(epx)} vs "
+                                    f"{EMA_FILTER_LEN} EMA {fmt_px(ev)}")
             else:
                 d.update(stage="ready",
                          detail="no-wick bar - entry at next open")
