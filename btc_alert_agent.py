@@ -231,7 +231,7 @@ HA_DOJI_FRACTION = 0.25            # a DOJI is an HA body this small relative
                                    # threshold. Entry happens ON the doji -
                                    # price does NOT have to come back and
                                    # retest anything
-HA_RR = 2.0                        # first target = 3x the stop distance
+HA_RR = 1.5                        # first target = 3x the stop distance
 HA_PARTIAL = 1.0                   # fraction booked there; the stop then moves
                                    # to entry and the remainder is held until
                                    # the HA flips against the trade
@@ -340,6 +340,14 @@ TRACK_UNPLACED = False             # keep tracking a trade whose order never
                                    # purpose. True restores paper tracking,
                                    # which measures the strategy rather than
                                    # the account
+STOP_WIDEN_PCT = 5.0               # FLOOR that WIDENS. MIN_STOP_PCT skips a
+                                   # setup whose stop is too tight; this one
+                                   # pushes the stop OUT to at least this %
+                                   # instead, so every stop lands in a band
+                                   # between STOP_WIDEN_PCT and MAX_STOP_PCT.
+                                   # 0 disables. Note the window can still
+                                   # hand back something wider - this is a
+                                   # floor, not a target
 MAX_STOP_PCT = 15.0                # CLAMP the stop to at most this % from
                                    # entry. The window can reach back hours
                                    # and find a level 20%+ away; that is
@@ -2437,7 +2445,13 @@ def process_candle(asset, ast, candles, ha, i):
         # offset so the last group ends exactly at the flip rather than
         # wherever the series happens to start - an unaligned grouping would
         # shift every level by up to factor-1 bars.
-        if STOP_SOURCE == "turn":
+        if STOP_SOURCE == "percent":
+            # every stop the SAME distance, ignoring structure entirely
+            ep = c["o"] if ENTRY_AT_OPEN else c["c"]
+            window = [c]
+            stop = (ep * (1 - MAX_STOP_PCT / 100) if want_long
+                    else ep * (1 + MAX_STOP_PCT / 100))
+        elif STOP_SOURCE == "turn":
             # the flip bar and the no-wick bar - the reversal itself. On TF,
             # since resampling two specific candles would blur them into the
             # hour around them.
@@ -2462,6 +2476,18 @@ def process_candle(asset, ast, candles, ha, i):
         # a leveraged perp sits past liquidation - the stop would never fire
         # and the position would be liquidated for the full collateral
         # instead. Pull it in to MAX_STOP_PCT so the order still works.
+        # WIDEN FIRST, then clamp - so the band is honoured in both
+        # directions and a widened stop can never exceed the ceiling.
+        if STOP_WIDEN_PCT and STOP_SOURCE != "percent":
+            ep = c["o"] if ENTRY_AT_OPEN else c["c"]
+            near = abs(ep - stop) / ep * 100 if ep else 0
+            if near < STOP_WIDEN_PCT:
+                wider = (ep * (1 - STOP_WIDEN_PCT / 100) if want_long
+                         else ep * (1 + STOP_WIDEN_PCT / 100))
+                log(f"{sym}: stop {near:.2f}% away widened to "
+                    f"{STOP_WIDEN_PCT:.1f}% (${fmt_px(stop)} -> "
+                    f"${fmt_px(wider)})")
+                stop = wider
         if MAX_STOP_PCT:
             entry_px = c["o"] if ENTRY_AT_OPEN else c["c"]
             far = abs(entry_px - stop) / entry_px * 100 if entry_px else 0
