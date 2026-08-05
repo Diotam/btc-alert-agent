@@ -255,6 +255,25 @@ REVERSE_ALERTS = True              # when the smoothed HA flips against an
                                    # because a reverse skips the doji, the
                                    # confirmation bars and the run-length
                                    # floor that every other entry must clear
+STOP_TF = "1h"                     # TIMEFRAME the stop extreme is measured
+                                   # on. The engine runs on TF, but a 15m
+                                   # high is a local wick - the level a
+                                   # reversal is really risking against is
+                                   # the SWING high, which is what the same
+                                   # lookback finds on 1h. Resampled from
+                                   # the candles already fetched, and the
+                                   # groups are ALIGNED so the last one ends
+                                   # at the flip. Set to TF for the old
+                                   # behaviour
+STOP_FROM_RUN = True               # take the stop from the WHOLE FADING RUN
+                                   # rather than a fixed candle count: the
+                                   # extreme of every candle from where the
+                                   # run began to the flip. That is the level
+                                   # that would prove the turn failed, which
+                                   # is what a reversal is risking against.
+                                   # STOP_LOOKBACK still applies as a FLOOR,
+                                   # so a one-candle run cannot produce a
+                                   # one-candle stop. False = fixed count
 STOP_LOOKBACK = 5                  # the stop is the extreme of the LAST N
                                    # REAL candles ending at the doji - low
                                    # for a long, high for a short. 1 restores
@@ -2341,8 +2360,24 @@ def process_candle(asset, ast, candles, ha, i):
         # the move that led INTO it, so the confirmation bars after it are
         # excluded - they are already part of the new direction and would
         # drag the stop toward entry.
-        lo = max(0, d - STOP_LOOKBACK)
-        window = candles[lo:d]
+        # the run start comes back from the detector, so the stop can span
+        # the move being turned instead of the last few bars of it - which
+        # on a fade are the SMALLEST ones, putting the stop nearest entry
+        # exactly when conviction is weakest
+        run_start = found[1]
+        # THE STOP IS MEASURED ON STOP_TF. Resample the bars BEFORE the flip,
+        # offset so the last group ends exactly at the flip rather than
+        # wherever the series happens to start - an unaligned grouping would
+        # shift every level by up to factor-1 bars.
+        sfac = max(1, MS.get(STOP_TF, MS[TF]) // MS[TF])
+        pre = candles[d % sfac:d] if sfac > 1 else candles[:d]
+        higher = resample(pre, sfac)
+        if STOP_FROM_RUN:
+            span = -(-(d - run_start) // sfac)      # ceil, in STOP_TF bars
+            need = max(STOP_LOOKBACK, span)
+        else:
+            need = STOP_LOOKBACK
+        window = higher[-need:] if higher else candles[max(0, d - need):d]
         if not window:
             log(f"{sym}: {direction} flip at the start of the series - no "
                 "candles before it to take a stop from, skipped")
@@ -2369,8 +2404,9 @@ def process_candle(asset, ast, candles, ha, i):
                         "frozen": True, "t": c["t"]}
         log(f"{sym}: HA DOJI CONFIRMED after {HA_CONFIRM_BARS} bar(s) - "
             f"turning {direction}, stop at the {len(window)}-candle "
-            f"{'low' if want_long else 'high'} before the doji "
-            f"${fmt_px(stop)} (doji was {fmt_ts(ha[d]['t'])})")
+            f"{STOP_TF} {'low' if want_long else 'high'} before the flip "
+            f"${fmt_px(stop)} (flip was {fmt_ts(ha[d]['t'])}, run began "
+            f"{fmt_ts(ha[found[1]]['t'])})")
         # candles[-1] is the still-forming candle: its close is the current
         # price, free, with no extra API call
         fire_entry(asset, ast, direction, c, stop, c["h"], c["l"], "HA",
