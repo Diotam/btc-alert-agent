@@ -206,7 +206,7 @@ HA_NOWICK_TOL_PCT = 5.0            # a candle counts as NO-WICK when the wick
 ENTRY_AT_OPEN = True               # enter at the OPEN of the candle AFTER
                                    # the no-wick bar, not at a close. Every
                                    # engine before 4 Aug entered on a close
-HA_MIN_RUN = 0                     # MINIMUM trend-coloured HA candles before
+HA_MIN_RUN = 8                     # MINIMUM trend-coloured HA candles before
                                    # the flip counts. Back on 3 Aug at 5,
                                    # after LIT showed a ONE-candle red run
                                    # inside an uptrend being read as a trend
