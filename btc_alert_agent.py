@@ -294,15 +294,6 @@ STOP_TF = "1h"                     # TIMEFRAME the stop extreme is measured
                                    # groups are ALIGNED so the last one ends
                                    # at the flip. Set to TF for the old
                                    # behaviour
-STOP_FROM_RUN = True               # take the stop from the WHOLE FADING RUN
-                                   # rather than a fixed candle count: the
-                                   # extreme of every candle from where the
-                                   # run began to the flip. That is the level
-                                   # that would prove the turn failed, which
-                                   # is what a reversal is risking against.
-                                   # STOP_LOOKBACK still applies as a FLOOR,
-                                   # so a one-candle run cannot produce a
-                                   # one-candle stop. False = fixed count
 STOP_LOOKBACK = 12                 # FLOOR on the stop window, COUNTED IN
                                    # STOP_TF BARS - so 1 means one hour, not
                                    # one 15m candle. It was 5 when the window
@@ -1377,7 +1368,7 @@ def reverse_alert(asset, trade, candles, c, was_long):
     try:
         idx = next(k for k in range(len(candles) - 1, -1, -1)
                    if candles[k]["t"] == c["t"])
-        lo = max(0, idx - STOP_LOOKBACK + 1)
+        lo = max(0, idx - stop_bars() + 1)
         window = candles[lo:idx + 1]
         if not window:
             return
@@ -2176,6 +2167,16 @@ def cancel_stale_orders(asset, trade):
             log(f"{sym}: stale {label} cancel failed ({type(e).__name__})")
 
 
+def stop_bars():
+    """STOP_LOOKBACK expressed in TF candles.
+
+    The signal path counts it in STOP_TF bars, so 12 means twelve HOURS.
+    adopt_position, open_reverse and reverse_alert were slicing raw TF
+    candles with the same number, which meant three hours - the same knob
+    describing two different spans depending on which path you were in."""
+    return max(1, STOP_LOOKBACK * max(1, MS.get(STOP_TF, MS[TF]) // MS[TF]))
+
+
 def adopt_position(asset, ast, candles, coin_sz, entry_px):
     """Take over a live position the agent is not tracking correctly.
 
@@ -2207,7 +2208,7 @@ def adopt_position(asset, ast, candles, coin_sz, entry_px):
             except Exception:
                 pass
         RUN_ALERTS.append(f"{sym} old side booked on adopt")
-    lo = max(0, len(candles) - STOP_LOOKBACK)
+    lo = max(0, len(candles) - stop_bars())
     window = candles[lo:] if candles else []
     if not window:
         log(f"{sym}: adopted but no candles for a stop - left unprotected")
@@ -2255,7 +2256,7 @@ def open_reverse(asset, ast, candles, was_long):
         return
     c = candles[-1]
     now_long = not was_long
-    lo_i = max(0, len(candles) - STOP_LOOKBACK)
+    lo_i = max(0, len(candles) - stop_bars())
     window = candles[lo_i:]
     stop = (min(x["l"] for x in window) if now_long
             else max(x["h"] for x in window))
@@ -2490,8 +2491,12 @@ def process_candle(asset, ast, candles, ha, i):
             log(f"{sym}: {direction} flip at the start of the series - no "
                 "candles before it to take a stop from, skipped")
             continue
-        stop = (min(x["l"] for x in window) if want_long
-                else max(x["h"] for x in window))
+        # "percent" already HAS its stop; taking the window extreme here
+        # silently replaced it with the entry bar's own low - a 0.2% stop
+        # where 10% was configured. Only the structural modes derive one.
+        if STOP_SOURCE != "percent":
+            stop = (min(x["l"] for x in window) if want_long
+                    else max(x["h"] for x in window))
         # CLAMP. A 12-hour window can hand back a level 20%+ away, which on
         # a leveraged perp sits past liquidation - the stop would never fire
         # and the position would be liquidated for the full collateral
