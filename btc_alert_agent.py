@@ -2571,11 +2571,18 @@ def check_asset(asset, state):
 
     ha = smoothed_ha(cs)
     last_closed = len(cs) - 2
+    # ENTRY_AT_OPEN lets the signal path see the FORMING bar. That is safe
+    # here and nowhere else: ha_nowick_signal reads only i-1 (the no-wick
+    # bar), i-2 (the flip) and the run before them - all closed - and the
+    # entry price is cs[i]["o"], fixed the moment the bar prints. Waiting
+    # for the bar to close would enter a full candle after the open the
+    # rule names, which on 15m is 15 minutes of drift.
+    last_eval = (len(cs) - 1) if ENTRY_AT_OPEN else last_closed
     cutoff = cs[last_closed]["t"] - REPLAY_CANDLES * MS[TF]
     if ast["last_candle_t"] < cutoff:
         ast["last_candle_t"] = cutoff
     for i in range(len(cs)):
-        if i > last_closed or cs[i]["t"] <= ast["last_candle_t"]:
+        if i > last_eval or cs[i]["t"] <= ast["last_candle_t"]:
             continue
         changed = process_candle(asset, ast, cs, ha, i) or changed
         ast["last_candle_t"] = cs[i]["t"]
