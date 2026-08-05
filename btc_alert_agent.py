@@ -491,6 +491,13 @@ def fetch_hyperliquid(coin, interval, lookback):
             for c in data]
 
 
+def ha_label():
+    """What the alerts should call the series. At 1,1 there is no smoothing
+    at all, and calling it "smoothed HA" misdescribes the engine."""
+    return ("Heikin Ashi" if HA_SMOOTH_IN <= 1 and HA_SMOOTH_OUT <= 1
+            else f"smoothed HA {HA_SMOOTH_IN},{HA_SMOOTH_OUT}")
+
+
 def btc_trend():
     """BTC's smoothed-HA colour, run length and % move over that run.
 
@@ -529,20 +536,6 @@ def btc_trend():
         val = None
     _BTC_CACHE.update({"t": now, "v": val})
     return val
-
-
-def btc_context_line():
-    """One line of BTC context for an alert. CONTEXT ONLY - nothing is
-    filtered on it, so an alt signal against BTC still fires and still
-    says so."""
-    v = btc_trend()
-    if not v:
-        return "<i>\u20bf trend: unavailable</i>"
-    up, n, move, stalling = v
-    arrow = "\u2197\ufe0f UP" if up else "\u2198\ufe0f DOWN"
-    stall = " \u00b7 stalling" if stalling else ""
-    return (f"<i>\u20bf BTC {arrow} \u00b7 {n} candles \u00b7 "
-            f"{move:+.2f}%{stall} \u00b7 sets the direction</i>")
 
 
 def fetch_binance(sym, interval, lookback):
@@ -921,19 +914,6 @@ def confirmed(ha, candles, d, i, want_long, final=True):
     return True, ""
 
 
-def traded_side(signal_long, sym=None):
-    """The side that would ACTUALLY be taken, given BITCOIN decides.
-
-    One rule, used by both the executor and the panel - when they each had
-    their own copy the panel showed the alt's implied side on rows that had
-    not reached a doji and BTC's side on the ones that had, so a row could
-    display one direction and fire the other."""
-    if sym == "BTC":
-        return signal_long                 # BTC cannot follow itself
-    bt = btc_trend()
-    return bt[0] if bt else signal_long     # unreadable: fall back
-
-
 def gate_status(ha, candles, i, sym=None):
     """Where a symbol sits in the FLIP + NO-WICK sequence, for the panel.
 
@@ -1069,7 +1049,7 @@ def entry_message(asset, direction, plan, zhi, zlo, source, t, trigger):
     e = "\U0001F7E2" if direction == "LONG" else "\U0001F534"
     return "\n".join([
         f"{e} <b>{direction} ENTRY \u00b7 {esc(asset['symbol'])}</b>",
-        f"<i>{esc(asset['label'])} \u00b7 {TF} \u00b7 smoothed HA \u00b7 "
+        f"<i>{esc(asset['label'])} \u00b7 {TF} \u00b7 {ha_label()} \u00b7 "
         f"{esc(fmt_ts(t))}</i>",
         "",
         "\U0001F4CA <b>Setup</b>: "
@@ -1082,7 +1062,6 @@ def entry_message(asset, direction, plan, zhi, zlo, source, t, trigger):
         f"TP:    <code>${fmt_px(plan['tp'])}</code>  "
         f"({HA_RR}x the stop \u00b7 {HA_PARTIAL:.0%} booked there)",
         f"<i>data: {esc(source)}</i>",
-        btc_context_line(),
     ])
 
 
@@ -2324,18 +2303,12 @@ def process_candle(asset, ast, candles, ha, i):
             continue
         d = found[0]                         # the FLIP bar - what the stop
         #                                      window sits behind
-        # BITCOIN DECIDES THE DIRECTION, 3 Aug, his call. The alt's own doji
-        # is TIMING ONLY - it says a turn is happening here, not which way to
-        # take it. So an alt doji that ends an UPTREND, a short setup on its
-        # own chart, becomes a LONG while BTC is green. The old gate would
-        # have refused that signal; this reverses it instead.
-        # BTC itself still trades its own doji - it cannot follow itself.
-        # the doji's own reading, inverted under "continuation"
-        raw = signal_long if HA_MODE == "reversal" else not signal_long
-        want_long = traded_side(raw, sym)
-        if sym != "BTC" and want_long == raw and not btc_trend():
-            log(f"{sym}: BTC trend unreadable - falling back to the "
-                "alt's own doji direction")
+        # THE SIGNAL'S OWN SIDE STANDS. Bitcoin used to override this for
+        # every alt, which made sense when the doji was pure timing - but
+        # the 50 EMA now decides which side is allowed, and it tests the
+        # SETUP's direction. Letting BTC flip it afterwards would take a
+        # short that passed "below the EMA" and enter it long.
+        want_long = signal_long if HA_MODE == "reversal" else not signal_long
         direction = "LONG" if want_long else "SHORT"
         dt = hd["t"]                         # identify by TIMESTAMP, never by
         #                                      index - the fetch window rolls
