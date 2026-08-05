@@ -294,7 +294,7 @@ STOP_FROM_RUN = True               # take the stop from the WHOLE FADING RUN
                                    # STOP_LOOKBACK still applies as a FLOOR,
                                    # so a one-candle run cannot produce a
                                    # one-candle stop. False = fixed count
-STOP_LOOKBACK = 1                  # FLOOR on the stop window, COUNTED IN
+STOP_LOOKBACK = 12                 # FLOOR on the stop window, COUNTED IN
                                    # STOP_TF BARS - so 1 means one hour, not
                                    # one 15m candle. It was 5 when the window
                                    # was measured on TF; left at 5 after the
@@ -328,6 +328,14 @@ MIN_TARGET_PCT = 1.5               # the TARGET must sit at least this far
                                    # 0 disables
 MIN_STOP_PCT = 0.25                # skip entries whose stop sits closer than
                                    # this % of price - sub-noise stops just churn
+MAX_STOP_PCT = 10.0                # CLAMP the stop to at most this % from
+                                   # entry. The window can reach back hours
+                                   # and find a level 20%+ away; that is
+                                   # beyond the LIQUIDATION point on any
+                                   # market above ~5x, so the stop would
+                                   # never trigger and the position would be
+                                   # liquidated instead. Clamping keeps a
+                                   # working stop. 0 disables the clamp
 
 # --- alerts ---------------------------------------------------------------
 ALERT_ENTRIES = True
@@ -2430,6 +2438,20 @@ def process_candle(asset, ast, candles, ha, i):
             continue
         stop = (min(x["l"] for x in window) if want_long
                 else max(x["h"] for x in window))
+        # CLAMP. A 12-hour window can hand back a level 20%+ away, which on
+        # a leveraged perp sits past liquidation - the stop would never fire
+        # and the position would be liquidated for the full collateral
+        # instead. Pull it in to MAX_STOP_PCT so the order still works.
+        if MAX_STOP_PCT:
+            entry_px = c["o"] if ENTRY_AT_OPEN else c["c"]
+            far = abs(entry_px - stop) / entry_px * 100 if entry_px else 0
+            if far > MAX_STOP_PCT:
+                capped = (entry_px * (1 - MAX_STOP_PCT / 100) if want_long
+                          else entry_px * (1 + MAX_STOP_PCT / 100))
+                log(f"{sym}: stop {far:.2f}% away clamped to "
+                    f"{MAX_STOP_PCT:.1f}% (${fmt_px(stop)} -> "
+                    f"${fmt_px(capped)})")
+                stop = capped
         # ENTRY IS THE OPEN of this candle, not its close: the setup
         # completed on the previous bar, so the trade is taken as this one
         # begins. Everything downstream still keys off c, so hand it a copy
