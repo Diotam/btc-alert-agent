@@ -255,6 +255,26 @@ REVERSE_ALERTS = True              # when the smoothed HA flips against an
                                    # because a reverse skips the doji, the
                                    # confirmation bars and the run-length
                                    # floor that every other entry must clear
+STOP_SOURCE = "run"                # WHERE the stop level comes from.
+                                   #   "turn"  - the extreme of the FLIP bar
+                                   #             and the no-wick bar, i.e.
+                                   #             the two candles that ARE the
+                                   #             reversal. Tightest, and the
+                                   #             level that fails the moment
+                                   #             the turn does.
+                                   #   "run"   - the extreme of the whole
+                                   #             fading run behind the flip.
+                                   #             Structurally safer, but the
+                                   #             entry can sit far above it
+                                   #             after a fast bounce: SKR on
+                                   #             5 Aug entered 5% above its
+                                   #             own run low.
+                                   #   "fixed" - STOP_LOOKBACK bars before
+                                   #             the flip, ignoring the run.
+                                   # "turn" is measured on TF, not STOP_TF -
+                                   # these are two specific candles and
+                                   # resampling would blur them into the hour
+                                   # around them
 STOP_TF = "1h"                     # TIMEFRAME the stop extreme is measured
                                    # on. The engine runs on TF, but a 15m
                                    # high is a local wick - the level a
@@ -274,7 +294,18 @@ STOP_FROM_RUN = True               # take the stop from the WHOLE FADING RUN
                                    # STOP_LOOKBACK still applies as a FLOOR,
                                    # so a one-candle run cannot produce a
                                    # one-candle stop. False = fixed count
-STOP_LOOKBACK = 5                  # the stop is the extreme of the LAST N
+STOP_LOOKBACK = 1                  # FLOOR on the stop window, COUNTED IN
+                                   # STOP_TF BARS - so 1 means one hour, not
+                                   # one 15m candle. It was 5 when the window
+                                   # was measured on TF; left at 5 after the
+                                   # move to 1h it meant FIVE HOURS, which on
+                                   # SKR reached back past the setup and
+                                   # found an unrelated low three hours
+                                   # earlier: a 5.386% stop on a 15m trade.
+                                   # At 1 the RUN decides the stop whenever
+                                   # it spans more than an hour.
+                                   # (original note) the stop is the extreme
+                                   # of the LAST N
                                    # REAL candles ending at the doji - low
                                    # for a long, high for a short. 1 restores
                                    # the old behaviour (the doji candle's own
@@ -2378,15 +2409,21 @@ def process_candle(asset, ast, candles, ha, i):
         # offset so the last group ends exactly at the flip rather than
         # wherever the series happens to start - an unaligned grouping would
         # shift every level by up to factor-1 bars.
-        sfac = max(1, MS.get(STOP_TF, MS[TF]) // MS[TF])
-        pre = candles[d % sfac:d] if sfac > 1 else candles[:d]
-        higher = resample(pre, sfac)
-        if STOP_FROM_RUN:
-            span = -(-(d - run_start) // sfac)      # ceil, in STOP_TF bars
-            need = max(STOP_LOOKBACK, span)
+        if STOP_SOURCE == "turn":
+            # the flip bar and the no-wick bar - the reversal itself. On TF,
+            # since resampling two specific candles would blur them into the
+            # hour around them.
+            window = candles[d:i] or candles[max(0, d - 1):d]
         else:
-            need = STOP_LOOKBACK
-        window = higher[-need:] if higher else candles[max(0, d - need):d]
+            sfac = max(1, MS.get(STOP_TF, MS[TF]) // MS[TF])
+            pre = candles[d % sfac:d] if sfac > 1 else candles[:d]
+            higher = resample(pre, sfac)
+            if STOP_SOURCE == "run":
+                span = -(-(d - run_start) // sfac)  # ceil, in STOP_TF bars
+                need = max(STOP_LOOKBACK, span)
+            else:
+                need = STOP_LOOKBACK
+            window = higher[-need:] if higher else candles[max(0, d - need):d]
         if not window:
             log(f"{sym}: {direction} flip at the start of the series - no "
                 "candles before it to take a stop from, skipped")
@@ -2413,7 +2450,8 @@ def process_candle(asset, ast, candles, ha, i):
                         "frozen": True, "t": c["t"]}
         log(f"{sym}: HA DOJI CONFIRMED after {HA_CONFIRM_BARS} bar(s) - "
             f"turning {direction}, stop at the {len(window)}-candle "
-            f"{STOP_TF} {'low' if want_long else 'high'} before the flip "
+            f"{'low' if want_long else 'high'} "
+            f"{'at the turn' if STOP_SOURCE == 'turn' else 'before the flip'} "
             f"${fmt_px(stop)} (flip was {fmt_ts(ha[d]['t'])}, run began "
             f"{fmt_ts(ha[found[1]]['t'])})")
         # candles[-1] is the still-forming candle: its close is the current
