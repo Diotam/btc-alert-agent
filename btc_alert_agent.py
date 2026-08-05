@@ -172,6 +172,18 @@ HA_MODE = "reversal"               # what the doji MEANS.
                                    #                    not the end of it.
                                    # Detection is IDENTICAL either way - only
                                    # the resulting side flips
+EMA_FILTER_TF = "1h"               # TIMEFRAME the filter's EMA is measured
+                                   # on, which need not be TF. A 50 EMA on
+                                   # 15m spans about 12 hours, so an ordinary
+                                   # pullback inside a two-day uptrend
+                                   # crosses it and the filter flips - it was
+                                   # reading the local swing, not the trend.
+                                   # On 1h the same 50 EMA spans ~2 days.
+                                   # Built by RESAMPLING the candles already
+                                   # fetched, so it costs no extra request;
+                                   # must be a whole multiple of TF, and
+                                   # LOOKBACK has to leave enough bars after
+                                   # the resample. "4h" is the slower option
 EMA_FILTER_LEN = 50                # trend filter on the REAL closes. Only
                                    # SHORT while price is BELOW this EMA and
                                    # only LONG while it is above, so the
@@ -796,19 +808,41 @@ def no_wick(c, want_long):
     return wick <= (HA_NOWICK_TOL_PCT / 100.0) * body
 
 
-def ema_side(candles, i, want_long):
-    """Is price on the right side of the EMA for this trade?
+def resample(candles, factor):
+    """Group base candles into larger ones. Only WHOLE groups are returned,
+    so the still-forming higher-timeframe bar is left out and the EMA never
+    reads a partial candle."""
+    if factor <= 1:
+        return list(candles)
+    out = []
+    for k in range(0, len(candles) - factor + 1, factor):
+        g = candles[k:k + factor]
+        out.append({"t": g[0]["t"], "o": g[0]["o"], "c": g[-1]["c"],
+                    "h": max(x["h"] for x in g),
+                    "l": min(x["l"] for x in g),
+                    "v": sum(x.get("v", 0) for x in g)})
+    return out
 
-    Returns (ok, ema_value, close). The bar tested is the LAST CLOSED one,
-    which at signal time is i-1 - the no-wick candle. Testing the entry bar
-    would read a candle that has barely opened."""
+
+def ema_side(candles, i, want_long):
+    """Is price on the right side of the trend EMA?
+
+    Returns (ok, ema_value, close). The price tested is the LAST CLOSED base
+    candle, i-1 at signal time - the no-wick bar. Testing the entry bar would
+    read one that has barely opened. The EMA itself is measured on
+    EMA_FILTER_TF, resampled from the same candles.
+
+    Fails OPEN: too few bars for a meaningful EMA allows the trade rather
+    than blocking every symbol on a short history."""
     if not EMA_FILTER_LEN or i < 1:
         return True, None, None
     k = max(0, i - 1)
-    series = ema([c["c"] for c in candles[:k + 1]], EMA_FILTER_LEN)
-    if not series:
+    base = candles[:k + 1]
+    factor = max(1, MS.get(EMA_FILTER_TF, MS[TF]) // MS[TF])
+    higher = resample(base, factor)
+    if len(higher) < EMA_FILTER_LEN:
         return True, None, None
-    e, px = series[-1], candles[k]["c"]
+    e, px = ema([c["c"] for c in higher], EMA_FILTER_LEN)[-1], base[-1]["c"]
     return ((px > e) if want_long else (px < e)), e, px
 
 
