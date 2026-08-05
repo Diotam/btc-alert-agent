@@ -215,7 +215,16 @@ HA_NOWICK_TOL_PCT = 5.0            # a candle counts as NO-WICK when the wick
 ENTRY_AT_OPEN = True               # enter at the OPEN of the candle AFTER
                                    # the no-wick bar, not at a close. Every
                                    # engine before 4 Aug entered on a close
-HA_MIN_RUN = 8                     # MINIMUM trend-coloured HA candles before
+HA_MIN_RUN_PCT = 1.0               # MINIMUM MOVE across the run, start to
+                                   # flip, as a % of price. HA_MIN_RUN counts
+                                   # CANDLES, so eight bars drifting sideways
+                                   # scored the same as eight falling hard -
+                                   # and only the second is a trend worth
+                                   # fading. HA_MIN_BODY_PCT does not cover
+                                   # this: it only asks that ONE body in the
+                                   # run clears a floor, not that the run
+                                   # went anywhere. 0 disables
+HA_MIN_RUN = 4                     # MINIMUM trend-coloured HA candles before
                                    # the flip counts. Back on 3 Aug at 5,
                                    # after LIT showed a ONE-candle red run
                                    # inside an uptrend being read as a trend
@@ -955,6 +964,12 @@ def ha_nowick_signal(ha, i, want_long):
     run = ha[r:fl]
     if len(run) < max(1, HA_MIN_RUN):
         return None
+    # the run has to have GONE somewhere, not merely lasted
+    if HA_MIN_RUN_PCT:
+        span = abs(run[0]["o"] - run[-1]["c"])
+        px = abs(ha[fl]["c"]) or 1.0
+        if span / px * 100 < HA_MIN_RUN_PCT:
+            return None
     bodies = [ha_body(x) for x in run]
     biggest = max(bodies)
     scale = abs(ha[fl]["c"]) or 1.0
@@ -1039,6 +1054,14 @@ def gate_status(ha, candles, i, sym=None):
         d.update(stage="run too short",
                  detail=f"{len(run)}/{HA_MIN_RUN} candles")
         return d
+    if HA_MIN_RUN_PCT:
+        span = abs(run[0]["o"] - run[-1]["c"])
+        pxr = abs(ha[f]["c"]) or 1.0
+        if span / pxr * 100 < HA_MIN_RUN_PCT:
+            d.update(stage="run went nowhere",
+                     detail=f"{span / pxr * 100:.2f}% move, "
+                            f"needs {HA_MIN_RUN_PCT}%")
+            return d
     bodies = [ha_body(x) for x in run]
     biggest = max(bodies)
     scale = abs(ha[f]["c"]) or 1.0
