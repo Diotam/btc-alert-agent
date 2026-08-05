@@ -184,6 +184,15 @@ EMA_FILTER_TF = "1h"               # TIMEFRAME the filter's EMA is measured
                                    # must be a whole multiple of TF, and
                                    # LOOKBACK has to leave enough bars after
                                    # the resample. "4h" is the slower option
+EMA_RETEST_PCT = 0.75              # entry must be within this % of the EMA -
+                                   # a RETEST, not just the right side of it.
+                                   # Turns the filter from "shorts anywhere
+                                   # below the EMA" into "shorts where price
+                                   # has rallied back INTO the EMA and
+                                   # failed". The existing pattern already
+                                   # fits: that rally is a green run, and its
+                                   # flip at the EMA is the short trigger.
+                                   # 0 disables, restoring side-only
 EMA_FILTER_LEN = 50                # trend filter on the REAL closes. Only
                                    # SHORT while price is BELOW this EMA and
                                    # only LONG while it is above, so the
@@ -232,7 +241,7 @@ HA_DOJI_FRACTION = 0.25            # a DOJI is an HA body this small relative
                                    # price does NOT have to come back and
                                    # retest anything
 HA_RR = 1.5                        # first target = 3x the stop distance
-HA_PARTIAL = 1.0                   # fraction booked there; the stop then moves
+HA_PARTIAL = 0.5                   # fraction booked there; the stop then moves
                                    # to entry and the remainder is held until
                                    # the HA flips against the trade
 ADOPT_ORPHANS = "universe"         # a position on the exchange with NO
@@ -255,7 +264,7 @@ REVERSE_ALERTS = True              # when the smoothed HA flips against an
                                    # because a reverse skips the doji, the
                                    # confirmation bars and the run-length
                                    # floor that every other entry must clear
-STOP_SOURCE = "percent"            # WHERE the stop level comes from.
+STOP_SOURCE = "run"                # WHERE the stop level comes from.
                                    #   "turn"  - the extreme of the FLIP bar
                                    #             and the no-wick bar, i.e.
                                    #             the two candles that ARE the
@@ -914,7 +923,14 @@ def ema_side(candles, i, want_long):
     if len(higher) < EMA_FILTER_LEN:
         return True, None, None
     e, px = ema([c["c"] for c in higher], EMA_FILTER_LEN)[-1], base[-1]["c"]
-    return ((px > e) if want_long else (px < e)), e, px
+    side_ok = (px > e) if want_long else (px < e)
+    if not side_ok or not EMA_RETEST_PCT:
+        return side_ok, e, px
+    # RETEST: price has to be back AT the EMA, not merely on its side. A
+    # short 6% under the average is chasing a move that already happened;
+    # a short 0.3% under it is selling the failed pullback.
+    near = abs(px - e) / e * 100 if e else 999
+    return near <= EMA_RETEST_PCT, e, px
 
 
 def ha_nowick_signal(ha, i, want_long):
@@ -2392,8 +2408,12 @@ def process_candle(asset, ast, candles, ha, i):
         # trend it is turning inside of.
         ok_ema, ema_v, ema_px = ema_side(candles, i, signal_long)
         if not ok_ema:
+            gap = (abs(ema_px - ema_v) / ema_v * 100) if ema_v else 0
+            why = ("on the wrong side of"
+                   if ((ema_px > ema_v) != signal_long)
+                   else f"{gap:.2f}% from (needs <= {EMA_RETEST_PCT}%)")
             log(f"{sym}: {'LONG' if signal_long else 'SHORT'} setup but "
-                f"price ${fmt_px(ema_px)} is on the wrong side of the "
+                f"price ${fmt_px(ema_px)} is {why} the "
                 f"{EMA_FILTER_LEN} EMA ${fmt_px(ema_v)} - skipped")
             continue
         d = found[0]                         # the FLIP bar - what the stop
