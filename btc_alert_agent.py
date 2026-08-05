@@ -328,7 +328,19 @@ MIN_TARGET_PCT = 1.5               # the TARGET must sit at least this far
                                    # 0 disables
 MIN_STOP_PCT = 0.25                # skip entries whose stop sits closer than
                                    # this % of price - sub-noise stops just churn
-MAX_STOP_PCT = 10.0                # CLAMP the stop to at most this % from
+TRACK_UNPLACED = False             # keep tracking a trade whose order never
+                                   # reached the exchange. FALSE as of 5 Aug:
+                                   # the alert still fires and says NOT
+                                   # PLACED, but nothing is tracked, so the
+                                   # dashboard shows ONLY what he actually
+                                   # holds. Those paper rows could not be
+                                   # cleared by closing anything by hand -
+                                   # there was no position to close, and the
+                                   # GONE reconciler skips sizeless trades on
+                                   # purpose. True restores paper tracking,
+                                   # which measures the strategy rather than
+                                   # the account
+MAX_STOP_PCT = 15.0                # CLAMP the stop to at most this % from
                                    # entry. The window can reach back hours
                                    # and find a level 20%+ away; that is
                                    # beyond the LIQUIDATION point on any
@@ -2324,6 +2336,14 @@ def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger,
         + (f" [filled, planned ${fmt_px(entry)}]" if filled else "")
         + ("" if placed else f" [NOT PLACED - {why_not}]"))
     RUN_ALERTS.append(f"{sym} {direction} entry @ ${fmt_px(t['entry'])}")
+    if not placed and not TRACK_UNPLACED and EXEC_LIVE:
+        # NOTHING WAS OPENED, so nothing is tracked. The alert above already
+        # said NOT PLACED. Keeping the trade would put a row on the dashboard
+        # that no hand-close can ever clear: there is no position to close,
+        # and the GONE reconciler skips sizeless trades by design.
+        log(f"{sym}: not placed and TRACK_UNPLACED is off - not tracking it")
+        ast["trade"], ast["phase"], ast["setup"] = None, "SCAN", None
+        return True
     ast["phase"], ast["setup"] = "IN_TRADE", None
     return True
 
