@@ -414,9 +414,10 @@ def build_data():
     # closest to firing first for the pipeline; for trades, highest R at the
     # top, so the one nearest its target leads and the one nearest its stop
     # sits last. Rebuilt on every SSE tick, so the order re-shuffles live
-    _ORDER = {"ready": 0, "flipped": 1, "wrong side of EMA": 2,
-              "wick too long": 3, "run was expanding": 4,
-              "run too flat": 5, "missed": 6}
+    _ORDER = {"ready": 0, "flipped": 1, "too far from EMA": 2,
+              "wrong side of EMA": 3, "wick too long": 4,
+              "run was expanding": 5, "run too flat": 6,
+              "run too short": 7, "missed": 8}
     gates.sort(key=lambda x: (_ORDER.get(x.get("stage"), 9), x["sym"]))
     trades.sort(key=lambda t: (t["r"] is None,
                                -(t["r"] if t["r"] is not None else 0),
