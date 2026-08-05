@@ -231,7 +231,7 @@ HA_DOJI_FRACTION = 0.25            # a DOJI is an HA body this small relative
                                    # threshold. Entry happens ON the doji -
                                    # price does NOT have to come back and
                                    # retest anything
-HA_RR = 3.0                        # first target = 3x the stop distance
+HA_RR = 2.0                        # first target = 3x the stop distance
 HA_PARTIAL = 1.0                   # fraction booked there; the stop then moves
                                    # to entry and the remainder is held until
                                    # the HA flips against the trade
@@ -264,7 +264,7 @@ STOP_LOOKBACK = 5                  # the stop is the extreme of the LAST N
                                    # wider stops (median 0.537% vs the
                                    # losers' 0.471%) and every max-width cap
                                    # tested made the book worse
-MIN_TARGET_PCT = 2.0               # the TARGET must sit at least this far
+MIN_TARGET_PCT = 1.5               # the TARGET must sit at least this far
                                    # from entry, as a % of price. 2.0 as of
                                    # 4 Aug, his call: "each setup needs to be
                                    # at least a 2% move". Expressed on the
