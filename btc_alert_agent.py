@@ -50,7 +50,7 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 # --- asset universe -------------------------------------------------------
 DISCOVER_ALL = True
-DISCOVER_DEXES = False             # scan HIP-3 builder venues. OFF as of
+DISCOVER_DEXES = True              # scan HIP-3 builder venues. ON as of
                                    # 2 Aug: with EXEC_BUILDER_DEXES empty
                                    # they could only ever alert, never trade,
                                    # so every xyz signal was noise that also
@@ -59,7 +59,13 @@ DISCOVER_DEXES = False             # scan HIP-3 builder venues. OFF as of
                                    # alone. Turn both back on together if the
                                    # xyz pool is ever funded again
 ADMIT_COMMODITIES = True
-ADMIT_STOCKS = True                # equities IN the universe. They are
+ADMIT_STOCKS = False               # equities IN the universe. Moot while
+                                   # DISCOVER_DEXES is off - every xyz market
+                                   # is out either way. COMMODITIES DO NOT
+                                   # NEED THIS DOOR: the ones he trades, PAXG
+                                   # among them, are MAIN-DEX perps already
+                                   # in the crypto universe. Original note:
+                                   # they are
                                    # is one line to flip back
 DEXES = [""]                       # fallback when dex discovery fails
 # EXACT names, never prefixes. This used to be a startswith() match, which
@@ -72,7 +78,13 @@ COMMODITY_TICKERS = ("XAU", "GOLD", "XAG", "SILVER", "XPT", "PLAT",
                      "XPD", "PALLADIUM", "CL", "WTI", "OIL", "BRENT",
                      "BRENTOIL", "NG", "NATGAS", "HG", "COPPER")
 STOCK_DEXES = ("xyz",)             # TradeXYZ equities venue
-EXEC_BUILDER_DEXES = ()            # builder dexes to trade AUTOMATICALLY,
+EXEC_BUILDER_DEXES = ("xyz",)      # builder dexes to trade AUTOMATICALLY.
+                                   # ON as of 5 Aug, his call: COMMODITIES
+                                   # margin from the MAIN pool even though
+                                   # they carry the xyz prefix - only the
+                                   # STOCKS sit behind a separate pool, and
+                                   # ADMIT_STOCKS is False so none are in the
+                                   # universe. Original note follows,
                                    # e.g. ("xyz",). OFF as of 2 Aug: the xyz
                                    # dex has its OWN collateral pool and it
                                    # holds $0, so every order there was
