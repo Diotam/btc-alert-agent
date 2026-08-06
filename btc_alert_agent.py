@@ -206,6 +206,20 @@ EMA_SLOPE_PCT = 0.30               # the 1h EMA must have MOVED at least this
                                    # uptrend and flips straight back. 0 off
 EMA_SLOPE_BARS = 12                # how far back to measure that slope, in
                                    # EMA_FILTER_TF bars. 12 = half a day on 1h
+EMA_TREND_CLEAR_PCT = 1.00         # slope above which the trend is CLEAR and
+                                   # the retest band NO LONGER APPLIES. His
+                                   # point: 0.75% is a PULLBACK rule - it
+                                   # says "wait for price to come back to the
+                                   # average". In a decisive trend price does
+                                   # not come back, so demanding it there
+                                   # refuses the best moves for being too
+                                   # good. Measured on the same slope as
+                                   # EMA_SLOPE_PCT, so the two form a band:
+                                   # under EMA_SLOPE_PCT nothing trades (a
+                                   # range), between them a retest is
+                                   # required, above this the side alone is
+                                   # enough. 0 disables, restoring "always
+                                   # require the retest"
 EMA_RETEST_PCT = 0.75              # entry must be within this % of the EMA -
                                    # a RETEST, not just the right side of it.
                                    # Turns the filter from "shorts anywhere
@@ -967,11 +981,18 @@ def ema_side(candles, i, want_long):
     # IS THE AVERAGE ACTUALLY GOING ANYWHERE? A flat EMA means a range, and
     # a reversal taken inside a range is a coin flip: both edges look like
     # fading trends and both flip back.
-    if EMA_SLOPE_PCT and len(series) > EMA_SLOPE_BARS:
+    with_trend = 0.0
+    if len(series) > EMA_SLOPE_BARS:
         then = series[-1 - EMA_SLOPE_BARS]
-        slope = (e - then) / then * 100 if then else 0.0
-        if (slope if want_long else -slope) < EMA_SLOPE_PCT:
-            return False, e, px
+        raw = (e - then) / then * 100 if then else 0.0
+        with_trend = raw if want_long else -raw
+        if EMA_SLOPE_PCT and with_trend < EMA_SLOPE_PCT:
+            return False, e, px          # flat - a range, no trade either way
+    # A CLEAR TREND DOES NOT NEED A RETEST. The band is a pullback rule; in
+    # a decisive move price never returns to the average, so applying it
+    # there refuses the strongest setups for being too strong.
+    if EMA_TREND_CLEAR_PCT and with_trend >= EMA_TREND_CLEAR_PCT:
+        return True, e, px
     if not EMA_RETEST_PCT:
         return True, e, px
     # RETEST: price has to be back AT the EMA, not merely on its side. A
