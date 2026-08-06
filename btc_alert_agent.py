@@ -1455,6 +1455,52 @@ def _close_trade(asset, trade, px, kind, event_t, note="", frac=None):
     return None, True
 
 
+def ensure_partial(asset, trade, px):
+    """The partial is only real if the EXCHANGE reduced. _book_partial books
+    the ledger row and shrinks the stop; if the TP never rested (or never
+    filled) the venue still holds the FULL position, and the stop now covers
+    only half of it. Live on SKR 5 Aug: 11342 held, 5671 stop.
+
+    Reads the position and sends a reduce-only market order for whatever is
+    still above the intended remainder."""
+    if not EXEC_LIVE or not executable(asset["symbol"]) or not trade.get("size"):
+        return
+    ex = exec_client()
+    if not ex:
+        return
+    sym = exec_symbol(asset["symbol"])
+    want = abs(trade["size"]) * trade.get("left", 1.0)
+    try:
+        st = _EXEC["info"].user_state(_EXEC["addr"]) or {}
+        held = 0.0
+        for p in st.get("assetPositions", []):
+            if p["position"]["coin"] == sym:
+                held = abs(float(p["position"]["szi"]))
+    except Exception as e:
+        log(f"{sym}: could not read the position after the partial "
+            f"({type(e).__name__}) - check it by hand")
+        return
+    excess = held - want
+    if excess <= abs(trade["size"]) * 0.01:      # 1% tolerance for rounding
+        return
+    log(f"{sym}: partial booked but the exchange still holds {held} against "
+        f"{want} - selling the {excess} difference at market")
+    try:
+        dec = size_decimals(asset["symbol"])
+        ex.order(sym, trade["verdict"] == "SHORT", round(excess, dec),
+                 round_px(px), {"limit": {"tif": "Ioc"}}, reduce_only=True)
+        log(f"{sym}: reconciling partial sent")
+    except Exception as e:
+        log(f"{sym}: partial reconcile FAILED ({type(e).__name__}: {e})")
+        try:
+            send_telegram(f"\ud83d\udea8 {esc(sym)} booked a partial but the "
+                          "exchange still holds the FULL position and the "
+                          "stop now covers only half - CLOSE THE DIFFERENCE "
+                          "BY HAND")
+        except Exception:
+            pass
+
+
 def _book_partial(asset, trade, px, event_t):
     """HA_PARTIAL comes off at the target, the stop moves to entry, and the
     remainder runs until the HA flips. Booked as its own ledger row with
@@ -1471,6 +1517,7 @@ def _book_partial(asset, trade, px, event_t):
         return _close_trade(asset, trade, px, "TP", event_t)
     # returns None on the PARTIAL path so the caller knows the trade lives on
     record_close(sym, trade, px, "TP_HALF", event_t, frac=HA_PARTIAL)
+    ensure_partial(asset, trade, px)     # the venue must actually have reduced
     trade["half"] = True
     trade["left"] = round(1.0 - HA_PARTIAL, 6)
     trade["stop"] = trade["entry"]
@@ -2183,9 +2230,24 @@ def place_entry_live(asset, trade, plan):
         part = round(size * HA_PARTIAL, dec)   # == size when HA_PARTIAL is 1.0
         r_tp = ex.order(sym, not long_, part, round_px(trade["tp"]),
                         {"limit": {"tif": "Gtc"}}, reduce_only=True)
+        tp_err = order_error(r_tp)
         trade["tp_oid"] = order_oid(r_tp)
+        if tp_err or not trade["tp_oid"]:
+            # NOT a cosmetic gap. Without a resting TP the partial can only
+            # be detected from candles, and _book_partial then shrinks the
+            # stop to match a reduction that never happened - leaving half
+            # the position with NO stop. SKR, 5 Aug.
+            log(f"{sym}: TP ORDER DID NOT REST ({tp_err or 'no oid returned'})"
+                " - the partial will be reconciled at market instead")
+            try:
+                send_telegram(f"\u26a0\ufe0f {esc(sym)} TP order did not rest "
+                              f"- {esc(str(tp_err or 'no oid'))}. The partial "
+                              "will be sent at market when the level trades.")
+            except Exception:
+                pass
         log(f"{sym}: LIVE stop ${fmt_px(trade['stop'])} (full size) and TP "
-            f"${fmt_px(trade['tp'])} ({HA_PARTIAL:.0%}) placed")
+            f"${fmt_px(trade['tp'])} ({HA_PARTIAL:.0%}) "
+            f"{'placed' if trade['tp_oid'] else 'ATTEMPTED'}")
     except Exception as e:
         log(f"{sym}: LIVE protective orders FAILED ({type(e).__name__}) - "
             "closing the position")
