@@ -2606,9 +2606,20 @@ def process_candle(asset, ast, candles, ha, i):
         ok_ema, ema_v, ema_px = ema_side(candles, i, signal_long)
         if not ok_ema:
             gap = (abs(ema_px - ema_v) / ema_v * 100) if ema_v else 0
-            why = ("on the wrong side of"
-                   if ((ema_px > ema_v) != signal_long)
-                   else f"{gap:.2f}% from (needs <= {EMA_RETEST_PCT}%)")
+            slope = ema_slope(candles, i)
+            with_trend = (slope if signal_long else -slope) if slope is not None else None
+            if (ema_px > ema_v) != signal_long:
+                why = "on the wrong side of"
+            elif (EMA_SLOPE_PCT and with_trend is not None
+                    and with_trend < EMA_SLOPE_PCT):
+                # THE RANGE FILTER, not the retest band. Without this branch
+                # the line read "0.61% from (needs <= 0.75%) - skipped",
+                # which contradicts itself and sent us hunting the wrong gate.
+                why = (f"in a RANGE ({with_trend:+.2f}% slope over "
+                       f"{EMA_SLOPE_BARS}{EMA_FILTER_TF}, needs "
+                       f"{EMA_SLOPE_PCT:+.2f}%) around")
+            else:
+                why = f"{gap:.2f}% from (needs <= {EMA_RETEST_PCT}%)"
             log(f"{sym}: {'LONG' if signal_long else 'SHORT'} setup but "
                 f"price ${fmt_px(ema_px)} is {why} the "
                 f"{EMA_FILTER_LEN} EMA ${fmt_px(ema_v)} - skipped")
