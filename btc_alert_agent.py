@@ -286,7 +286,7 @@ HA_DOJI_FRACTION = 0.25            # a DOJI is an HA body this small relative
                                    # price does NOT have to come back and
                                    # retest anything
 HA_RR = 1.5                        # first target = 3x the stop distance
-HA_PARTIAL = 0.5                   # fraction booked there; the stop then moves
+HA_PARTIAL = 1.0                   # fraction booked there; the stop then moves
                                    # to entry and the remainder is held until
                                    # the HA flips against the trade
 ADOPT_ORPHANS = "universe"         # a position on the exchange with NO
