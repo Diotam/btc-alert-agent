@@ -415,7 +415,7 @@ def build_data():
     # top, so the one nearest its target leads and the one nearest its stop
     # sits last. Rebuilt on every SSE tick, so the order re-shuffles live
     _ORDER = {"ready": 0, "no-wick bar forming": 1, "flipped": 2,
-              "too far from EMA": 3,
+              "too far from EMA": 3, "range - EMA is flat": 3.5,
               "wrong side of EMA": 4, "wick too long": 5,
               "run was expanding": 6, "run too flat": 7,
               "run went nowhere": 8, "run too short": 9, "missed": 10}
