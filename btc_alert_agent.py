@@ -184,6 +184,16 @@ EMA_FILTER_TF = "1h"               # TIMEFRAME the filter's EMA is measured
                                    # must be a whole multiple of TF, and
                                    # LOOKBACK has to leave enough bars after
                                    # the resample. "4h" is the slower option
+EMA_SLOPE_PCT = 0.30               # the 1h EMA must have MOVED at least this
+                                   # % over EMA_SLOPE_BARS, in the trade's
+                                   # direction. In a range the average goes
+                                   # FLAT, so both sides get refused - which
+                                   # is the point: a reversal engine's worst
+                                   # environment is chop, where every push to
+                                   # the top of the range looks like a fading
+                                   # uptrend and flips straight back. 0 off
+EMA_SLOPE_BARS = 12                # how far back to measure that slope, in
+                                   # EMA_FILTER_TF bars. 12 = half a day on 1h
 EMA_RETEST_PCT = 0.75              # entry must be within this % of the EMA -
                                    # a RETEST, not just the right side of it.
                                    # Turns the filter from "shorts anywhere
@@ -904,6 +914,21 @@ def resample(candles, factor):
     return out
 
 
+def ema_slope(candles, i):
+    """How far the EMA has travelled over EMA_SLOPE_BARS, as a % of itself.
+    None when there is not enough history. Positive means rising."""
+    if not EMA_FILTER_LEN or i < 1:
+        return None
+    base = candles[:max(0, i - 1) + 1]
+    factor = max(1, MS.get(EMA_FILTER_TF, MS[TF]) // MS[TF])
+    higher = resample(base, factor)
+    if len(higher) < EMA_FILTER_LEN + EMA_SLOPE_BARS + 1:
+        return None
+    series = ema([c["c"] for c in higher], EMA_FILTER_LEN)
+    then = series[-1 - EMA_SLOPE_BARS]
+    return (series[-1] - then) / then * 100 if then else None
+
+
 def ema_side(candles, i, want_long):
     """Is price on the right side of the trend EMA?
 
@@ -922,10 +947,21 @@ def ema_side(candles, i, want_long):
     higher = resample(base, factor)
     if len(higher) < EMA_FILTER_LEN:
         return True, None, None
-    e, px = ema([c["c"] for c in higher], EMA_FILTER_LEN)[-1], base[-1]["c"]
+    series = ema([c["c"] for c in higher], EMA_FILTER_LEN)
+    e, px = series[-1], base[-1]["c"]
     side_ok = (px > e) if want_long else (px < e)
-    if not side_ok or not EMA_RETEST_PCT:
-        return side_ok, e, px
+    if not side_ok:
+        return False, e, px
+    # IS THE AVERAGE ACTUALLY GOING ANYWHERE? A flat EMA means a range, and
+    # a reversal taken inside a range is a coin flip: both edges look like
+    # fading trends and both flip back.
+    if EMA_SLOPE_PCT and len(series) > EMA_SLOPE_BARS:
+        then = series[-1 - EMA_SLOPE_BARS]
+        slope = (e - then) / then * 100 if then else 0.0
+        if (slope if want_long else -slope) < EMA_SLOPE_PCT:
+            return False, e, px
+    if not EMA_RETEST_PCT:
+        return True, e, px
     # RETEST: price has to be back AT the EMA, not merely on its side. A
     # short 6% under the average is chasing a move that already happened;
     # a short 0.3% under it is selling the failed pullback.
@@ -1097,7 +1133,15 @@ def gate_status(ha, candles, i, sym=None):
             if not ok_ema:
                 right_side = (epx > ev) == want_long if (ev and epx) else False
                 gap = (abs(epx - ev) / ev * 100) if ev else 0
-                if right_side:
+                slope = ema_slope(candles, i + 1)
+                flat = (EMA_SLOPE_PCT and slope is not None
+                        and (slope if want_long else -slope) < EMA_SLOPE_PCT)
+                if right_side and flat:
+                    d.update(stage="range - EMA is flat",
+                             detail=f"{slope:+.2f}% over {EMA_SLOPE_BARS}"
+                                    f"{EMA_FILTER_TF}, needs "
+                                    f"{EMA_SLOPE_PCT:+.2f}%")
+                elif right_side:
                     d.update(stage="too far from EMA",
                              detail=f"{gap:.2f}% away, needs "
                                     f"<= {EMA_RETEST_PCT}%")
