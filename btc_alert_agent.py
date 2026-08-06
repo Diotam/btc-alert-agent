@@ -1079,6 +1079,19 @@ def gate_status(ha, candles, i, sym=None):
         d.update(stage="flipped", detail="needs a no-wick bar next")
         return d
     if age == 1:
+        forming = (i == len(ha) - 1)
+        if forming:
+            # the no-wick candidate is the bar still printing. Its wick can
+            # grow before the close, so this is NOT a promise - ETHFI sat at
+            # "ready" for 25 minutes on a 20:00 bar that grew an upper wick.
+            w, b = ha_wick(ha[i], upper=not want_long), ha_body(ha[i])
+            pct = (w / b * 100) if b else 999
+            clean = no_wick(ha[i], want_long)
+            d.update(stage="no-wick bar forming",
+                     detail=(f"clean so far ({pct:.0f}% of body)" if clean
+                             else f"wick {pct:.0f}% of body, needs "
+                                  f"<= {HA_NOWICK_TOL_PCT:.0f}%"))
+            return d
         if no_wick(ha[i], want_long):
             ok_ema, ev, epx = ema_side(candles, i + 1, want_long)
             if not ok_ema:
@@ -1102,6 +1115,12 @@ def gate_status(ha, candles, i, sym=None):
             d.update(stage="wick too long",
                      detail=f"{side} wick {pct:.0f}% of body "
                             f"(max {HA_NOWICK_TOL_PCT:.0f}%)")
+        return d
+    # age 2 IS the entry bar under ENTRY_AT_OPEN - the trade fires on this
+    # candle's open. Calling it "missed" here contradicted the detector,
+    # which was firing at the same instant.
+    if age == 2 and no_wick(ha[i - 1], want_long):
+        d.update(stage="ready", detail="entering at this bar's open")
         return d
     d.update(stage="missed", detail="no-wick bar did not follow the flip")
     return d
@@ -2162,6 +2181,8 @@ def exchange_positions():
     """{symbol: signed size} for everything actually open on the account.
     None if the read fails - callers must treat that as "unknown", never as
     "flat", or a failed request would look like every position closing."""
+    if not exec_client():          # builds _EXEC if this scan has sent no order
+        return None
     try:
         st = _EXEC["info"].user_state(_EXEC["addr"]) or {}
     except Exception as e:
