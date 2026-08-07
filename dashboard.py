@@ -530,6 +530,13 @@ h1{font-size:17px;margin:4px 0 12px}
 .card.tv:hover{border-color:#3d444d}
 .card{background:#161b22;border:1px solid #21262d;border-radius:10px;
       padding:11px 13px;margin-bottom:9px}
+/* GRID VIEW. auto-fill with a 300px floor means the column count follows the
+   viewport on its own - three or four wide on the desktop dashboard, and a
+   single column on the phone without a media query. margin-bottom on the
+   card would fight the grid gap, so it is zeroed inside one. */
+#trades,#closed{display:grid;gap:9px;
+  grid-template-columns:repeat(auto-fill,minmax(300px,1fr))}
+#trades .card,#closed .card{margin-bottom:0}
 .sym{font-weight:700;font-size:15px}
 .long{color:#3fb950}.short{color:#f85149}
 .num{font-family:Menlo,monospace}
