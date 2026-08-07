@@ -541,7 +541,6 @@ h1{font-size:17px;margin:4px 0 12px}
   height:20px;line-height:20px;padding:0 7px;color:#e6e6e6;white-space:nowrap;
   font-weight:600;
   background:rgba(18,21,29,.82);border-radius:4px;z-index:2;pointer-events:none}
-.ob-lev{color:#8b8f98;font-size:10px;font-weight:400}
 .ob-track{flex:1;position:relative;height:20px;background:#12151d;border-radius:4px;overflow:hidden}
 .ob-zero{position:absolute;top:0;bottom:0;width:1px;background:#3a4050}
 .ob-fill{position:absolute;top:3px;height:14px;border-radius:3px;transition:left .45s ease,width .45s ease,background .45s ease}
@@ -732,7 +731,7 @@ function render(d){
       return `<div class=ob-row>
         <span class=ob-track><i class=ob-zero style="left:50%"></i>
           <i class=ob-fill style="left:${pos?50:50-w}%;width:${w}%;background:${col}"></i>
-          <span class=ob-sym>${t.sym} <span class=ob-lev>${t.lev?t.lev+'x':''}</span></span></span>
+          <span class=ob-sym>${t.sym}</span></span>
         <span class=ob-val style="color:${col}">${Math.round(prog(t))}%</span>
       </div>`;
     }).join('')
