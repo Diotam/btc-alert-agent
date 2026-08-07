@@ -259,7 +259,7 @@ HA_NOWICK_TOL_PCT = 5.0            # a candle counts as NO-WICK when the wick
 ENTRY_AT_OPEN = True               # enter at the OPEN of the candle AFTER
                                    # the no-wick bar, not at a close. Every
                                    # engine before 4 Aug entered on a close
-HA_MIN_RUN_PCT = 0.5               # MINIMUM MOVE across the run, start to
+HA_MIN_RUN_PCT = 0.3               # MINIMUM MOVE across the run, start to
                                    # flip, as a % of price. HA_MIN_RUN counts
                                    # CANDLES, so eight bars drifting sideways
                                    # scored the same as eight falling hard -
