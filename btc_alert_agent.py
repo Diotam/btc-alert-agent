@@ -173,7 +173,7 @@ HA_DOJI_COLOUR = "flip"            # which colour the doji must be, relative
                                    #            colour first. Later, more
                                    #            confirmation, fewer trades.
                                    #   "any"  - either colour counts.
-HA_MODE = "reversal"               # what the doji MEANS.
+HA_MODE = "continuation"               # what the doji MEANS.
                                    #   "reversal"     - a doji ending a red
                                    #                    run turns us LONG.
                                    #                    Every version before
