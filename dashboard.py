@@ -535,6 +535,15 @@ h1{font-size:17px;margin:4px 0 12px}
 .num{font-family:Menlo,monospace}
 .row{display:flex;justify-content:space-between;margin:3px 0}
 .muted{color:#8b949e;font-size:12px}
+.ob{margin-top:12px}
+.ob-row{display:flex;align-items:center;gap:8px;margin:5px 0;font-size:11px}
+.ob-sym{width:82px;flex:none;color:#c9d1d9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ob-lev{color:#6e7681;font-size:9px}
+.ob-track{flex:1;position:relative;height:16px;background:#12151d;border-radius:4px}
+.ob-zero{position:absolute;top:0;bottom:0;width:1px;background:#3a4050}
+.ob-fill{position:absolute;top:2px;height:12px;border-radius:3px;transition:left .45s ease,width .45s ease,background .45s ease}
+.ob-val{width:62px;flex:none;text-align:right;font-weight:700}
+.ob-none{color:#6e7681;text-align:center;padding:8px 0;font-size:11px}
 .bar{height:6px;background:#21262d;border-radius:3px;margin:7px 0 2px;overflow:hidden}
 .fill{height:100%;border-radius:3px}
 .section{margin:16px 0 8px;font-size:12px;letter-spacing:1.5px;color:#8b949e;
@@ -578,6 +587,7 @@ h1{font-size:17px;margin:4px 0 12px}
     <div class=tab data-p=w onclick="setP('w')">WEEK</div>
     <div class=tab data-p=m onclick="setP('m')">MONTH</div>
   </div>
+  <div id=obars></div>
 </div>
 <div class="section shead" onclick="toggle('trades')"><span class=chev id=c-trades>\u25be</span>Open trades<span class=cnt id=n-trades>0</span></div><div id=trades></div>
 <div class="section shead" onclick="toggle('gates')"><span class=chev id=c-gates>\u25be</span>Setup pipeline<span class=cnt id=n-gates>0</span> <span id=gsub class=muted style="float:right;text-transform:none;letter-spacing:0"></span></div><div id=gates></div>
@@ -692,6 +702,28 @@ function render(d){
   document.getElementById('wl').innerHTML=n?
    `<span class=pnl-pos>${pw.w}W</span> · <span class=pnl-neg>${pw.l}L</span> · ${Math.round(pw.w/n*100)}% win rate`
    :'no closed trades yet';
+  // OPEN-TRADE BAR GRAPH. Same live tick as the progress bars. The scale
+  // auto-fits the widest trade so one large move does not flatten the rest
+  // into slivers; the floor of 2% stops a quiet book drawing full-width
+  // bars off a 0.1% move.
+  (function(){
+    const box=document.getElementById('obars');
+    if(!box) return;
+    const ts=(d.trades||[]).filter(t=>t.pnl!=null);
+    if(!ts.length){ box.className='ob'; box.innerHTML='<div class=ob-none>no open trades</div>'; return; }
+    const peak=Math.max(2,...ts.map(t=>Math.abs(t.pnl)));
+    box.className='ob';
+    box.innerHTML=ts.slice().sort((a,b)=>b.pnl-a.pnl).map(t=>{
+      const pos=t.pnl>=0, w=Math.min(50,Math.abs(t.pnl)/peak*50);
+      const col=pos?'#3fb950':'#f85149';
+      return `<div class=ob-row>
+        <span class=ob-sym>${t.sym} <span class=ob-lev>${t.lev?t.lev+'x':''}</span></span>
+        <span class=ob-track><i class=ob-zero style="left:50%"></i>
+          <i class=ob-fill style="left:${pos?50:50-w}%;width:${w}%;background:${col}"></i></span>
+        <span class=ob-val style="color:${col}">${pos?'+':''}${t.pnl.toFixed(2)}%</span>
+      </div>`;
+    }).join('');
+  })();
   const st=document.getElementById('status');
   step('r-start');
   if(d.tv_interval) TVINT=d.tv_interval;
