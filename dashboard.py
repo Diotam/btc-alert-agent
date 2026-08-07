@@ -537,9 +537,11 @@ h1{font-size:17px;margin:4px 0 12px}
 .muted{color:#8b949e;font-size:12px}
 .ob{margin-top:12px}
 .ob-row{display:flex;align-items:center;gap:8px;margin:5px 0;font-size:11px}
-.ob-sym{width:82px;flex:none;color:#c9d1d9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ob-sym{position:absolute;left:50%;transform:translateX(-50%);top:0;
+  height:16px;line-height:16px;padding:0 6px;color:#c9d1d9;white-space:nowrap;
+  background:rgba(18,21,29,.82);border-radius:4px;z-index:2;pointer-events:none}
 .ob-lev{color:#6e7681;font-size:9px}
-.ob-track{flex:1;position:relative;height:16px;background:#12151d;border-radius:4px}
+.ob-track{flex:1;position:relative;height:16px;background:#12151d;border-radius:4px;overflow:hidden}
 .ob-zero{position:absolute;top:0;bottom:0;width:1px;background:#3a4050}
 .ob-fill{position:absolute;top:2px;height:12px;border-radius:3px;transition:left .45s ease,width .45s ease,background .45s ease}
 .ob-val{width:62px;flex:none;text-align:right;font-weight:700}
@@ -724,10 +726,12 @@ function render(d){
     box.innerHTML=ts.slice().sort((a,b)=>b.r-a.r).map(t=>{
       const pos=t.r>=0, w=prog(t)/2;           // half the track per side
       const col=pos?'#3fb950':'#f85149';
+      // the symbol sits ON the zero line, so the label marks ENTRY and the
+      // bar reads as distance travelled from it
       return `<div class=ob-row>
-        <span class=ob-sym>${t.sym} <span class=ob-lev>${t.lev?t.lev+'x':''}</span></span>
         <span class=ob-track><i class=ob-zero style="left:50%"></i>
-          <i class=ob-fill style="left:${pos?50:50-w}%;width:${w}%;background:${col}"></i></span>
+          <i class=ob-fill style="left:${pos?50:50-w}%;width:${w}%;background:${col}"></i>
+          <span class=ob-sym>${t.sym} <span class=ob-lev>${t.lev?t.lev+'x':''}</span></span></span>
         <span class=ob-val style="color:${col}">${Math.round(prog(t))}%</span>
       </div>`;
     }).join('')
