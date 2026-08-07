@@ -173,6 +173,27 @@ HA_DOJI_COLOUR = "flip"            # which colour the doji must be, relative
                                    #            colour first. Later, more
                                    #            confirmation, fewer trades.
                                    #   "any"  - either colour counts.
+BREAKOUT_ON = True                 # the SECOND engine, 6 Aug. It trades the
+                                   # markets the HA engine cannot: those whose
+                                   # EMA slope is too flat to call a trend.
+                                   # The two never compete for the same symbol
+BO_LOOKBACK = 20                   # bars forming the range (5 hours on 15m)
+BO_TIGHT_PCT = 3.0                 # the range must be NO WIDER than this % of
+                                   # price. Without it every drifting market
+                                   # "breaks out" of its own noise every few
+                                   # bars - a coiled range is the setup, a
+                                   # sprawling one is just chop
+BO_BUFFER_PCT = 0.05               # how far BEYOND the level the close must
+                                   # sit, as a % of price, so a touch is not
+                                   # a break
+BO_TAG = "bo"                      # ledger tag for breakout trades
+ENGINE_TAG = "ha"                  # which detector produced a trade. Written
+                                   # onto the trade record and into EVERY
+                                   # ledger row, so a second engine's results
+                                   # can be told apart from this one's later.
+                                   # Rows written before 6 Aug have no tag;
+                                   # any analysis should read a missing tag
+                                   # as "ha"
 HA_MODE = "continuation"               # what the doji MEANS.
                                    #   "reversal"     - a doji ending a red
                                    #                    run turns us LONG.
@@ -1054,6 +1075,34 @@ def find_swing(candles, before, want_long):
     return None, None
 
 
+def breakout_signal(candles, i):
+    """Did candle i CLOSE beyond a tight range? Returns (want_long, stop).
+
+    The range is the BO_LOOKBACK bars BEFORE i, so the breakout bar never
+    contributes to the level it is breaking. The stop is the far edge - the
+    level that says the break failed - and the range must be tight, because
+    a wide range is not a coil, it is just noise with two edges."""
+    lo_i = i - BO_LOOKBACK
+    if lo_i < 0:
+        return None
+    window = candles[lo_i:i]
+    if len(window) < BO_LOOKBACK:
+        return None
+    hi = max(x["h"] for x in window)
+    lo = min(x["l"] for x in window)
+    px = candles[i]["c"]
+    if px <= 0 or hi <= lo:
+        return None
+    if BO_TIGHT_PCT and (hi - lo) / px * 100 > BO_TIGHT_PCT:
+        return None
+    buf = px * (BO_BUFFER_PCT / 100.0)
+    if px > hi + buf:
+        return True, lo
+    if px < lo - buf:
+        return False, hi
+    return None
+
+
 def ha_nowick_signal(ha, i, want_long):
     """The 4 Aug engine. Entry is at the OPEN of candle i, so everything
     below happened at i-1 or earlier.
@@ -1396,6 +1445,9 @@ def record_close(sym, trade, exit_px, kind, t_event=None, frac=1.0):
                 "t": int(t_event or now_ms()), "sym": sym,
                 "dir": trade["verdict"], "entry": trade["entry"],
                 "exit": exit_px, "kind": kind, "frac": frac,
+                # a trade opened before tagging existed has none; read a
+                # missing tag as the original engine rather than "unknown"
+                "engine": trade.get("engine", "ha"),
                 "pnl_pct": round(pnl_pct(trade, exit_px) * frac, 3)}) + "\n")
     except OSError:
         pass
@@ -2579,7 +2631,7 @@ def open_reverse(asset, ast, candles, was_long):
 
 
 def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger,
-               live_px=None):
+               live_px=None, engine=None, candles=None, idx=None):
     """Risk checks, override handling, alert, trade creation and (when
     enabled) the live order. Returns True if a trade was opened."""
     sym = asset["symbol"]
@@ -2593,11 +2645,11 @@ def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger,
             f"(min {MIN_STOP_PCT}%) - too tight to be worth fees, waiting")
         return False
     tp = entry - HA_RR * risk if short else entry + HA_RR * risk
-    if TP_SOURCE == "swing":
+    if TP_SOURCE == "swing" and candles is not None and idx is not None:
         # STRUCTURE, not a multiple: the last level price turned at is where
         # it is most likely to stall again. Falls back to HA_RR when no
         # pivot exists in range, so a setup is never lost to a quiet chart.
-        lvl, k = find_swing(candles, i, not short)
+        lvl, k = find_swing(candles, idx, not short)
         beyond = lvl is not None and ((lvl < entry) if short else (lvl > entry))
         if beyond:
             tp = lvl
@@ -2639,7 +2691,8 @@ def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger,
                    if isinstance(v, dict) and v.get("trade") and executable(k))
     ast["trade"] = {"verdict": direction, "entry": entry, "stop": stop,
                     "tp": tp, "opened_t": c["t"], "checked_t": c["t"],
-                    "rr": HA_RR, "risk0": risk, "half": False, "left": 1.0}
+                    "rr": HA_RR, "risk0": risk, "half": False, "left": 1.0,
+                    "engine": engine or ENGINE_TAG}
     # remember WHICH setup this came from so it cannot fire a second time
     if ast.get("setup"):
         ast["traded"] = {"ft": ast["setup"].get("ft"), "dir": direction}
@@ -2895,8 +2948,50 @@ def process_candle(asset, ast, candles, ha, i):
                    f"candle - entered at the next open, stop at the "
                    f"{len(window)}-candle extreme before the flip, "
                    f"{'low' if want_long else 'high'}",
-                   live_px=candles[-1]["c"])
+                   live_px=candles[-1]["c"], engine=ENGINE_TAG,
+                   candles=candles, idx=i)
         return True
+
+    # ---------------- BREAKOUT, the second engine ----------------
+    # It takes the markets the HA engine CANNOT: those whose EMA slope is
+    # too flat for ema_side to call a trend. The two never compete for a
+    # symbol, because this runs only where that filter refuses both sides.
+    if BREAKOUT_ON:
+        sl = ema_slope(candles, i)
+        drifting = (sl is None or abs(sl) < EMA_SLOPE_PCT) if EMA_SLOPE_PCT \
+            else False
+        found_bo = breakout_signal(candles, i) if drifting else None
+        if found_bo:
+            want_long, stop = found_bo
+            direction = "LONG" if want_long else "SHORT"
+            entry = candles[i]["c"]          # the BREAK's own close
+            # the range start is a stable key for one trade per range
+            rt = candles[max(0, i - BO_LOOKBACK)]["t"]
+            tr = ast.get("traded") or {}
+            if tr.get("ft") == rt and tr.get("dir") == direction:
+                return False
+            if MAX_STOP_PCT:
+                far = abs(entry - stop) / entry * 100 if entry else 0
+                if far > MAX_STOP_PCT:
+                    stop = (entry * (1 - MAX_STOP_PCT / 100) if want_long
+                            else entry * (1 + MAX_STOP_PCT / 100))
+            rng = abs(candles[i]["c"] - stop) / entry * 100 if entry else 0
+            log(f"{sym}: BREAKOUT {direction} - closed beyond the "
+                f"{BO_LOOKBACK}-bar range at ${fmt_px(entry)}, stop at the "
+                f"far edge ${fmt_px(stop)} ({rng:.2f}%), EMA slope "
+                f"{sl if sl is not None else 0:+.2f}% (flat)")
+            ast["setup"] = {"dir": direction, "zhi": candles[i]["h"],
+                            "zlo": candles[i]["l"], "ft": rt,
+                            "departed": True, "touched": True,
+                            "frozen": True, "t": candles[i]["t"]}
+            if fire_entry(asset, ast, direction, candles[i], stop,
+                          candles[i]["h"], candles[i]["l"], "BREAKOUT",
+                          f"closed beyond the {BO_LOOKBACK}-bar "
+                          f"{'high' if want_long else 'low'} of a range under "
+                          f"{BO_TIGHT_PCT}% wide - stop at the far edge",
+                          live_px=candles[-1]["c"], engine=BO_TAG,
+                          candles=candles, idx=i):
+                return True
 
     if ast.get("setup"):
         ast["setup"] = None
