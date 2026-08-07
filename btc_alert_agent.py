@@ -184,7 +184,7 @@ HA_MODE = "reversal"               # what the doji MEANS.
                                    #                    not the end of it.
                                    # Detection is IDENTICAL either way - only
                                    # the resulting side flips
-EMA_FILTER_TF = "1h"                # TIMEFRAME the filter's EMA is measured
+EMA_FILTER_TF = "15m"               # TIMEFRAME the filter's EMA is measured
                                    # on, which need not be TF. A 50 EMA on
                                    # 15m spans about 12 hours, so an ordinary
                                    # pullback inside a two-day uptrend
@@ -204,6 +204,14 @@ EMA_SIDE_RULE = True               # require price to be on the EMA's side.
                                    # happens to sit above or below the line no
                                    # longer decides anything, and the retest
                                    # band is off with it
+EMA_SLOPE_TF = "15m"               # TIMEFRAME the slope is measured on, kept
+                                   # SEPARATE from EMA_FILTER_TF on purpose.
+                                   # The 50 EMA itself stays on 1h — that was
+                                   # his own correction when a 15m EMA read a
+                                   # pullback as a trend change — but the
+                                   # SLOPE now reads 15m, so it reacts to a
+                                   # turn without waiting for the hour to
+                                   # register it
 EMA_SLOPE_PCT = 0.30               # the 1h EMA must have MOVED at least this
                                    # % over EMA_SLOPE_BARS, in the trade's
                                    # direction. In a range the average goes
@@ -228,7 +236,7 @@ EMA_TREND_CLEAR_PCT = 1.00         # slope above which the trend is CLEAR and
                                    # required, above this the side alone is
                                    # enough. 0 disables, restoring "always
                                    # require the retest"
-EMA_RETEST_PCT = 0.75              # entry must be within this % of the EMA -
+EMA_RETEST_PCT = 0                 # entry must be within this % of the EMA -
                                    # a RETEST, not just the right side of it.
                                    # Turns the filter from "shorts anywhere
                                    # below the EMA" into "shorts where price
@@ -967,7 +975,7 @@ def ema_slope(candles, i):
     if not EMA_FILTER_LEN or i < 1:
         return None
     base = candles[:max(0, i - 1) + 1]
-    factor = max(1, MS.get(EMA_FILTER_TF, MS[TF]) // MS[TF])
+    factor = max(1, MS.get(EMA_SLOPE_TF, MS[TF]) // MS[TF])
     higher = resample(base, factor)
     if len(higher) < EMA_FILTER_LEN + EMA_SLOPE_BARS + 1:
         return None
@@ -1001,10 +1009,12 @@ def ema_side(candles, i, want_long):
     # IS THE AVERAGE ACTUALLY GOING ANYWHERE? A flat EMA means a range, and
     # a reversal taken inside a range is a coin flip: both edges look like
     # fading trends and both flip back.
+    # ONE slope implementation, shared with the panel. It reads EMA_SLOPE_TF,
+    # which is NOT the timeframe this EMA sits on - inlining it here again
+    # would silently keep measuring the slope on EMA_FILTER_TF.
+    raw = ema_slope(candles, i)
     with_trend = 0.0
-    if len(series) > EMA_SLOPE_BARS:
-        then = series[-1 - EMA_SLOPE_BARS]
-        raw = (e - then) / then * 100 if then else 0.0
+    if raw is not None:
         with_trend = raw if want_long else -raw
         if EMA_SLOPE_PCT and with_trend < EMA_SLOPE_PCT:
             return False, e, px          # flat - a range, no trade either way
