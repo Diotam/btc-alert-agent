@@ -3043,15 +3043,26 @@ def check_asset(asset, state):
                        else "") + ")")
                 record_close(sym, ast["trade"], px, kind, now_ms(),
                              frac=ast["trade"].get("left", 1.0))
-                if kind == "GONE":
-                    try:
+                # ALWAYS ALERT. Gating this on GONE meant a close the venue
+                # had already made - a TP or a STOP - was booked in SILENCE,
+                # because this path uses record_close directly and never
+                # reaches the lifecycle alert that _close_trade sends. He
+                # got nothing when XPL closed.
+                try:
+                    if kind == "GONE":
                         send_telegram(
                             f"\u26a0\ufe0f <b>{esc(sym)}</b> was tracked "
                             f"{ast['trade']['verdict']} but the exchange is "
                             f"flat - booked closed at "
                             f"<code>${fmt_px(px)}</code>")
-                    except Exception:
-                        pass
+                    elif ALERT_LIFECYCLE:
+                        note = "closed on the exchange" + (
+                            f", venue pnl ${real_pnl:+.2f}"
+                            if fill_px is not None else "")
+                        send_telegram(lifecycle_message(
+                            asset, kind, ast["trade"], px, now_ms(), note))
+                except Exception as e:
+                    log(f"{sym}: {kind} alert failed: {type(e).__name__}")
                 cancel_stale_orders(asset, ast["trade"])
                 ast["trade"] = None
                 ast["phase"] = "SCAN"
