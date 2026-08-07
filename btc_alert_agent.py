@@ -177,6 +177,15 @@ BREAKOUT_ON = True                 # the SECOND engine, 6 Aug. It trades the
                                    # markets the HA engine cannot: those whose
                                    # EMA slope is too flat to call a trend.
                                    # The two never compete for the same symbol
+BO_TF = "1h"                       # TIMEFRAME the RANGE is measured on. The
+                                   # break itself is still judged on the
+                                   # current TF close, but the level it has
+                                   # to clear comes from BO_LOOKBACK bars of
+                                   # THIS timeframe - so 20 x 1h is twenty
+                                   # HOURS of structure, not five. A 15m
+                                   # range is a lunch break; an hourly one is
+                                   # a level the market actually respected.
+                                   # Set to TF for the old behaviour
 BO_LOOKBACK = 20                   # bars forming the range (5 hours on 15m)
 BO_TIGHT_PCT = 3.0                 # the range must be NO WIDER than this % of
                                    # price. Without it every drifting market
@@ -194,7 +203,7 @@ ENGINE_TAG = "ha"                  # which detector produced a trade. Written
                                    # Rows written before 6 Aug have no tag;
                                    # any analysis should read a missing tag
                                    # as "ha"
-HA_MODE = "continuation"               # what the doji MEANS.
+HA_MODE = "reversal"                   # what the doji MEANS.
                                    #   "reversal"     - a doji ending a red
                                    #                    run turns us LONG.
                                    #                    Every version before
@@ -1082,10 +1091,12 @@ def breakout_signal(candles, i):
     contributes to the level it is breaking. The stop is the far edge - the
     level that says the break failed - and the range must be tight, because
     a wide range is not a coil, it is just noise with two edges."""
-    lo_i = i - BO_LOOKBACK
-    if lo_i < 0:
-        return None
-    window = candles[lo_i:i]
+    # The range is built on BO_TF, offset so the last whole group ends at the
+    # bar BEFORE i - an unaligned grouping would shift every level.
+    factor = max(1, MS.get(BO_TF, MS[TF]) // MS[TF])
+    pre = candles[i % factor:i] if factor > 1 else candles[:i]
+    window = resample(pre, factor)[-BO_LOOKBACK:] if factor > 1 \
+        else candles[max(0, i - BO_LOOKBACK):i]
     if len(window) < BO_LOOKBACK:
         return None
     hi = max(x["h"] for x in window)
@@ -1382,7 +1393,10 @@ def entry_message(asset, direction, plan, zhi, zlo, source, t, trigger):
         "",
         "\U0001F4CB <b>Plan</b>",
         f"Entry: <code>${fmt_px(plan['entry'])}</code>",
-        f"Stop:  <code>${fmt_px(plan['stop'])}</code>  (HA zone low)",
+        # a SHORT's stop is the zone HIGH; "low" was hardcoded and read
+        # backwards on every short the engine has ever sent
+        f"Stop:  <code>${fmt_px(plan['stop'])}</code>  "
+        f"({'HA zone low' if direction == 'LONG' else 'HA zone high'})",
         f"TP:    <code>${fmt_px(plan['tp'])}</code>  "
         f"({HA_RR}x the stop \u00b7 {HA_PARTIAL:.0%} booked there)",
         f"<i>data: {esc(source)}</i>",
@@ -2786,15 +2800,21 @@ def process_candle(asset, ast, candles, ha, i):
         found = ha_nowick_signal(ha, i, signal_long)
         if not found:
             continue
+        # DECIDE THE SIDE FIRST. The EMA must be tested against the side
+        # ACTUALLY TRADED, not the signal's own reading. Under
+        # "continuation" those are OPPOSITE, so testing signal_long asked
+        # "is this ok for a long?" and then took a short - which is how ACE
+        # came to be sold ABOVE its EMA on 7 Aug.
+        want_long = signal_long if HA_MODE == "reversal" else not signal_long
+        direction = "LONG" if want_long else "SHORT"
         # THE 50 EMA DECIDES WHICH SIDE IS ALLOWED. Shorts only below it,
-        # longs only above, so a reversal is never taken against the wider
-        # trend it is turning inside of.
-        ok_ema, ema_v, ema_px = ema_side(candles, i, signal_long)
+        # longs only above.
+        ok_ema, ema_v, ema_px = ema_side(candles, i, want_long)
         if not ok_ema:
             gap = (abs(ema_px - ema_v) / ema_v * 100) if ema_v else 0
             slope = ema_slope(candles, i)
-            with_trend = (slope if signal_long else -slope) if slope is not None else None
-            if (ema_px > ema_v) != signal_long:
+            with_trend = (slope if want_long else -slope) if slope is not None else None
+            if (ema_px > ema_v) != want_long:
                 why = "on the wrong side of"
             elif (EMA_SLOPE_PCT and with_trend is not None
                     and with_trend < EMA_SLOPE_PCT):
@@ -2802,23 +2822,16 @@ def process_candle(asset, ast, candles, ha, i):
                 # the line read "0.61% from (needs <= 0.75%) - skipped",
                 # which contradicts itself and sent us hunting the wrong gate.
                 why = (f"in a RANGE ({with_trend:+.2f}% slope over "
-                       f"{EMA_SLOPE_BARS}{EMA_FILTER_TF}, needs "
+                       f"{EMA_SLOPE_BARS} x {EMA_SLOPE_TF}, needs "
                        f"{EMA_SLOPE_PCT:+.2f}%) around")
             else:
                 why = f"{gap:.2f}% from (needs <= {EMA_RETEST_PCT}%)"
-            log(f"{sym}: {'LONG' if signal_long else 'SHORT'} setup but "
+            log(f"{sym}: {direction} setup but "
                 f"price ${fmt_px(ema_px)} is {why} the "
                 f"{EMA_FILTER_LEN} EMA ${fmt_px(ema_v)} - skipped")
             continue
         d = found[0]                         # the FLIP bar - what the stop
         #                                      window sits behind
-        # THE SIGNAL'S OWN SIDE STANDS. Bitcoin used to override this for
-        # every alt, which made sense when the doji was pure timing - but
-        # the 50 EMA now decides which side is allowed, and it tests the
-        # SETUP's direction. Letting BTC flip it afterwards would take a
-        # short that passed "below the EMA" and enter it long.
-        want_long = signal_long if HA_MODE == "reversal" else not signal_long
-        direction = "LONG" if want_long else "SHORT"
         dt = hd["t"]                         # identify by TIMESTAMP, never by
         #                                      index - the fetch window rolls
         rt = ha[found[1]]["t"]               # timestamp of the RUN's first
@@ -2934,8 +2947,9 @@ def process_candle(asset, ast, candles, ha, i):
         ast["setup"] = {"dir": direction, "zhi": c["h"], "zlo": c["l"],
                         "ft": rt, "departed": True, "touched": True,
                         "frozen": True, "t": c["t"]}
-        log(f"{sym}: HA DOJI CONFIRMED after {HA_CONFIRM_BARS} bar(s) - "
-            f"turning {direction}, stop at the {len(window)}-candle "
+        log(f"{sym}: HA {'down' if signal_long else 'up'}trend flipped "
+            f"{'green' if signal_long else 'red'} - taking {direction} "
+            f"({HA_MODE}), stop at the {len(window)}-candle "
             f"{'low' if want_long else 'high'} "
             f"{'at the turn' if STOP_SOURCE == 'turn' else 'before the flip'} "
             f"${fmt_px(stop)} (flip was {fmt_ts(ha[d]['t'])}, run began "
@@ -2943,9 +2957,18 @@ def process_candle(asset, ast, candles, ha, i):
         # candles[-1] is the still-forming candle: its close is the current
         # price, free, with no extra API call
         fire_entry(asset, ast, direction, c, stop, c["h"], c["l"], "HA",
-                   f"HA {'down' if want_long else 'up'}trend faded, flipped "
-                   f"{'green' if want_long else 'red'}, then a no-wick "
-                   f"candle - entered at the next open, stop at the "
+                   # DESCRIBE THE BARS, NOT THE SIDE. signal_long is the
+                   # RUN's own reading (True = a red run flipped green);
+                   # want_long is what HA_MODE decided to do about it.
+                   # Building this from want_long printed "uptrend faded,
+                   # flipped red" on a SHORT that was actually a downtrend
+                   # pausing - the exact opposite bars. Live on ACE, 7 Aug.
+                   f"HA {'down' if signal_long else 'up'}trend "
+                   f"{'faded' if HA_MODE == 'reversal' else 'paused'}, "
+                   f"flipped {'green' if signal_long else 'red'}, then a "
+                   f"no-wick candle - "
+                   f"{'reversing it' if HA_MODE == 'reversal' else 'joining the run'}"
+                   f" at the next open, stop at the "
                    f"{len(window)}-candle extreme before the flip, "
                    f"{'low' if want_long else 'high'}",
                    live_px=candles[-1]["c"], engine=ENGINE_TAG,
@@ -2966,7 +2989,8 @@ def process_candle(asset, ast, candles, ha, i):
             direction = "LONG" if want_long else "SHORT"
             entry = candles[i]["c"]          # the BREAK's own close
             # the range start is a stable key for one trade per range
-            rt = candles[max(0, i - BO_LOOKBACK)]["t"]
+            bo_f = max(1, MS.get(BO_TF, MS[TF]) // MS[TF])
+            rt = candles[max(0, i - BO_LOOKBACK * bo_f)]["t"]
             tr = ast.get("traded") or {}
             if tr.get("ft") == rt and tr.get("dir") == direction:
                 return False
@@ -2977,7 +3001,8 @@ def process_candle(asset, ast, candles, ha, i):
                             else entry * (1 + MAX_STOP_PCT / 100))
             rng = abs(candles[i]["c"] - stop) / entry * 100 if entry else 0
             log(f"{sym}: BREAKOUT {direction} - closed beyond the "
-                f"{BO_LOOKBACK}-bar range at ${fmt_px(entry)}, stop at the "
+                f"{BO_LOOKBACK} x {BO_TF} range at ${fmt_px(entry)}, stop at "
+                f"the "
                 f"far edge ${fmt_px(stop)} ({rng:.2f}%), EMA slope "
                 f"{sl if sl is not None else 0:+.2f}% (flat)")
             ast["setup"] = {"dir": direction, "zhi": candles[i]["h"],
@@ -2986,7 +3011,7 @@ def process_candle(asset, ast, candles, ha, i):
                             "frozen": True, "t": candles[i]["t"]}
             if fire_entry(asset, ast, direction, candles[i], stop,
                           candles[i]["h"], candles[i]["l"], "BREAKOUT",
-                          f"closed beyond the {BO_LOOKBACK}-bar "
+                          f"closed beyond the {BO_LOOKBACK} x {BO_TF} "
                           f"{'high' if want_long else 'low'} of a range under "
                           f"{BO_TIGHT_PCT}% wide - stop at the far edge",
                           live_px=candles[-1]["c"], engine=BO_TAG,
