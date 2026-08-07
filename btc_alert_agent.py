@@ -1262,6 +1262,34 @@ def gate_status(ha, candles, i, sym=None):
             d.update(stage="run was expanding",
                      detail="bodies grew into the flip")
             return d
+
+    # THE EMA, CHECKED ONCE FOR EVERY POST-FLIP STAGE. It used to run only
+    # at the no-wick and entry bars, so "flipped" and "no-wick bar forming"
+    # cards carried no EMA verdict at all and he was comparing them against
+    # his own chart and finding them on the wrong side. This is the CURRENT
+    # reading - price can cross back before the entry bar arrives, which is
+    # why the detail says "now".
+    ok_ema, ev, epx = ema_side(candles, i, traded_long)
+    if not ok_ema:
+        right_side = (epx > ev) == traded_long if (ev and epx) else False
+        slope = ema_slope(candles, i)
+        with_trend = ((slope if traded_long else -slope)
+                      if slope is not None else None)
+        if right_side and EMA_SLOPE_PCT and with_trend is not None \
+                and with_trend < EMA_SLOPE_PCT:
+            d.update(stage="range - EMA is flat",
+                     detail=f"{slope:+.2f}% over {EMA_SLOPE_BARS} x "
+                            f"{EMA_SLOPE_TF}, needs {EMA_SLOPE_PCT:+.2f}%")
+        elif right_side:
+            gap = (abs(epx - ev) / ev * 100) if ev else 0
+            d.update(stage="too far from EMA",
+                     detail=f"{gap:.2f}% away, needs <= {EMA_RETEST_PCT}%")
+        else:
+            d.update(stage="wrong side of EMA",
+                     detail=f"now {fmt_px(epx)} vs {EMA_FILTER_LEN} EMA "
+                            f"{fmt_px(ev)}")
+        return d
+
     if age == 0:
         d.update(stage="flipped", detail="needs a no-wick bar next")
         return d
