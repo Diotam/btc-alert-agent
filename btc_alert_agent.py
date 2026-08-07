@@ -184,7 +184,7 @@ HA_MODE = "reversal"               # what the doji MEANS.
                                    #                    not the end of it.
                                    # Detection is IDENTICAL either way - only
                                    # the resulting side flips
-EMA_FILTER_TF = "1h"               # TIMEFRAME the filter's EMA is measured
+EMA_FILTER_TF = "1h"                # TIMEFRAME the filter's EMA is measured
                                    # on, which need not be TF. A 50 EMA on
                                    # 15m spans about 12 hours, so an ordinary
                                    # pullback inside a two-day uptrend
@@ -196,6 +196,14 @@ EMA_FILTER_TF = "1h"               # TIMEFRAME the filter's EMA is measured
                                    # must be a whole multiple of TF, and
                                    # LOOKBACK has to leave enough bars after
                                    # the resample. "4h" is the slower option
+EMA_SIDE_RULE = True               # require price to be on the EMA's side.
+                                   # OFF as of 6 Aug: the 50 EMA is here for
+                                   # TREND CONTEXT ONLY now — its SLOPE says
+                                   # whether a trend exists and which way, and
+                                   # that is all it is asked. Whether price
+                                   # happens to sit above or below the line no
+                                   # longer decides anything, and the retest
+                                   # band is off with it
 EMA_SLOPE_PCT = 0.30               # the 1h EMA must have MOVED at least this
                                    # % over EMA_SLOPE_BARS, in the trade's
                                    # direction. In a range the average goes
@@ -260,7 +268,7 @@ HA_MIN_RUN_PCT = 0.5               # MINIMUM MOVE across the run, start to
                                    # this: it only asks that ONE body in the
                                    # run clears a floor, not that the run
                                    # went anywhere. 0 disables
-HA_MIN_RUN = 4                     # MINIMUM trend-coloured HA candles before
+HA_MIN_RUN = 3                     # MINIMUM trend-coloured HA candles before
                                    # the flip counts. Back on 3 Aug at 5,
                                    # after LIT showed a ONE-candle red run
                                    # inside an uptrend being read as a trend
@@ -285,6 +293,19 @@ HA_DOJI_FRACTION = 0.25            # a DOJI is an HA body this small relative
                                    # threshold. Entry happens ON the doji -
                                    # price does NOT have to come back and
                                    # retest anything
+TP_SOURCE = "rr"                   # "swing" = target the PREVIOUS SWING on
+                                   # REAL candles - the last pivot beyond
+                                   # entry in the trade's direction. "rr"
+                                   # restores HA_RR x the stop. His spec,
+                                   # 6 Aug: structure decides the target
+                                   # instead of a fixed multiple
+SWING_PIVOT_BARS = 3               # bars either side that a candle must
+                                   # exceed to count as a pivot
+SWING_MAX_LOOKBACK = 96            # how far back to hunt for one (24h on 15m)
+TP_MIN_RR = 1.0                    # refuse the setup when the swing sits
+                                   # closer than the stop - paying 1 to make
+                                   # less than 1 is a losing shape however
+                                   # often it wins
 HA_RR = 1.5                        # first target = 3x the stop distance
 HA_PARTIAL = 1.0                   # fraction booked there; the stop then moves
                                    # to entry and the remainder is held until
@@ -975,8 +996,7 @@ def ema_side(candles, i, want_long):
         return True, None, None
     series = ema([c["c"] for c in higher], EMA_FILTER_LEN)
     e, px = series[-1], base[-1]["c"]
-    side_ok = (px > e) if want_long else (px < e)
-    if not side_ok:
+    if EMA_SIDE_RULE and not ((px > e) if want_long else (px < e)):
         return False, e, px
     # IS THE AVERAGE ACTUALLY GOING ANYWHERE? A flat EMA means a range, and
     # a reversal taken inside a range is a coin flip: both edges look like
@@ -1000,6 +1020,28 @@ def ema_side(candles, i, want_long):
     # a short 0.3% under it is selling the failed pullback.
     near = abs(px - e) / e * 100 if e else 999
     return near <= EMA_RETEST_PCT, e, px
+
+
+def find_swing(candles, before, want_long):
+    """The most recent PIVOT on real candles before index `before`.
+
+    A pivot high is a candle whose high exceeds every high within
+    SWING_PIVOT_BARS either side; a pivot low mirrors it. A LONG targets the
+    previous swing HIGH, a SHORT the previous swing LOW - the level price
+    last turned at, which is where it is most likely to stall again."""
+    p = max(1, SWING_PIVOT_BARS)
+    lo = max(p, before - SWING_MAX_LOOKBACK)
+    for k in range(before - p - 1, lo - 1, -1):
+        window = candles[k - p:k + p + 1]
+        if len(window) < 2 * p + 1:
+            continue
+        if want_long:
+            if candles[k]["h"] >= max(x["h"] for x in window):
+                return candles[k]["h"], k
+        else:
+            if candles[k]["l"] <= min(x["l"] for x in window):
+                return candles[k]["l"], k
+    return None, None
 
 
 def ha_nowick_signal(ha, i, want_long):
@@ -2339,6 +2381,60 @@ def exchange_positions():
     return out
 
 
+def closing_fill(asset, trade):
+    """The venue's OWN closing fill for a position that has vanished.
+
+    The tracked-but-gone path used to book at the current candle close,
+    which is not where the trade actually ended: on CASHCAT the ledger said
+    0.16419 while the exchange filled 0.18835 - understating a winner by
+    nearly half. It also called every one of them "position gone" when most
+    were the resting TP doing its job.
+
+    Returns (price, realized_pnl) or (None, None)."""
+    if not EXEC_LIVE or not executable(asset["symbol"]):
+        return None, None
+    if not exec_client():
+        return None, None
+    sym = exec_symbol(asset["symbol"])
+    opened = trade.get("opened_t") or 0
+    try:
+        fills = _EXEC["info"].user_fills(_EXEC["addr"]) or []
+    except Exception as e:
+        log(f"{sym}: could not read fills ({type(e).__name__})")
+        return None, None
+    best = None
+    for f in fills:
+        if f.get("coin") != sym or f.get("time", 0) < opened:
+            continue
+        if "Close" not in str(f.get("dir", "")):
+            continue
+        if best is None or f["time"] > best["time"]:
+            best = f
+    if not best:
+        return None, None
+    try:
+        return float(best["px"]), float(best.get("closedPnl") or 0.0)
+    except Exception:
+        return None, None
+
+
+def gone_kind(trade, px):
+    """Was the vanished position a TP, a STOP, or genuinely unexplained?
+
+    A resting TP fills on the VENUE's price feed, which the agent only sees
+    a scan later - so most "position gone" rows were really targets hit."""
+    if px is None:
+        return "GONE"
+    long_ = trade["verdict"] == "LONG"
+    tp, stop = trade.get("tp"), trade.get("stop")
+    tol = abs(trade["entry"]) * 0.001          # 0.1% of price
+    if tp and ((px >= tp - tol) if long_ else (px <= tp + tol)):
+        return "TP"
+    if stop and ((px <= stop + tol) if long_ else (px >= stop - tol)):
+        return "STOP"
+    return "GONE"
+
+
 def cancel_stale_orders(asset, trade):
     """Cancel the resting stop and TP of a position that no longer exists.
 
@@ -2481,6 +2577,27 @@ def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger,
             f"(min {MIN_STOP_PCT}%) - too tight to be worth fees, waiting")
         return False
     tp = entry - HA_RR * risk if short else entry + HA_RR * risk
+    if TP_SOURCE == "swing":
+        # STRUCTURE, not a multiple: the last level price turned at is where
+        # it is most likely to stall again. Falls back to HA_RR when no
+        # pivot exists in range, so a setup is never lost to a quiet chart.
+        lvl, k = find_swing(candles, i, not short)
+        beyond = lvl is not None and ((lvl < entry) if short else (lvl > entry))
+        if beyond:
+            tp = lvl
+            rr = abs(tp - entry) / risk if risk else 0
+            log(f"{sym}: TP at the previous swing "
+                f"{'low' if short else 'high'} ${fmt_px(tp)} "
+                f"({fmt_ts(candles[k]['t'],'%m-%d %H:%M')}, {rr:.2f}R)")
+            if TP_MIN_RR and rr < TP_MIN_RR:
+                log(f"{sym}: swing is only {rr:.2f}R away "
+                    f"(min {TP_MIN_RR}) - risking more than the target is "
+                    "worth, skipped")
+                return False
+        else:
+            log(f"{sym}: no swing {'low' if short else 'high'} beyond entry "
+                f"within {SWING_MAX_LOOKBACK} candles - falling back to "
+                f"{HA_RR}R")
     tgt_pct = abs(tp - entry) / entry * 100 if entry else 0.0
     if MIN_TARGET_PCT and tgt_pct < MIN_TARGET_PCT:
         log(f"{sym}: target only {tgt_pct:.2f}% away "
@@ -2903,23 +3020,33 @@ def check_asset(asset, state):
             opened = (ast["trade"].get("opened_t") or 0)
             if (not held and ast["trade"].get("size")
                     and opened < POS_CACHE.get("t", 0) * 1000):
-                px = cs[-1]["c"]
+                # ASK THE VENUE where it actually closed, rather than
+                # booking at whatever the candle happens to read now.
+                fill_px, real_pnl = closing_fill(asset, ast["trade"])
+                px = fill_px if fill_px is not None else cs[-1]["c"]
+                kind = gone_kind(ast["trade"], fill_px)
+                src = "the exchange fill" if fill_px is not None else "the candle"
                 log(f"{sym}: tracked {ast['trade']['verdict']} but the "
-                    "exchange is FLAT - booking it closed")
-                record_close(sym, ast["trade"], px, "GONE", now_ms(),
+                    f"exchange is FLAT - booking {kind} at ${fmt_px(px)} "
+                    f"(from {src}"
+                    + (f", venue pnl ${real_pnl:+.2f}" if fill_px is not None
+                       else "") + ")")
+                record_close(sym, ast["trade"], px, kind, now_ms(),
                              frac=ast["trade"].get("left", 1.0))
-                try:
-                    send_telegram(
-                        f"\u26a0\ufe0f <b>{esc(sym)}</b> was tracked "
-                        f"{ast['trade']['verdict']} but the exchange is flat "
-                        f"- booked closed at <code>${fmt_px(px)}</code>")
-                except Exception:
-                    pass
+                if kind == "GONE":
+                    try:
+                        send_telegram(
+                            f"\u26a0\ufe0f <b>{esc(sym)}</b> was tracked "
+                            f"{ast['trade']['verdict']} but the exchange is "
+                            f"flat - booked closed at "
+                            f"<code>${fmt_px(px)}</code>")
+                    except Exception:
+                        pass
                 cancel_stale_orders(asset, ast["trade"])
                 ast["trade"] = None
                 ast["phase"] = "SCAN"
                 state[sym] = ast
-                RUN_STATUS.append(f"{sym} booked GONE")
+                RUN_STATUS.append(f"{sym} booked {kind}")
                 return True
         if cs:
             trade, ch = process_open_trade(asset, ast["trade"], cs,
