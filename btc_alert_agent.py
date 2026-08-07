@@ -1156,8 +1156,14 @@ def gate_status(ha, candles, i, sym=None):
     age = i - f
     if f < 1 or age > 2:
         return None                      # no flip, or the chance has passed
+    # want_long here is the SIGNAL's own reading - a green flip means the
+    # red run ended. The SIDE ACTUALLY TRADED is that reading passed through
+    # HA_MODE, exactly as the signal path does it. Without this the panel
+    # showed the opposite direction to the engine under "continuation":
+    # "6 candles up · SHORT" on a card that would have entered LONG.
     want_long = ha_green(ha[f])
-    d = {"dir": "LONG" if want_long else "SHORT",
+    traded_long = want_long if HA_MODE == "reversal" else not want_long
+    d = {"dir": "LONG" if traded_long else "SHORT",
          "trend": "down" if want_long else "up",
          "age": age, "need": 1}
 
