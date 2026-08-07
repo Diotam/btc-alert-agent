@@ -143,7 +143,7 @@ BTC_TREND_SMOOTH = (5, 5)          # smoothing for the BTC CONTEXT line only,
                                    # where BTC is now
 BTC_TREND_TTL_S = 120              # one BTC fetch per scan, not per symbol
 _BTC_CACHE = {"t": 0.0, "v": None}
-HA_MIN_BODY_PCT = 0.05             # the trend run must contain at least one
+HA_MIN_BODY_PCT = 0.04             # the trend run must contain at least one
                                    # HA body this big, as a % of price. Without
                                    # it a FLAT smoothed series satisfies
                                    # "strictly growing then strictly shrinking"
@@ -267,7 +267,7 @@ HA_NOWICK_TOL_PCT = 5.0            # a candle counts as NO-WICK when the wick
 ENTRY_AT_OPEN = True               # enter at the OPEN of the candle AFTER
                                    # the no-wick bar, not at a close. Every
                                    # engine before 4 Aug entered on a close
-HA_MIN_RUN_PCT = 0.3               # MINIMUM MOVE across the run, start to
+HA_MIN_RUN_PCT = 0.2               # MINIMUM MOVE across the run, start to
                                    # flip, as a % of price. HA_MIN_RUN counts
                                    # CANDLES, so eight bars drifting sideways
                                    # scored the same as eight falling hard -
