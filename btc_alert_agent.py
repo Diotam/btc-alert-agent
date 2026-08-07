@@ -253,7 +253,7 @@ EMA_FILTER_LEN = 50                # trend filter on the REAL closes. Only
                                    # CLOSED candle - the no-wick bar - since
                                    # the entry bar is still forming when the
                                    # signal is read. 0 disables the filter
-HA_FADE_BARS = 2                   # trailing HA bodies that must SHRINK
+HA_FADE_BARS = 0                   # trailing HA bodies that must SHRINK
                                    # into the turn - "as the candles start
                                    # getting smaller". 0 disables
 HA_NOWICK_TOL_PCT = 5.0            # a candle counts as NO-WICK when the wick
