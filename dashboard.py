@@ -709,20 +709,29 @@ function render(d){
   (function(){
     const box=document.getElementById('obars');
     if(!box) return;
-    const ts=(d.trades||[]).filter(t=>t.pnl!=null);
+    // PROGRESS TO TARGET, not raw %. The raw version auto-scaled to the
+    // biggest mover, so the best trade was ALWAYS full width - LIT read as
+    // finished when it was 33% of the way to its TP. This measures the same
+    // thing the card's progress bar does, so the two agree: right = % of
+    // the way to TP, left = % of the way to the stop, fixed scale.
+    const ts=(d.trades||[]).filter(t=>t.r!=null&&t.risk);
     if(!ts.length){ box.className='ob'; box.innerHTML='<div class=ob-none>no open trades</div>'; return; }
-    const peak=Math.max(2,...ts.map(t=>Math.abs(t.pnl)));
+    const prog=t=>{
+      const rrt=(t.tp!=null&&t.risk)?Math.abs((t.tp-t.entry)/t.risk):(t.rr||1.5);
+      return t.r>=0?Math.min(100,t.r/rrt*100):Math.min(100,-t.r*100);
+    };
     box.className='ob';
-    box.innerHTML=ts.slice().sort((a,b)=>b.pnl-a.pnl).map(t=>{
-      const pos=t.pnl>=0, w=Math.min(50,Math.abs(t.pnl)/peak*50);
+    box.innerHTML=ts.slice().sort((a,b)=>b.r-a.r).map(t=>{
+      const pos=t.r>=0, w=prog(t)/2;           // half the track per side
       const col=pos?'#3fb950':'#f85149';
       return `<div class=ob-row>
         <span class=ob-sym>${t.sym} <span class=ob-lev>${t.lev?t.lev+'x':''}</span></span>
         <span class=ob-track><i class=ob-zero style="left:50%"></i>
           <i class=ob-fill style="left:${pos?50:50-w}%;width:${w}%;background:${col}"></i></span>
-        <span class=ob-val style="color:${col}">${pos?'+':''}${t.pnl.toFixed(2)}%</span>
+        <span class=ob-val style="color:${col}">${Math.round(prog(t))}%</span>
       </div>`;
-    }).join('');
+    }).join('')
+;
   })();
   const st=document.getElementById('status');
   step('r-start');
