@@ -536,15 +536,16 @@ h1{font-size:17px;margin:4px 0 12px}
 .row{display:flex;justify-content:space-between;margin:3px 0}
 .muted{color:#8b949e;font-size:12px}
 .ob{margin-top:12px}
-.ob-row{display:flex;align-items:center;gap:8px;margin:5px 0;font-size:11px}
+.ob-row{display:flex;align-items:center;gap:8px;margin:6px 0;font-size:13px}
 .ob-sym{position:absolute;left:50%;transform:translateX(-50%);top:0;
-  height:16px;line-height:16px;padding:0 6px;color:#c9d1d9;white-space:nowrap;
+  height:20px;line-height:20px;padding:0 7px;color:#e6e6e6;white-space:nowrap;
+  font-weight:600;
   background:rgba(18,21,29,.82);border-radius:4px;z-index:2;pointer-events:none}
-.ob-lev{color:#6e7681;font-size:9px}
-.ob-track{flex:1;position:relative;height:16px;background:#12151d;border-radius:4px;overflow:hidden}
+.ob-lev{color:#8b8f98;font-size:10px;font-weight:400}
+.ob-track{flex:1;position:relative;height:20px;background:#12151d;border-radius:4px;overflow:hidden}
 .ob-zero{position:absolute;top:0;bottom:0;width:1px;background:#3a4050}
-.ob-fill{position:absolute;top:2px;height:12px;border-radius:3px;transition:left .45s ease,width .45s ease,background .45s ease}
-.ob-val{width:62px;flex:none;text-align:right;font-weight:700}
+.ob-fill{position:absolute;top:3px;height:14px;border-radius:3px;transition:left .45s ease,width .45s ease,background .45s ease}
+.ob-val{width:64px;flex:none;text-align:right;font-weight:700;font-size:14px}
 .ob-none{color:#6e7681;text-align:center;padding:8px 0;font-size:11px}
 .bar{height:6px;background:#21262d;border-radius:3px;margin:7px 0 2px;overflow:hidden}
 .fill{height:100%;border-radius:3px}
