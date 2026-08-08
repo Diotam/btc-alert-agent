@@ -141,6 +141,22 @@ BTC_TREND_SMOOTH = (5, 5)          # smoothing for the BTC CONTEXT line only,
                                    # deliberately lighter than the signal's
                                    # 10,10 so it turns sooner and reports
                                    # where BTC is now
+BTC_ALIGN = True                   # BITCOIN CORRELATION. Alts follow BTC, so
+                                   # a long taken while BTC is falling is
+                                   # fighting the thing that actually moves
+                                   # the book. Measured the SAME way as every
+                                   # other trend here - the slope of BTC's
+                                   # own 50 EMA - rather than the old HA
+                                   # colour gate, so one idea of "trending"
+                                   # runs through the whole engine
+BTC_ALIGN_PCT = 0.30               # BTC's slope must exceed this before it
+                                   # gets a vote. BELOW it BTC is NEUTRAL and
+                                   # BLOCKS NOTHING - that matters, because a
+                                   # filter that refuses every trade whenever
+                                   # BTC drifts would gate the engine to
+                                   # silence, which is how every earlier
+                                   # version died. 0 disables
+_BTC_BIAS = {"t": 0.0, "v": None}
 BTC_TREND_TTL_S = 120              # one BTC fetch per scan, not per symbol
 _BTC_CACHE = {"t": 0.0, "v": None}
 HA_MIN_BODY_PCT = 0.04             # the trend run must contain at least one
@@ -678,6 +694,35 @@ def ha_label():
     at all, and calling it "smoothed HA" misdescribes the engine."""
     return ("Heikin Ashi" if HA_SMOOTH_IN <= 1 and HA_SMOOTH_OUT <= 1
             else f"smoothed HA {HA_SMOOTH_IN},{HA_SMOOTH_OUT}")
+
+
+def btc_bias():
+    """+1 if BTC is trending up, -1 down, 0 if it is not trending at all.
+
+    Uses ema_slope on BTC's own candles - the same measure ema_side applies
+    per symbol - so "trending" means one thing everywhere. Cached like
+    btc_trend so a 39-symbol scan costs ONE extra fetch, and fails soft to
+    0 (neutral, blocks nothing) rather than refusing the whole scan."""
+    if not BTC_ALIGN or not BTC_ALIGN_PCT:
+        return 0
+    now = time.time()
+    if _BTC_BIAS["t"] and now - _BTC_BIAS["t"] < BTC_TREND_TTL_S:
+        return _BTC_BIAS["v"]
+    bias = 0
+    try:
+        _, cs = fetch({"symbol": "BTC", "hl_coin": "BTC", "fallbacks": [],
+                       "cls": "crypto"}, TF, LOOKBACK.get(TF, 400))
+        if cs:
+            sl = ema_slope(cs, len(cs) - 1)
+            if sl is not None:
+                bias = 1 if sl >= BTC_ALIGN_PCT else (
+                    -1 if sl <= -BTC_ALIGN_PCT else 0)
+    except Exception as e:
+        log(f"btc_bias() failed: {type(e).__name__}: {e} - treating BTC as "
+            "neutral")
+        bias = 0
+    _BTC_BIAS.update(t=now, v=bias)
+    return bias
 
 
 def btc_trend():
@@ -1368,6 +1413,13 @@ def gate_status(ha, candles, i, sym=None):
                          detail=f"close {fmt_px(epx)} vs "
                                 f"{EMA_FILTER_LEN} EMA {fmt_px(ev)}")
             return d
+        if BTC_ALIGN and sym != "BTC":
+            bias = btc_bias()
+            if bias and (bias > 0) != traded_long:
+                d.update(stage="BTC disagrees",
+                         detail=f"bitcoin is trending "
+                                f"{'up' if bias > 0 else 'down'}")
+                return d
         d.update(stage="ready", detail="entering at this bar's open")
         return d
     d.update(stage="missed", detail="no-wick bar did not follow the flip")
@@ -2916,6 +2968,16 @@ def process_candle(asset, ast, candles, ha, i):
         # the move that led INTO it, so the confirmation bars after it are
         # excluded - they are already part of the new direction and would
         # drag the stop toward entry.
+        # BITCOIN CORRELATION. BTC cannot follow itself, and a NEUTRAL BTC
+        # blocks nothing - only an actively trending BTC gets a vote.
+        if BTC_ALIGN and sym != "BTC":
+            bias = btc_bias()
+            if bias and (bias > 0) != want_long:
+                log(f"{sym}: {direction} setup but BITCOIN is trending "
+                    f"{'up' if bias > 0 else 'down'} "
+                    f"(needs {BTC_ALIGN_PCT:+.2f}% slope) - skipped")
+                continue
+
         # the run start comes back from the detector, so the stop can span
         # the move being turned instead of the last few bars of it - which
         # on a fade are the SMALLEST ones, putting the stop nearest entry
