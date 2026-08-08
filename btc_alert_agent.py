@@ -3468,6 +3468,10 @@ def check_once():
                               cursor=new_cursor,
                               scan_every_s=MS[SCAN_EVERY] // 1000,
                               tf=TF,
+                              # the dashboard cannot guess whether a target
+                              # books HALF or the WHOLE position, and said
+                              # "booking half" on a full close for two days
+                              partial=HA_PARTIAL,
                               tz=TIMEZONE,
                               last_scan_utc=datetime.now(timezone.utc)
                               .isoformat(timespec="seconds"))
