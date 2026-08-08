@@ -544,13 +544,16 @@ h1{font-size:17px;margin:4px 0 12px}
 .muted{color:#8b949e;font-size:12px}
 .ob{margin-top:12px}
 .ob-row{display:flex;align-items:center;gap:8px;margin:6px 0;font-size:13px}
-.ob-sym{position:absolute;left:50%;transform:translateX(-50%);top:0;
-  height:20px;line-height:20px;padding:0 7px;color:#e6e6e6;white-space:nowrap;
-  font-weight:600;
-  background:rgba(18,21,29,.82);border-radius:4px;z-index:2;pointer-events:none}
-.ob-track{flex:1;position:relative;height:20px;background:#12151d;border-radius:4px;overflow:hidden}
-.ob-zero{position:absolute;top:0;bottom:0;width:1px;background:#3a4050}
-.ob-fill{position:absolute;top:3px;height:14px;border-radius:3px;transition:left .45s ease,width .45s ease,background .45s ease}
+/* the symbol gets its OWN column between two half-tracks, so nothing is
+   drawn over anything - the bars grow AWAY from the label rather than
+   under it. */
+.ob-sym{width:96px;flex:none;text-align:center;color:#e6e6e6;
+  font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ob-half{flex:1;position:relative;height:20px;background:#12151d}
+.ob-half.l{border-radius:4px 0 0 4px}
+.ob-half.r{border-radius:0 4px 4px 0}
+.ob-fill{position:absolute;top:3px;height:14px;border-radius:3px;
+  transition:width .45s ease,background .45s ease}
 .ob-val{width:64px;flex:none;text-align:right;font-weight:700;font-size:14px}
 .ob-none{color:#6e7681;text-align:center;padding:8px 0;font-size:11px}
 .bar{height:6px;background:#21262d;border-radius:3px;margin:7px 0 2px;overflow:hidden}
@@ -735,10 +738,12 @@ function render(d){
       const col=pos?'#3fb950':'#f85149';
       // the symbol sits ON the zero line, so the label marks ENTRY and the
       // bar reads as distance travelled from it
+      // left half fills from its RIGHT edge (toward the stop), right half
+      // from its LEFT edge (toward the target) - both start at the label
       return `<div class=ob-row>
-        <span class=ob-track><i class=ob-zero style="left:50%"></i>
-          <i class=ob-fill style="left:${pos?50:50-w}%;width:${w}%;background:${col}"></i>
-          <span class=ob-sym>${t.sym}</span></span>
+        <span class="ob-half l">${pos?'':`<i class=ob-fill style="right:0;width:${w*2}%;background:${col}"></i>`}</span>
+        <span class=ob-sym>${t.sym}</span>
+        <span class="ob-half r">${pos?`<i class=ob-fill style="left:0;width:${w*2}%;background:${col}"></i>`:''}</span>
         <span class=ob-val style="color:${col}">${Math.round(prog(t))}%</span>
       </div>`;
     }).join('')
