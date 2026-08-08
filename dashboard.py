@@ -543,11 +543,11 @@ h1{font-size:17px;margin:4px 0 12px}
 .row{display:flex;justify-content:space-between;margin:3px 0}
 .muted{color:#8b949e;font-size:12px}
 .ob{margin-top:12px}
-.ob-row{display:flex;align-items:center;gap:8px;margin:6px 0;font-size:13px}
+.ob-row{display:flex;align-items:center;gap:4px;margin:6px 0;font-size:13px}
 /* the symbol gets its OWN column between two half-tracks, so nothing is
    drawn over anything - the bars grow AWAY from the label rather than
    under it. */
-.ob-sym{width:96px;flex:none;text-align:center;color:#e6e6e6;
+.ob-sym{width:78px;flex:none;text-align:center;color:#e6e6e6;
   font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ob-half{flex:1;position:relative;height:20px;background:#12151d}
 .ob-half.l{border-radius:4px 0 0 4px}
