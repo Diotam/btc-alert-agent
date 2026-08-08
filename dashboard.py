@@ -776,6 +776,7 @@ function render(d){
    const cls=t.dir==='LONG'?'long':'short';
    const sgn=t.dir==='LONG'?1:-1;
    // each trade's true RR from its own prices (targets vary: 2R..3R/structure)
+   const PARTIAL=(d._meta&&d._meta.partial!=null)?d._meta.partial:1;
    const RRT=(t.tp!=null&&t.risk)?Math.abs((t.tp-t.entry)/t.risk)
      :((t.tp!=null&&t.entry!==t.stop)?Math.abs((t.tp-t.entry)/(t.entry-t.stop)):2);
    // freeze the card once TP or stop has traded - the agent confirms the
@@ -801,7 +802,7 @@ function render(d){
    const atTarget=!t.half && t.r!=null && t.r>=RRT;
    const running=Math.round((t.left==null?1:t.left)*100);
    const badge=t.half?`<span class="badge ok">${running}% running</span>`
-     :atTarget?'<span class="badge ok">target reached · booking half</span>'
+     :atTarget?`<span class="badge ok">target reached \u00b7 ${PARTIAL>=1?'closing':'booking '+Math.round(PARTIAL*100)+'%'}</span>`
      :slDone?'<span class="badge warn">stop hit · closing</span>':'';
    // THE BAR NOW MEASURES WHAT THE LABEL SAYS. It used to run one scale
    // from stop (0%) through entry to TP (100%), so a trade 61% of the way
@@ -813,7 +814,7 @@ function render(d){
    const rc=showR==null?'#8b949e':showR>=0?'#3fb950':'#f85149';
    const rlbl=showR==null?''
      :slDone?'Stop traded - waiting for the close confirmation'
-     :atTarget?`${showR.toFixed(2)}R \u00b7 target reached, booking half`
+     :atTarget?`${showR.toFixed(2)}R \u00b7 target reached, ${PARTIAL>=1?'closing the position':'booking '+Math.round(PARTIAL*100)+'%'}`
      :t.half?`${showR.toFixed(2)}R from entry \u00b7 runs until the HA flips`
      :showR>=0
      ?`${showR.toFixed(2)}R · ${Math.round(Math.min(100,showR/RRT*100))}% of the way to TP`
