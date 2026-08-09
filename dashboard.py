@@ -415,6 +415,7 @@ def build_data():
     # top, so the one nearest its target leads and the one nearest its stop
     # sits last. Rebuilt on every SSE tick, so the order re-shuffles live
     _ORDER = {"ready": 0, "no-wick bar forming": 1, "flipped": 2,
+              "waiting for a cross": 2.5,
               "too far from EMA": 3, "range - EMA is flat": 3.5,
               "BTC disagrees": 3.7, "wrong side of EMA": 4, "wick too long": 5,
               "run was expanding": 6, "run too flat": 7,
@@ -782,7 +783,8 @@ function render(d){
    const sgn=t.dir==='LONG'?1:-1;
    // each trade's true RR from its own prices (targets vary: 2R..3R/structure)
    const PARTIAL=(d._meta&&d._meta.partial!=null)?d._meta.partial:1;
-   const RRT=(t.tp!=null&&t.risk)?Math.abs((t.tp-t.entry)/t.risk)
+   const NOTGT=t.tp!=null&&t.entry&&Math.abs(t.tp-t.entry)/t.entry>2;
+   const RRT=(t.tp!=null&&t.risk&&!NOTGT)?Math.abs((t.tp-t.entry)/t.risk)
      :((t.tp!=null&&t.entry!==t.stop)?Math.abs((t.tp-t.entry)/(t.entry-t.stop)):2);
    // freeze the card once TP or stop has traded - the agent confirms the
    // close on its next scan (<=5 min) and the card moves to Closed trades
@@ -819,6 +821,7 @@ function render(d){
    const rc=showR==null?'#8b949e':showR>=0?'#3fb950':'#f85149';
    const rlbl=showR==null?''
      :slDone?'Stop traded - waiting for the close confirmation'
+     :NOTGT?`${showR.toFixed(2)}R \u00b7 runs until the EMA crosses back`
      :atTarget?`${showR.toFixed(2)}R \u00b7 target reached, ${PARTIAL>=1?'closing the position':'booking '+Math.round(PARTIAL*100)+'%'}`
      :t.half?`${showR.toFixed(2)}R from entry \u00b7 runs until the HA flips`
      :showR>=0
