@@ -103,12 +103,13 @@ MIN_DAY_VOLUME_USD = 2_000_000     # crypto floor, 24h notional
 COMMODITY_MIN_VOLUME_USD = 5_000_000
 STOCK_MIN_VOLUME_USD = 5_000_000
 ONLY = []                          # trade ONLY these symbols ([] = whole universe)
-ONLY_SYMBOLS = ()                  # if non-empty, the universe is EXACTLY
+ONLY_SYMBOLS = ("CRV", "CASHCAT", "PUMP", "KAITO")
+                                   # if non-empty, the universe is EXACTLY
                                    # these and nothing else - volume floors,
                                    # MAX_ASSETS and dex discovery no longer
-                                   # decide anything. BTC-only as of 4 Aug,
-                                   # his call. Empty tuple restores the
-                                   # discovered universe
+                                   # decide anything. Narrowed to four on
+                                   # 8 Aug, his call. Empty tuple restores
+                                   # the discovered universe
 EXCLUDE = []                       # never trade these (matches the base name
                                    # on any venue). PUMP was removed from
                                    # this list 3 Aug - it trades again
@@ -361,6 +362,19 @@ TP_MIN_RR = 1.0                    # refuse the setup when the swing sits
                                    # less than 1 is a losing shape however
                                    # often it wins
 HA_RR = 1.5                        # first target = 3x the stop distance
+TRAIL_ON = True                    # TRAILING STOP. Ratchets ONLY - it never
+                                   # moves against the trade, so it can turn a
+                                   # winner into a smaller winner but never
+                                   # widens risk on a loser
+TRAIL_START_R = 0.75               # profit, in R, before the trail engages.
+                                   # Below this the original structural stop
+                                   # stands: tightening early just turns
+                                   # ordinary noise into a stop-out
+TRAIL_GAP_R = 0.75                 # how far behind the BEST price reached the
+                                   # stop sits, in R. At 0.75 the first
+                                   # ratchet lands on entry, so the trade goes
+                                   # risk-free the moment it is 0.75R up, then
+                                   # follows from there
 HA_PARTIAL = 1.0                   # fraction booked there; the stop then moves
                                    # to entry and the remainder is held until
                                    # the HA flips against the trade
@@ -526,7 +540,7 @@ EXEC_SIZING = "margin"             # "margin"   = a FIXED DOLLAR AMOUNT of
                                    #   size, whatever collateral that needs
                                    # "risk"     = fixed dollar LOSS at the
                                    #   stop; the position size then varies
-EXEC_MARGIN_USD = 30.0             # collateral per trade in "margin" mode
+EXEC_MARGIN_USD = 100.0             # collateral per trade in "margin" mode
 EXEC_LEVERAGE = 999                # MAX leverage: eff_leverage() clamps this
                                    # to each market's own maximum, so 999
                                    # simply means "whatever this market
@@ -1813,6 +1827,39 @@ def reverse_alert(asset, trade, candles, c, was_long):
         log(f"{sym}: reverse_alert failed: {type(e).__name__}: {e}")
 
 
+def trail_stop(asset, trade, c, long):
+    """Ratchet the stop up behind the best price this trade has seen.
+
+    The PEAK lives on the trade record rather than being recomputed, so the
+    stop never falls back when price pulls in. It moves the RESTING exchange
+    order too - without that the venue would still hold the original stop
+    while the bot believed the trade was protected, which is the exact gap
+    move_stop_live was written for after a partial."""
+    if not TRAIL_ON or trade.get("half"):
+        return False
+    risk = trade.get("risk0") or abs(trade["entry"] - trade["stop"])
+    if risk <= 0:
+        return False
+    peak = trade.get("peak")
+    now = c["h"] if long else c["l"]
+    if peak is None or (now > peak if long else now < peak):
+        trade["peak"] = peak = now
+    gain_r = ((peak - trade["entry"]) if long
+              else (trade["entry"] - peak)) / risk
+    if gain_r < TRAIL_START_R:
+        return False
+    want = (peak - TRAIL_GAP_R * risk) if long else (peak + TRAIL_GAP_R * risk)
+    if (want <= trade["stop"]) if long else (want >= trade["stop"]):
+        return False                      # RATCHET ONLY
+    old = trade["stop"]
+    trade["stop"] = want
+    log(f"{asset['symbol']}: TRAIL - {gain_r:.2f}R up, stop "
+        f"${fmt_px(old)} -> ${fmt_px(want)} "
+        f"({TRAIL_GAP_R:.2f}R behind the ${fmt_px(peak)} peak)")
+    move_stop_live(asset, trade)
+    return True
+
+
 def process_open_trade(asset, trade, candles, ha, last_closed_t):
     """Stop / target watch. Before the partial the stop is the HA zone low;
     after it the stop is entry and the exit trigger is an HA flip against
@@ -1829,6 +1876,10 @@ def process_open_trade(asset, trade, candles, ha, last_closed_t):
         if (c["l"] <= trade["stop"]) if long else (c["h"] >= trade["stop"]):
             kind = "BE" if trade.get("half") else "STOP"
             return _close_trade(asset, trade, trade["stop"], kind, event_t)
+        # AFTER the stop test on this candle, so a bar that reached the old
+        # stop still exits there rather than at a level moved mid-bar
+        if trail_stop(asset, trade, c, long):
+            changed = True
         if not trade.get("half"):
             if (c["h"] >= trade["tp"]) if long else (c["l"] <= trade["tp"]):
                 # AT HA_PARTIAL = 1.0 _book_partial CLOSES the trade and
