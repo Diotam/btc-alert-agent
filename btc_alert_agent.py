@@ -103,7 +103,7 @@ MIN_DAY_VOLUME_USD = 2_000_000     # crypto floor, 24h notional
 COMMODITY_MIN_VOLUME_USD = 5_000_000
 STOCK_MIN_VOLUME_USD = 5_000_000
 ONLY = []                          # trade ONLY these symbols ([] = whole universe)
-ONLY_SYMBOLS = ("CASHCAT", "PUMP")
+ONLY_SYMBOLS = ()
                                    # if non-empty, the universe is EXACTLY
                                    # these and nothing else - volume floors,
                                    # MAX_ASSETS and dex discovery no longer
@@ -121,7 +121,7 @@ ASSETS = [                         # used when DISCOVER_ALL = False, or when
 ]
 
 # --- strategy dials -------------------------------------------------------
-TF = "30m"                         # execution timeframe. 15m -> 30m on
+TF = "15m"                         # execution timeframe. 15m -> 30m on
                                    # 9 Aug: a 50 EMA on 15m was too fast
                                    # for these markets, so price crossed
                                    # it constantly without going
@@ -147,7 +147,7 @@ BTC_TREND_SMOOTH = (5, 5)          # smoothing for the BTC CONTEXT line only,
                                    # deliberately lighter than the signal's
                                    # 10,10 so it turns sooner and reports
                                    # where BTC is now
-BTC_ALIGN = False                  # BITCOIN CORRELATION. Alts follow BTC, so
+BTC_ALIGN = True                   # BITCOIN CORRELATION. Alts follow BTC, so
                                    # a long taken while BTC is falling is
                                    # fighting the thing that actually moves
                                    # the book. Measured the SAME way as every
@@ -225,7 +225,7 @@ ENGINE_TAG = "ha"                  # which detector produced a trade. Written
                                    # Rows written before 6 Aug have no tag;
                                    # any analysis should read a missing tag
                                    # as "ha"
-CROSS_MODE = True                  # THE EMA-CROSSOVER ENGINE, 8 Aug, his
+CROSS_MODE = False                 # THE EMA-CROSSOVER ENGINE, 8 Aug, his
                                    # spec. REPLACES the HA flip engine when
                                    # on. Price crossing the 50 EMA arms a
                                    # side; the first NO-WICK candle after the
@@ -243,6 +243,16 @@ CROSS_DISASTER_PCT = 10.0          # ...except this. A cross-only exit can sit
                                    # brake, not a strategy stop - it should
                                    # almost never fire. 0 removes it and
                                    # makes liquidation the only backstop
+ALLOW_SHORTS = False               # take the short side at all. FALSE as of
+                                   # 9 Aug, from 580 legs of his own ledger
+                                   # spanning 19 Jul - 9 Aug: LONGS made
+                                   # +82.61% at a 39% win rate while SHORTS
+                                   # lost -25.37% at 32% over a comparable
+                                   # 280 legs. THE CAVEAT: that window was a
+                                   # broadly rising market, so a long-only
+                                   # engine will look excellent in an uptrend
+                                   # and bleed in a downtrend. True restores
+                                   # both sides
 HA_MODE = "reversal"                   # what the doji MEANS.
                                    #   "reversal"     - a doji ending a red
                                    #                    run turns us LONG.
@@ -254,7 +264,7 @@ HA_MODE = "reversal"                   # what the doji MEANS.
                                    #                    not the end of it.
                                    # Detection is IDENTICAL either way - only
                                    # the resulting side flips
-EMA_FILTER_TF = "30m"               # TIMEFRAME the filter's EMA is measured
+EMA_FILTER_TF = "15m"               # TIMEFRAME the filter's EMA is measured
                                    # on, which need not be TF. A 50 EMA on
                                    # 15m spans about 12 hours, so an ordinary
                                    # pullback inside a two-day uptrend
@@ -274,7 +284,7 @@ EMA_SIDE_RULE = True               # require price to be on the EMA's side.
                                    # happens to sit above or below the line no
                                    # longer decides anything, and the retest
                                    # band is off with it
-EMA_SLOPE_TF = "30m"               # TIMEFRAME the slope is measured on, kept
+EMA_SLOPE_TF = "15m"               # TIMEFRAME the slope is measured on, kept
                                    # SEPARATE from EMA_FILTER_TF on purpose.
                                    # The 50 EMA itself stays on 1h — that was
                                    # his own correction when a 15m EMA read a
@@ -563,7 +573,7 @@ EXEC_SIZING = "margin"             # "margin"   = a FIXED DOLLAR AMOUNT of
                                    #   size, whatever collateral that needs
                                    # "risk"     = fixed dollar LOSS at the
                                    #   stop; the position size then varies
-EXEC_MARGIN_USD = 150.0             # collateral per trade in "margin" mode
+EXEC_MARGIN_USD = 40.0             # collateral per trade in "margin" mode
 EXEC_LEVERAGE = 999                # MAX leverage: eff_leverage() clamps this
                                    # to each market's own maximum, so 999
                                    # simply means "whatever this market
@@ -1523,6 +1533,9 @@ def gate_status(ha, candles, i, sym=None):
                 d.update(stage="wrong side of EMA",
                          detail=f"close {fmt_px(epx)} vs "
                                 f"{EMA_FILTER_LEN} EMA {fmt_px(ev)}")
+            return d
+        if not ALLOW_SHORTS and not traded_long:
+            d.update(stage="shorts are off", detail="long-only, by config")
             return d
         if BTC_ALIGN and sym != "BTC":
             bias = btc_bias()
@@ -3161,6 +3174,10 @@ def process_candle(asset, ast, candles, ha, i):
         # the move that led INTO it, so the confirmation bars after it are
         # excluded - they are already part of the new direction and would
         # drag the stop toward entry.
+        if not ALLOW_SHORTS and not want_long:
+            log(f"{sym}: SHORT setup but ALLOW_SHORTS is off - skipped")
+            continue
+
         # BITCOIN CORRELATION. BTC cannot follow itself, and a NEUTRAL BTC
         # blocks nothing - only an actively trending BTC gets a vote.
         if BTC_ALIGN and sym != "BTC":
