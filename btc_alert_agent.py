@@ -1642,6 +1642,9 @@ def lifecycle_message(asset, kind, trade, exit_px, event_t, note):
         "BE": ("\u27a1\ufe0f", "STOPPED AT ENTRY",
                "the runner came back to breakeven"),
         "STOP": ("\u274c", "STOPPED OUT", "stop level hit"),
+        # a stop the TRAIL had already ratcheted above entry is a WIN, and
+        # calling it "STOPPED OUT" made a +6% CASHCAT exit read as a loss
+        "TRAIL": ("\u2705", "TRAIL EXIT", "trailing stop took the profit"),
         "MANUAL": ("\u270b", "CLOSED BY HAND",
                    "closed from the dashboard at market"),
         "TP": ("\u2705", "TAKE PROFIT HIT", "target reached"),
@@ -1779,6 +1782,22 @@ def ensure_flat(asset, trade, kind):
                 ex.cancel(sym, oid)
             except Exception:
                 pass
+
+
+def _stop_kind(trade):
+    """Which name does this stop deserve?
+
+    BE   - the post-partial stop sitting at entry
+    TRAIL - the trail ratcheted it INTO PROFIT, so the exit is a win
+    STOP  - the original structural level, a real loss"""
+    if trade.get("half"):
+        return "BE"
+    e, st = trade.get("entry"), trade.get("stop")
+    if e and st:
+        in_profit = (st > e) if trade["verdict"] == "LONG" else (st < e)
+        if in_profit:
+            return "TRAIL"
+    return "STOP"
 
 
 def _close_trade(asset, trade, px, kind, event_t, note="", frac=None):
@@ -1984,7 +2003,7 @@ def process_open_trade(asset, trade, candles, ha, last_closed_t):
         trade["checked_t"] = c["t"]
         event_t = c["t"] + MS[TF]
         if (c["l"] <= trade["stop"]) if long else (c["h"] >= trade["stop"]):
-            kind = "BE" if trade.get("half") else "STOP"
+            kind = _stop_kind(trade)
             return _close_trade(asset, trade, trade["stop"], kind, event_t)
         # CROSS_MODE: the ONLY exit is price crossing back. Checked before
         # the trail, which is inert here anyway - there is no R target for
@@ -2030,7 +2049,7 @@ def process_open_trade(asset, trade, candles, ha, last_closed_t):
     if live["t"] > last_closed_t:
         t_now = now_ms()
         if (live["l"] <= trade["stop"]) if long else (live["h"] >= trade["stop"]):
-            kind = "BE" if trade.get("half") else "STOP"
+            kind = _stop_kind(trade)
             return _close_trade(asset, trade, trade["stop"], kind, t_now,
                                 "Intrabar - stop traded before the close.")
         if not trade.get("half"):
@@ -2291,6 +2310,7 @@ def plan_manage_orders(asset, event, price):
     if not EXEC_LOG_ORDERS:
         return
     action = {"STOP": "stop filled - flat",
+              "TRAIL": "trailing stop filled - flat",
               "TP": "target filled - flat",
               "TP_HALF": f"target filled - {HA_PARTIAL:.0%} booked, "
                          "stop to entry",
