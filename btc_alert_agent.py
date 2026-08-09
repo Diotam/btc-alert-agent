@@ -220,6 +220,24 @@ ENGINE_TAG = "ha"                  # which detector produced a trade. Written
                                    # Rows written before 6 Aug have no tag;
                                    # any analysis should read a missing tag
                                    # as "ha"
+CROSS_MODE = True                  # THE EMA-CROSSOVER ENGINE, 8 Aug, his
+                                   # spec. REPLACES the HA flip engine when
+                                   # on. Price crossing the 50 EMA arms a
+                                   # side; the first NO-WICK candle after the
+                                   # cross triggers entry at the NEXT open.
+                                   # The position then runs until price
+                                   # crosses BACK, which closes it and arms
+                                   # the other side - so the book is always
+                                   # in the market, flipping at each cross.
+                                   # No target and no structural stop: the
+                                   # cross is the only exit
+CROSS_DISASTER_PCT = 10.0          # ...except this. A cross-only exit can sit
+                                   # through an unbounded move, and at market
+                                   # max leverage that reaches LIQUIDATION
+                                   # before any cross arrives. This is a
+                                   # brake, not a strategy stop - it should
+                                   # almost never fire. 0 removes it and
+                                   # makes liquidation the only backstop
 HA_MODE = "reversal"                   # what the doji MEANS.
                                    #   "reversal"     - a doji ending a red
                                    #                    run turns us LONG.
@@ -1173,6 +1191,55 @@ def breakout_signal(candles, i):
     return None
 
 
+def ema_cross_side(candles, i):
+    """Which side of the 50 EMA is price on at bar i? +1 above, -1 below.
+
+    Uses the same EMA the filter uses, so "above the EMA" means one thing
+    everywhere. None when there is not enough history."""
+    if i < 1:
+        return None
+    base = candles[:i + 1]
+    factor = max(1, MS.get(EMA_FILTER_TF, MS[TF]) // MS[TF])
+    higher = resample(base, factor)
+    if len(higher) < EMA_FILTER_LEN:
+        return None
+    e = ema([c["c"] for c in higher], EMA_FILTER_LEN)[-1]
+    px = base[-1]["c"]
+    return 1 if px > e else -1
+
+
+def cross_signal(ast, candles, ha, i):
+    """The crossover engine.
+
+    Returns "LONG" / "SHORT" when this bar should ENTER, else None.
+
+    Two steps, deliberately separate: a CROSS arms a side, and the first
+    NO-WICK candle after it pulls the trigger. Arming survives across scans
+    on the state record, so a cross on Monday can still fire on Tuesday if
+    that is when the clean candle appears."""
+    side = ema_cross_side(candles, i)
+    prev = ema_cross_side(candles, i - 1)
+    if side is None or prev is None:
+        return None
+    arm = ast.get("cross_arm") or {}
+    if side != prev:                       # a CROSS happened on this bar
+        arm = {"side": "LONG" if side > 0 else "SHORT", "t": candles[i]["t"]}
+        ast["cross_arm"] = arm
+        log(f"{ast.get('sym','?')}: EMA CROSS {'up' if side > 0 else 'down'} "
+            f"- arming {arm['side']}, waiting for a no-wick candle")
+        return None
+    if not arm:
+        return None
+    # the no-wick candle must come AFTER the cross, and is judged on the
+    # LAST CLOSED bar exactly as the flip engine judges it
+    want_long = arm["side"] == "LONG"
+    if candles[i - 1]["t"] <= arm["t"]:
+        return None
+    if not no_wick(ha[i - 1], want_long):
+        return None
+    return arm["side"]
+
+
 def ha_nowick_signal(ha, i, want_long):
     """The 4 Aug engine. Entry is at the OPEN of candle i, so everything
     below happened at i-1 or earlier.
@@ -1252,6 +1319,31 @@ def confirmed(ha, candles, d, i, want_long, final=True):
     if real_up != want_long:
         return False, "real candle closed the wrong way"
     return True, ""
+
+
+def cross_gate(ast, candles, ha, i):
+    """What the pipeline card shows in CROSS_MODE."""
+    side = ema_cross_side(candles, i)
+    if side is None:
+        return None
+    arm = ast.get("cross_arm") or {}
+    d = {"dir": arm.get("side") or ("LONG" if side > 0 else "SHORT"),
+         "trend": "up" if side > 0 else "down", "age": 0, "need": 1,
+         "t": candles[i]["t"], "px": candles[i]["c"]}
+    if not arm:
+        d.update(stage="waiting for a cross",
+                 detail=f"price is {'above' if side > 0 else 'below'} the "
+                        f"{EMA_FILTER_LEN} EMA")
+        return d
+    want_long = arm["side"] == "LONG"
+    w, b = ha_wick(ha[i], upper=not want_long), ha_body(ha[i])
+    pct = (w / b * 100) if b else 999
+    d.update(stage="no-wick bar forming",
+             detail=(f"clean so far ({pct:.0f}% of body)"
+                     if pct <= HA_NOWICK_TOL_PCT
+                     else f"wick {pct:.0f}% of body, needs "
+                          f"<= {HA_NOWICK_TOL_PCT:.0f}%"))
+    return d
 
 
 def gate_status(ha, candles, i, sym=None):
@@ -1876,6 +1968,20 @@ def process_open_trade(asset, trade, candles, ha, last_closed_t):
         if (c["l"] <= trade["stop"]) if long else (c["h"] >= trade["stop"]):
             kind = "BE" if trade.get("half") else "STOP"
             return _close_trade(asset, trade, trade["stop"], kind, event_t)
+        # CROSS_MODE: the ONLY exit is price crossing back. Checked before
+        # the trail, which is inert here anyway - there is no R target for
+        # it to protect.
+        if CROSS_MODE:
+            idx = next((n for n, x in enumerate(candles)
+                        if x["t"] == c["t"]), None)
+            side = ema_cross_side(candles, idx) if idx else None
+            if side is not None and ((side < 0) if long else (side > 0)):
+                log(f"{asset['symbol']}: EMA CROSS back "
+                    f"{'down' if long else 'up'} - closing the "
+                    f"{trade['verdict']} at ${fmt_px(c['c'])}")
+                return _close_trade(asset, trade, c["c"], "CROSS", event_t)
+            continue
+
         # AFTER the stop test on this candle, so a bar that reached the old
         # stop still exits there rather than at a level moved mid-bar
         if trail_stop(asset, trade, c, long):
@@ -2801,7 +2907,8 @@ def open_reverse(asset, ast, candles, was_long):
 
 
 def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger,
-               live_px=None, engine=None, candles=None, idx=None):
+               live_px=None, engine=None, candles=None, idx=None,
+               tp_override=None):
     """Risk checks, override handling, alert, trade creation and (when
     enabled) the live order. Returns True if a trade was opened."""
     sym = asset["symbol"]
@@ -2836,6 +2943,9 @@ def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger,
             log(f"{sym}: no swing {'low' if short else 'high'} beyond entry "
                 f"within {SWING_MAX_LOOKBACK} candles - falling back to "
                 f"{HA_RR}R")
+    if tp_override is not None:
+        tp = tp_override            # CROSS_MODE: the exit is the cross, so
+                                    # the target is parked out of reach
     tgt_pct = abs(tp - entry) / entry * 100 if entry else 0.0
     if MIN_TARGET_PCT and tgt_pct < MIN_TARGET_PCT:
         log(f"{sym}: target only {tgt_pct:.2f}% away "
@@ -2937,6 +3047,33 @@ def process_candle(asset, ast, candles, ha, i):
     sym = asset["symbol"]
     c = candles[i]
     hd = ha[i]
+
+    # ---------------- CROSSOVER ENGINE ----------------
+    # Replaces the flip engine entirely when on. No run gates, no fade, no
+    # BTC vote - the cross IS the trend read, so layering the old filters on
+    # top would refuse the very setups it exists to take.
+    if CROSS_MODE:
+        ast["sym"] = sym
+        side = cross_signal(ast, candles, ha, i)
+        if not side:
+            ast["gate"] = cross_gate(ast, candles, ha, i)
+            return False
+        want_long = side == "LONG"
+        entry = c["o"] if ENTRY_AT_OPEN else c["c"]
+        stop = (entry * (1 - CROSS_DISASTER_PCT / 100) if want_long
+                else entry * (1 + CROSS_DISASTER_PCT / 100)) \
+            if CROSS_DISASTER_PCT else (entry * 0.5 if want_long
+                                        else entry * 1.5)
+        tp = (entry * 100) if want_long else (entry * 0.01)   # unreachable
+        log(f"{sym}: CROSS ENTRY {side} at ${fmt_px(entry)} - no-wick candle "
+            f"after the EMA cross, exits on the cross back")
+        return fire_entry(asset, ast, side, dict(c, c=entry), stop,
+                          c["h"], c["l"], "CROSS",
+                          f"price crossed the {EMA_FILTER_LEN} EMA, then a "
+                          f"no-wick candle - entered at the next open, "
+                          f"exits when price crosses back",
+                          live_px=candles[-1]["c"], engine="cross",
+                          candles=candles, idx=i, tp_override=tp)
 
     # record where this symbol sits in the chain, for the dashboard. Report
     # only - it never gates anything. Written every scan so the panel is
