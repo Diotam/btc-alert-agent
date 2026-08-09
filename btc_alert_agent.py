@@ -3332,6 +3332,12 @@ def process_candle(asset, ast, candles, ha, i):
         if found_bo:
             want_long, stop = found_bo
             direction = "LONG" if want_long else "SHORT"
+            # ALLOW_SHORTS is a RULE, not a flip-engine setting. It lived
+            # only in the flip path, so breakout shorts walked straight past
+            # it - HYPE opened SHORT on 9 Aug with the switch off.
+            if not ALLOW_SHORTS and not want_long:
+                log(f"{sym}: BREAKOUT SHORT but ALLOW_SHORTS is off - skipped")
+                return False
             entry = candles[i]["c"]          # the BREAK's own close
             # the range start is a stable key for one trade per range
             bo_f = max(1, MS.get(BO_TF, MS[TF]) // MS[TF])
