@@ -103,7 +103,7 @@ MIN_DAY_VOLUME_USD = 2_000_000     # crypto floor, 24h notional
 COMMODITY_MIN_VOLUME_USD = 5_000_000
 STOCK_MIN_VOLUME_USD = 5_000_000
 ONLY = []                          # trade ONLY these symbols ([] = whole universe)
-ONLY_SYMBOLS = ("CRV", "CASHCAT", "PUMP", "KAITO")
+ONLY_SYMBOLS = ("CRV", "CASHCAT", "PUMP")
                                    # if non-empty, the universe is EXACTLY
                                    # these and nothing else - volume floors,
                                    # MAX_ASSETS and dex discovery no longer
