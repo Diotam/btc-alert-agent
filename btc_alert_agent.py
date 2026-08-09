@@ -323,7 +323,7 @@ HA_MIN_RUN_PCT = 0.2               # MINIMUM MOVE across the run, start to
                                    # this: it only asks that ONE body in the
                                    # run clears a floor, not that the run
                                    # went anywhere. 0 disables
-HA_MIN_RUN = 3                     # MINIMUM trend-coloured HA candles before
+HA_MIN_RUN = 2                     # MINIMUM trend-coloured HA candles before
                                    # the flip counts. Back on 3 Aug at 5,
                                    # after LIT showed a ONE-candle red run
                                    # inside an uptrend being read as a trend
