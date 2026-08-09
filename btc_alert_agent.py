@@ -103,7 +103,7 @@ MIN_DAY_VOLUME_USD = 2_000_000     # crypto floor, 24h notional
 COMMODITY_MIN_VOLUME_USD = 5_000_000
 STOCK_MIN_VOLUME_USD = 5_000_000
 ONLY = []                          # trade ONLY these symbols ([] = whole universe)
-ONLY_SYMBOLS = ("CRV", "CASHCAT", "PUMP")
+ONLY_SYMBOLS = ("CASHCAT", "PUMP")
                                    # if non-empty, the universe is EXACTLY
                                    # these and nothing else - volume floors,
                                    # MAX_ASSETS and dex discovery no longer
@@ -121,7 +121,12 @@ ASSETS = [                         # used when DISCOVER_ALL = False, or when
 ]
 
 # --- strategy dials -------------------------------------------------------
-TF = "15m"                         # execution timeframe
+TF = "30m"                         # execution timeframe. 15m -> 30m on
+                                   # 9 Aug: a 50 EMA on 15m was too fast
+                                   # for these markets, so price crossed
+                                   # it constantly without going
+                                   # anywhere - PUMP moved 0.48% between
+                                   # crosses at 15m and 1.16% at 30m
 SCAN_EVERY = "5m"                  # how often the loop wakes. Aligning it to
                                    # TF means one scan per candle. A shorter
                                    # pulse costs API calls but reacts sooner:
@@ -249,7 +254,7 @@ HA_MODE = "reversal"                   # what the doji MEANS.
                                    #                    not the end of it.
                                    # Detection is IDENTICAL either way - only
                                    # the resulting side flips
-EMA_FILTER_TF = "15m"               # TIMEFRAME the filter's EMA is measured
+EMA_FILTER_TF = "30m"               # TIMEFRAME the filter's EMA is measured
                                    # on, which need not be TF. A 50 EMA on
                                    # 15m spans about 12 hours, so an ordinary
                                    # pullback inside a two-day uptrend
@@ -269,7 +274,7 @@ EMA_SIDE_RULE = True               # require price to be on the EMA's side.
                                    # happens to sit above or below the line no
                                    # longer decides anything, and the retest
                                    # band is off with it
-EMA_SLOPE_TF = "15m"               # TIMEFRAME the slope is measured on, kept
+EMA_SLOPE_TF = "30m"               # TIMEFRAME the slope is measured on, kept
                                    # SEPARATE from EMA_FILTER_TF on purpose.
                                    # The 50 EMA itself stays on 1h — that was
                                    # his own correction when a 15m EMA read a
