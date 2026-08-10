@@ -2900,7 +2900,15 @@ def adopt_position(asset, ast, candles, coin_sz, entry_px):
              "tp": entry + HA_RR * risk if now_long else entry - HA_RR * risk,
              "size": abs(coin_sz), "left": 1.0, "half": False,
              "risk0": risk, "rr": HA_RR, "opened_t": now_ms(),
-             "checked_t": 0, "source": "ADOPTED"}
+             # START THE STOP WATCH NOW, not at the beginning of the series.
+             # The stop is the LOWEST LOW of the last stop_bars() candles, so
+             # by construction a candle inside that window already touched it.
+             # With checked_t at 0 the watcher replayed those bars, saw the
+             # level hit and booked an instant STOP on a position that was
+             # perfectly healthy - which is what kept happening to hand-placed
+             # PUMP trades.
+             "checked_t": (candles[-1]["t"] if candles else 0),
+             "source": "ADOPTED"}
     ast["trade"] = trade
     ast["phase"] = "IN_TRADE"
     protect_position(asset, trade)
