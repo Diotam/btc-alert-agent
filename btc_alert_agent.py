@@ -411,7 +411,7 @@ TRAIL_GAP_R = 0.75                 # how far behind the BEST price reached the
 HA_PARTIAL = 1.0                   # fraction booked there; the stop then moves
                                    # to entry and the remainder is held until
                                    # the HA flips against the trade
-ADOPT_ORPHANS = "universe"         # a position on the exchange with NO
+ADOPT_ORPHANS = "off"              # a position on the exchange with NO
                                    # tracked trade at all - opened by hand,
                                    # or left behind when the agent booked a
                                    # close the venue never made.
