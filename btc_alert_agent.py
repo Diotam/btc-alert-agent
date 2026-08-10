@@ -147,7 +147,7 @@ BTC_TREND_SMOOTH = (5, 5)          # smoothing for the BTC CONTEXT line only,
                                    # deliberately lighter than the signal's
                                    # 10,10 so it turns sooner and reports
                                    # where BTC is now
-BTC_ALIGN = True                   # BITCOIN CORRELATION. Alts follow BTC, so
+BTC_ALIGN = False                  # BITCOIN CORRELATION. Alts follow BTC, so
                                    # a long taken while BTC is falling is
                                    # fighting the thing that actually moves
                                    # the book. Measured the SAME way as every
