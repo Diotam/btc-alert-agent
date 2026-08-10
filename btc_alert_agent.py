@@ -395,7 +395,7 @@ TP_MIN_RR = 1.0                    # refuse the setup when the swing sits
                                    # less than 1 is a losing shape however
                                    # often it wins
 HA_RR = 5.0                        # first target = 3x the stop distance
-TRAIL_ON = True                    # TRAILING STOP. Ratchets ONLY - it never
+TRAIL_ON = False                   # TRAILING STOP. Ratchets ONLY - it never
                                    # moves against the trade, so it can turn a
                                    # winner into a smaller winner but never
                                    # widens risk on a loser
