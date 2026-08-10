@@ -195,7 +195,7 @@ HA_DOJI_COLOUR = "flip"            # which colour the doji must be, relative
                                    #            colour first. Later, more
                                    #            confirmation, fewer trades.
                                    #   "any"  - either colour counts.
-BREAKOUT_ON = True                 # the SECOND engine, 6 Aug. It trades the
+BREAKOUT_ON = False                # the SECOND engine, 6 Aug. It trades the
                                    # markets the HA engine cannot: those whose
                                    # EMA slope is too flat to call a trend.
                                    # The two never compete for the same symbol
