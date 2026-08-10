@@ -121,7 +121,7 @@ ASSETS = [                         # used when DISCOVER_ALL = False, or when
 ]
 
 # --- strategy dials -------------------------------------------------------
-TF = "15m"                         # execution timeframe. 15m -> 30m on
+TF = "30m"                         # execution timeframe. 15m -> 30m on
                                    # 9 Aug: a 50 EMA on 15m was too fast
                                    # for these markets, so price crossed
                                    # it constantly without going
@@ -264,7 +264,7 @@ HA_MODE = "reversal"                   # what the doji MEANS.
                                    #                    not the end of it.
                                    # Detection is IDENTICAL either way - only
                                    # the resulting side flips
-EMA_FILTER_TF = "15m"               # TIMEFRAME the filter's EMA is measured
+EMA_FILTER_TF = "30m"               # TIMEFRAME the filter's EMA is measured
                                    # on, which need not be TF. A 50 EMA on
                                    # 15m spans about 12 hours, so an ordinary
                                    # pullback inside a two-day uptrend
@@ -284,7 +284,7 @@ EMA_SIDE_RULE = True               # require price to be on the EMA's side.
                                    # happens to sit above or below the line no
                                    # longer decides anything, and the retest
                                    # band is off with it
-EMA_SLOPE_TF = "15m"               # TIMEFRAME the slope is measured on, kept
+EMA_SLOPE_TF = "30m"               # TIMEFRAME the slope is measured on, kept
                                    # SEPARATE from EMA_FILTER_TF on purpose.
                                    # The 50 EMA itself stays on 1h — that was
                                    # his own correction when a 15m EMA read a
@@ -394,7 +394,7 @@ TP_MIN_RR = 1.0                    # refuse the setup when the swing sits
                                    # closer than the stop - paying 1 to make
                                    # less than 1 is a losing shape however
                                    # often it wins
-HA_RR = 1.5                        # first target = 3x the stop distance
+HA_RR = 5.0                        # first target = 3x the stop distance
 TRAIL_ON = True                    # TRAILING STOP. Ratchets ONLY - it never
                                    # moves against the trade, so it can turn a
                                    # winner into a smaller winner but never
