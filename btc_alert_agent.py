@@ -288,6 +288,15 @@ EMA_FILTER_TF = "1h"                # TIMEFRAME the filter's EMA is measured
                                    # must be a whole multiple of TF, and
                                    # LOOKBACK has to leave enough bars after
                                    # the resample. "4h" is the slower option
+ONE_PER_TREND = True               # ONE ALERT PER TREND. His spec, 11 Aug:
+                                   # PUMP's trend began with the first no-wick
+                                   # candle above the 50 EMA on 8 Aug 11:00,
+                                   # and every later long in that same move is
+                                   # noise. A signal is keyed to the EMA CROSS
+                                   # that started the current side, so the
+                                   # next one cannot fire until price crosses
+                                   # back and a NEW trend begins. False
+                                   # restores one-per-run
 EMA_WHOLE_RUN = True               # the EMA side test applies to the WHOLE
                                    # RUN being faded, not just the entry bar.
                                    # His point, 10 Aug: a SHORT needs an
@@ -1123,6 +1132,24 @@ def resample(candles, factor):
                     "l": min(x["l"] for x in g),
                     "v": sum(x.get("v", 0) for x in g)})
     return out
+
+
+def trend_start_t(candles, i):
+    """Timestamp of the EMA cross that began the side price is on NOW.
+
+    Walks back from i to the last bar where the side differs, and returns the
+    candle AFTER it - the first bar of the current trend. That timestamp is
+    the key: one signal per trend, however many setups the trend prints."""
+    side = ema_cross_side(candles, i)
+    if side is None:
+        return None
+    k = i
+    while k > 1:
+        prev = ema_cross_side(candles, k - 1)
+        if prev is None or prev != side:
+            return candles[k]["t"]
+        k -= 1
+    return candles[max(0, k)]["t"]
 
 
 def ema_run_side(candles, start, upto, want_long):
@@ -3136,6 +3163,10 @@ def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger,
     # remember WHICH setup this came from so it cannot fire a second time
     if ast.get("setup"):
         ast["traded"] = {"ft": ast["setup"].get("ft"), "dir": direction}
+        if ONE_PER_TREND:
+            tk = trend_start_t(candles, i)
+            if tk:
+                ast["trend_taken"] = {"t": tk, "dir": direction}
     order_plan = plan_entry_orders(asset, ast["trade"], live_px)
     placed, why_not = False, ""
     if not EXEC_LIVE:
@@ -3319,6 +3350,15 @@ def process_candle(asset, ast, candles, ha, i):
         if not ALLOW_SHORTS and not want_long:
             log(f"{sym}: SHORT setup but ALLOW_SHORTS is off - skipped")
             continue
+
+        # ONE PER TREND. The key is the EMA cross that started this side, so
+        # a second setup inside the same move is refused - it is the same
+        # trend, not a new one.
+        if ONE_PER_TREND:
+            tkey = trend_start_t(candles, i)
+            done = ast.get("trend_taken") or {}
+            if tkey and done.get("t") == tkey and done.get("dir") == direction:
+                continue
 
         # THE WHOLE RUN MUST HAVE BEEN ON THIS SIDE, not just the entry bar.
         # found[1] is the run start, i-1 the no-wick candle.
