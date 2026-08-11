@@ -59,7 +59,7 @@ DISCOVER_DEXES = True              # scan HIP-3 builder venues. ON as of
                                    # alone. Turn both back on together if the
                                    # xyz pool is ever funded again
 ADMIT_COMMODITIES = True
-ADMIT_STOCKS = False               # equities IN the universe. Moot while
+ADMIT_STOCKS = True                # equities IN the universe. Moot while
                                    # DISCOVER_DEXES is off - every xyz market
                                    # is out either way. COMMODITIES DO NOT
                                    # NEED THIS DOOR: the ones he trades, PAXG
@@ -121,13 +121,13 @@ ASSETS = [                         # used when DISCOVER_ALL = False, or when
 ]
 
 # --- strategy dials -------------------------------------------------------
-TF = "15m"                         # execution timeframe. 15m -> 30m on
+TF = "1h"                          # execution timeframe. 15m -> 30m on
                                    # 9 Aug: a 50 EMA on 15m was too fast
                                    # for these markets, so price crossed
                                    # it constantly without going
                                    # anywhere - PUMP moved 0.48% between
                                    # crosses at 15m and 1.16% at 30m
-SCAN_EVERY = "5m"                  # how often the loop wakes. Aligning it to
+SCAN_EVERY = "15m"                  # how often the loop wakes. Aligning it to
                                    # TF means one scan per candle. A shorter
                                    # pulse costs API calls but reacts sooner:
                                    # symbols with no open trade are skipped
@@ -276,7 +276,7 @@ HA_MODE = "reversal"                   # what the doji MEANS.
                                    #                    not the end of it.
                                    # Detection is IDENTICAL either way - only
                                    # the resulting side flips
-EMA_FILTER_TF = "15m"               # TIMEFRAME the filter's EMA is measured
+EMA_FILTER_TF = "1h"                # TIMEFRAME the filter's EMA is measured
                                    # on, which need not be TF. A 50 EMA on
                                    # 15m spans about 12 hours, so an ordinary
                                    # pullback inside a two-day uptrend
@@ -308,7 +308,7 @@ EMA_SIDE_RULE = True               # require price to be on the EMA's side.
                                    # happens to sit above or below the line no
                                    # longer decides anything, and the retest
                                    # band is off with it
-EMA_SLOPE_TF = "15m"               # TIMEFRAME the slope is measured on, kept
+EMA_SLOPE_TF = "1h"                # TIMEFRAME the slope is measured on, kept
                                    # SEPARATE from EMA_FILTER_TF on purpose.
                                    # The 50 EMA itself stays on 1h — that was
                                    # his own correction when a 15m EMA read a
@@ -455,6 +455,16 @@ REVERSE_ALERTS = True              # when the smoothed HA flips against an
                                    # because a reverse skips the doji, the
                                    # confirmation bars and the run-length
                                    # floor that every other entry must clear
+STOP_EXIT = False                  # does the stop LEVEL close the trade?
+                                   # FALSE as of 11 Aug, his call. The level
+                                   # is still COMPUTED - sizing needs the risk
+                                   # distance and the target is HA_RR x it -
+                                   # but price reaching it no longer exits,
+                                   # and no protective order is placed live.
+                                   # WITH HA_PARTIAL AT 1.0 THERE IS NO OTHER
+                                   # LOSING EXIT: a trade that goes wrong
+                                   # stays open until the target or forever.
+                                   # True restores the stop
 STOP_SOURCE = "run"                # WHERE the stop level comes from.
                                    #   "turn"  - the extreme of the FLIP bar
                                    #             and the no-wick bar, i.e.
@@ -2100,7 +2110,8 @@ def process_open_trade(asset, trade, candles, ha, last_closed_t):
         changed = True
         trade["checked_t"] = c["t"]
         event_t = c["t"] + MS[TF]
-        if (c["l"] <= trade["stop"]) if long else (c["h"] >= trade["stop"]):
+        if STOP_EXIT and ((c["l"] <= trade["stop"]) if long
+                          else (c["h"] >= trade["stop"])):
             kind = _stop_kind(trade)
             return _close_trade(asset, trade, trade["stop"], kind, event_t)
         # CROSS_MODE: the ONLY exit is price crossing back. Checked before
@@ -2146,7 +2157,8 @@ def process_open_trade(asset, trade, candles, ha, last_closed_t):
     live = candles[-1]
     if live["t"] > last_closed_t:
         t_now = now_ms()
-        if (live["l"] <= trade["stop"]) if long else (live["h"] >= trade["stop"]):
+        if STOP_EXIT and ((live["l"] <= trade["stop"]) if long
+                          else (live["h"] >= trade["stop"])):
             kind = _stop_kind(trade)
             return _close_trade(asset, trade, trade["stop"], kind, t_now,
                                 "Intrabar - stop traded before the close.")
@@ -2388,13 +2400,17 @@ def plan_entry_orders(asset, trade, live_px=None):
            "notional_usd": round(notional, 2),
            "risk_usd": round(size * per_unit, 2),
            "stop_pct": round(per_unit / entry * 100, 3),
-           "orders": [
+           # the STOP leg is omitted when STOP_EXIT is off - the level is
+           # still computed for sizing and the target, but nothing rests on
+           # the venue to enforce it
+           "orders": [x for x in [
                {"kind": "entry", "type": "market-IOC",
                 "side": "buy" if long_ else "sell", "size": round(size, 8)},
-               {"kind": "stop", "type": "stop-market", "reduce_only": True,
-                "trigger": stop, "size": round(size, 8)},
+               ({"kind": "stop", "type": "stop-market", "reduce_only": True,
+                 "trigger": stop, "size": round(size, 8)}
+                if STOP_EXIT else None),
                {"kind": "tp", "type": "limit", "reduce_only": True,
-                "price": tp, "size": round(size, 8)}]}
+                "price": tp, "size": round(size, 8)}] if x]}
     if EXEC_LOG_ORDERS:
         log_order(rec)
         log(f"{sym}: SIZED - {rec['side']} {size:.6g} @ ${fmt_px(entry)} = "
