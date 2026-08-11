@@ -316,7 +316,7 @@ EMA_SLOPE_TF = "15m"               # TIMEFRAME the slope is measured on, kept
                                    # SLOPE now reads 15m, so it reacts to a
                                    # turn without waiting for the hour to
                                    # register it
-EMA_SLOPE_PCT = 0.30               # the 1h EMA must have MOVED at least this
+EMA_SLOPE_PCT = 0                  # the 1h EMA must have MOVED at least this
                                    # % over EMA_SLOPE_BARS, in the trade's
                                    # direction. In a range the average goes
                                    # FLAT, so both sides get refused - which
