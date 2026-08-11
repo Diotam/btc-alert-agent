@@ -1481,7 +1481,7 @@ def cross_gate(ast, candles, ha, i):
     return d
 
 
-def gate_status(ha, candles, i, sym=None):
+def gate_status(ha, candles, i, sym=None, ast_for_gate=None):
     """Where a symbol sits in the FLIP + NO-WICK sequence, for the panel.
 
     Returns None for anything that has not reached a flip - those are just
@@ -1657,6 +1657,14 @@ def gate_status(ha, candles, i, sym=None):
         if not ALLOW_SHORTS and not traded_long:
             d.update(stage="shorts are off", detail="long-only, by config")
             return d
+        if ONE_PER_TREND and sym:
+            tk = trend_start_t(candles, i)
+            dn = (ast_for_gate or {}).get("trend_taken") or {}
+            if tk and dn.get("t") == tk and dn.get("dir") == d["dir"]:
+                d.update(stage="trend already taken",
+                         detail="one alert per trend - waiting for the EMA "
+                                "to cross back")
+                return d
         if EMA_WHOLE_RUN:
             okr, bd = ema_run_side(candles, f, i - 1, traded_long)
             if not okr:
@@ -3270,7 +3278,7 @@ def process_candle(asset, ast, candles, ha, i):
     # only - it never gates anything. Written every scan so the panel is
     # never staler than the last candle close.
     try:
-        g = gate_status(ha, candles, i, sym)
+        g = gate_status(ha, candles, i, sym, ast)
         if g:
             g["t"] = hd["t"]
             g["px"] = c["c"]
