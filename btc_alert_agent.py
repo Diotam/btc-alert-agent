@@ -103,7 +103,7 @@ MIN_DAY_VOLUME_USD = 2_000_000     # crypto floor, 24h notional
 COMMODITY_MIN_VOLUME_USD = 5_000_000
 STOCK_MIN_VOLUME_USD = 5_000_000
 ONLY = []                          # trade ONLY these symbols ([] = whole universe)
-ONLY_SYMBOLS = ("CASHCAT", "ACE", "CRV", "PUMP")
+ONLY_SYMBOLS = ()
                                    # if non-empty, the universe is EXACTLY
                                    # these and nothing else - volume floors,
                                    # MAX_ASSETS and dex discovery no longer
@@ -121,7 +121,7 @@ ASSETS = [                         # used when DISCOVER_ALL = False, or when
 ]
 
 # --- strategy dials -------------------------------------------------------
-TF = "30m"                         # execution timeframe. 15m -> 30m on
+TF = "15m"                         # execution timeframe. 15m -> 30m on
                                    # 9 Aug: a 50 EMA on 15m was too fast
                                    # for these markets, so price crossed
                                    # it constantly without going
@@ -243,7 +243,19 @@ CROSS_DISASTER_PCT = 10.0          # ...except this. A cross-only exit can sit
                                    # brake, not a strategy stop - it should
                                    # almost never fire. 0 removes it and
                                    # makes liquidation the only backstop
-ALLOW_SHORTS = False               # take the short side at all. FALSE as of
+REGIME_ON = True                   # THE HIGHER-TIMEFRAME PERMISSION GATE.
+                                   # The 15m pattern says WHEN; this says
+                                   # WHETHER. Longs only while price is above
+                                   # the REGIME_TF EMA, shorts only below
+REGIME_TF = "4h"                   # timeframe the permission EMA lives on.
+                                   # Falls back to resampling 1h if the venue
+                                   # will not serve it directly
+REGIME_EMA_LEN = 50                # 50 x 4h = 200 hours, about 8 days. Slow
+                                   # enough that a two-day pullback does not
+                                   # revoke permission
+_REGIME = {}                       # per-symbol cache, TTL below
+REGIME_TTL_S = 300                 # one higher-TF fetch per symbol per scan
+ALLOW_SHORTS = True                # take the short side at all. FALSE as of
                                    # 9 Aug, from 580 legs of his own ledger
                                    # spanning 19 Jul - 9 Aug: LONGS made
                                    # +82.61% at a 39% win rate while SHORTS
@@ -264,7 +276,7 @@ HA_MODE = "reversal"                   # what the doji MEANS.
                                    #                    not the end of it.
                                    # Detection is IDENTICAL either way - only
                                    # the resulting side flips
-EMA_FILTER_TF = "30m"               # TIMEFRAME the filter's EMA is measured
+EMA_FILTER_TF = "15m"               # TIMEFRAME the filter's EMA is measured
                                    # on, which need not be TF. A 50 EMA on
                                    # 15m spans about 12 hours, so an ordinary
                                    # pullback inside a two-day uptrend
@@ -284,7 +296,7 @@ EMA_SIDE_RULE = True               # require price to be on the EMA's side.
                                    # happens to sit above or below the line no
                                    # longer decides anything, and the retest
                                    # band is off with it
-EMA_SLOPE_TF = "30m"               # TIMEFRAME the slope is measured on, kept
+EMA_SLOPE_TF = "15m"               # TIMEFRAME the slope is measured on, kept
                                    # SEPARATE from EMA_FILTER_TF on purpose.
                                    # The 50 EMA itself stays on 1h — that was
                                    # his own correction when a 15m EMA read a
@@ -394,7 +406,7 @@ TP_MIN_RR = 1.0                    # refuse the setup when the swing sits
                                    # closer than the stop - paying 1 to make
                                    # less than 1 is a losing shape however
                                    # often it wins
-HA_RR = 5.0                        # first target = 3x the stop distance
+HA_RR = 2.0                        # first target = 3x the stop distance
 TRAIL_ON = False                   # TRAILING STOP. Ratchets ONLY - it never
                                    # moves against the trade, so it can turn a
                                    # winner into a smaller winner but never
@@ -495,7 +507,7 @@ MIN_TARGET_PCT = 1.5               # the TARGET must sit at least this far
                                    # 0 disables
 MIN_STOP_PCT = 0.25                # skip entries whose stop sits closer than
                                    # this % of price - sub-noise stops just churn
-TRACK_UNPLACED = False             # keep tracking a trade whose order never
+TRACK_UNPLACED = True              # keep tracking a trade whose order never
                                    # reached the exchange. FALSE as of 5 Aug:
                                    # the alert still fires and says NOT
                                    # PLACED, but nothing is tracked, so the
@@ -529,7 +541,7 @@ ALERT_ENTRIES = True
 ALERT_LIFECYCLE = True             # target, runner, stop and breakeven alerts
 
 # --- execution ------------------------------------------------------------
-EXEC_LIVE = True                   # place real orders. Back ON 4 Aug after a
+EXEC_LIVE = False                   # place real orders. Back ON 4 Aug after a
                                    # night tracked-only. When False: every
                                    # entry alert carries "NOT PLACED on
                                    # Hyperliquid - live execution OFF"; the
@@ -573,7 +585,7 @@ EXEC_SIZING = "margin"             # "margin"   = a FIXED DOLLAR AMOUNT of
                                    #   size, whatever collateral that needs
                                    # "risk"     = fixed dollar LOSS at the
                                    #   stop; the position size then varies
-EXEC_MARGIN_USD = 100.0             # collateral per trade in "margin" mode
+EXEC_MARGIN_USD = 150.0             # collateral per trade in "margin" mode
 EXEC_LEVERAGE = 999                # MAX leverage: eff_leverage() clamps this
                                    # to each market's own maximum, so 999
                                    # simply means "whatever this market
@@ -1206,6 +1218,37 @@ def breakout_signal(candles, i):
     return None
 
 
+def regime_side(asset):
+    """+1 if price is above the higher-timeframe EMA, -1 below, 0 unknown.
+
+    Fetches REGIME_TF directly; if the venue will not serve that interval it
+    resamples 1h instead, so the gate never silently vanishes. Fails to 0,
+    which BLOCKS NOTHING - a filter that cannot read its data must not veto
+    every trade."""
+    sym = asset["symbol"]
+    now = time.time()
+    hit = _REGIME.get(sym)
+    if hit and now - hit[0] < REGIME_TTL_S:
+        return hit[1]
+    side = 0
+    try:
+        _, cs = fetch(asset, REGIME_TF, LOOKBACK.get(REGIME_TF, 400))
+        if not cs or len(cs) < REGIME_EMA_LEN + 2:
+            # the venue would not serve REGIME_TF - build it from 1h
+            _, h1 = fetch(asset, "1h", LOOKBACK.get("1h", 400))
+            factor = max(1, MS.get(REGIME_TF, MS["1h"]) // MS["1h"])
+            cs = resample(h1, factor) if h1 else None
+        if cs and len(cs) >= REGIME_EMA_LEN + 2:
+            e = ema([c["c"] for c in cs], REGIME_EMA_LEN)[-1]
+            px = cs[-1]["c"]
+            side = 1 if px > e else -1
+    except Exception as ex:
+        log(f"{sym}: regime read failed ({type(ex).__name__}) - not gating")
+        side = 0
+    _REGIME[sym] = (now, side)
+    return side
+
+
 def ema_cross_side(candles, i):
     """Which side of the 50 EMA is price on at bar i? +1 above, -1 below.
 
@@ -1537,6 +1580,14 @@ def gate_status(ha, candles, i, sym=None):
         if not ALLOW_SHORTS and not traded_long:
             d.update(stage="shorts are off", detail="long-only, by config")
             return d
+        if REGIME_ON and sym:
+            rg = regime_side({"symbol": sym, "hl_coin": sym,
+                              "fallbacks": [], "cls": "crypto"})
+            if rg and (rg > 0) != traded_long:
+                d.update(stage=f"{REGIME_TF} trend disagrees",
+                         detail=f"the {REGIME_TF} {REGIME_EMA_LEN} EMA says "
+                                f"{'UP' if rg > 0 else 'DOWN'}")
+                return d
         if BTC_ALIGN and sym != "BTC":
             bias = btc_bias()
             if bias and (bias > 0) != traded_long:
@@ -3205,6 +3256,16 @@ def process_candle(asset, ast, candles, ha, i):
         if not ALLOW_SHORTS and not want_long:
             log(f"{sym}: SHORT setup but ALLOW_SHORTS is off - skipped")
             continue
+
+        # HIGHER-TIMEFRAME PERMISSION. A neutral or unreadable regime blocks
+        # nothing; only an ACTIVE disagreement refuses the trade.
+        if REGIME_ON:
+            rg = regime_side(asset)
+            if rg and (rg > 0) != want_long:
+                log(f"{sym}: {direction} setup but the {REGIME_TF} trend is "
+                    f"{'UP' if rg > 0 else 'DOWN'} "
+                    f"({REGIME_EMA_LEN} EMA) - skipped")
+                continue
 
         # BITCOIN CORRELATION. BTC cannot follow itself, and a NEUTRAL BTC
         # blocks nothing - only an actively trending BTC gets a vote.
