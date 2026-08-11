@@ -165,7 +165,7 @@ BTC_ALIGN_PCT = 0.30               # BTC's slope must exceed this before it
 _BTC_BIAS = {"t": 0.0, "v": None}
 BTC_TREND_TTL_S = 120              # one BTC fetch per scan, not per symbol
 _BTC_CACHE = {"t": 0.0, "v": None}
-HA_MIN_BODY_PCT = 0.04             # the trend run must contain at least one
+HA_MIN_BODY_PCT = 0                # the trend run must contain at least one
                                    # HA body this big, as a % of price. Without
                                    # it a FLAT smoothed series satisfies
                                    # "strictly growing then strictly shrinking"
@@ -288,6 +288,18 @@ EMA_FILTER_TF = "15m"               # TIMEFRAME the filter's EMA is measured
                                    # must be a whole multiple of TF, and
                                    # LOOKBACK has to leave enough bars after
                                    # the resample. "4h" is the slower option
+EMA_WHOLE_RUN = True               # the EMA side test applies to the WHOLE
+                                   # RUN being faded, not just the entry bar.
+                                   # His point, 10 Aug: a SHORT needs an
+                                   # uptrend that happened BELOW the 50 EMA -
+                                   # a rally that ran ABOVE the line and only
+                                   # dipped under it by entry time is a
+                                   # different setup. ema_side alone tests one
+                                   # candle, so ONDO could short a run that
+                                   # spent its life on the wrong side
+EMA_RUN_TOL = 0                    # candles inside the run allowed to sit on
+                                   # the wrong side. 0 is strict; 1 forgives a
+                                   # single poke through the line
 EMA_SIDE_RULE = True               # require price to be on the EMA's side.
                                    # OFF as of 6 Aug: the 50 EMA is here for
                                    # TREND CONTEXT ONLY now — its SLOPE says
@@ -359,7 +371,7 @@ HA_NOWICK_TOL_PCT = 5.0            # a candle counts as NO-WICK when the wick
 ENTRY_AT_OPEN = True               # enter at the OPEN of the candle AFTER
                                    # the no-wick bar, not at a close. Every
                                    # engine before 4 Aug entered on a close
-HA_MIN_RUN_PCT = 0.2               # MINIMUM MOVE across the run, start to
+HA_MIN_RUN_PCT = 0                 # MINIMUM MOVE across the run, start to
                                    # flip, as a % of price. HA_MIN_RUN counts
                                    # CANDLES, so eight bars drifting sideways
                                    # scored the same as eight falling hard -
@@ -1103,6 +1115,34 @@ def resample(candles, factor):
     return out
 
 
+def ema_run_side(candles, start, upto, want_long):
+    """Did EVERY candle from `start` to `upto` sit on the trade's side of the
+    EMA? Returns (ok, offenders).
+
+    ema_side answers "is price on the right side NOW". This answers "was the
+    run we are fading on the right side THE WHOLE TIME", which is what makes
+    a short a fade of a rally BELOW the average rather than one that has just
+    crossed under it."""
+    if not EMA_WHOLE_RUN or not EMA_FILTER_LEN:
+        return True, 0
+    base = candles[:max(0, upto) + 1]
+    factor = max(1, MS.get(EMA_FILTER_TF, MS[TF]) // MS[TF])
+    higher = resample(base, factor) if factor > 1 else base
+    if len(higher) < EMA_FILTER_LEN + 2:
+        return True, 0                      # too little history - fail open
+    series = ema([c["c"] for c in higher], EMA_FILTER_LEN)
+    off = len(higher) - len(series)
+    bad = 0
+    for k in range(max(0, start), max(0, upto) + 1):
+        hk = (k // factor) - off
+        if hk < 0 or hk >= len(series):
+            continue
+        e = series[hk]
+        if (candles[k]["c"] > e) != want_long:
+            bad += 1
+    return bad <= EMA_RUN_TOL, bad
+
+
 def ema_slope(candles, i):
     """How far the EMA has travelled over EMA_SLOPE_BARS, as a % of itself.
     None when there is not enough history. Positive means rising."""
@@ -1580,6 +1620,13 @@ def gate_status(ha, candles, i, sym=None):
         if not ALLOW_SHORTS and not traded_long:
             d.update(stage="shorts are off", detail="long-only, by config")
             return d
+        if EMA_WHOLE_RUN:
+            okr, bd = ema_run_side(candles, f, i - 1, traded_long)
+            if not okr:
+                d.update(stage="run was on the wrong side",
+                         detail=f"{bd} candles of the run sat across the "
+                                f"{EMA_FILTER_LEN} EMA")
+                return d
         if REGIME_ON and sym:
             rg = regime_side({"symbol": sym, "hl_coin": sym,
                               "fallbacks": [], "cls": "crypto"})
@@ -3255,6 +3302,15 @@ def process_candle(asset, ast, candles, ha, i):
         # drag the stop toward entry.
         if not ALLOW_SHORTS and not want_long:
             log(f"{sym}: SHORT setup but ALLOW_SHORTS is off - skipped")
+            continue
+
+        # THE WHOLE RUN MUST HAVE BEEN ON THIS SIDE, not just the entry bar.
+        # found[1] is the run start, i-1 the no-wick candle.
+        ok_run, bad = ema_run_side(candles, found[1], i - 1, want_long)
+        if not ok_run:
+            log(f"{sym}: {direction} setup but {bad} of the run's candles "
+                f"sat on the wrong side of the {EMA_FILTER_LEN} EMA - "
+                "skipped")
             continue
 
         # HIGHER-TIMEFRAME PERMISSION. A neutral or unreadable regime blocks
