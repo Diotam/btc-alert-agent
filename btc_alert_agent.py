@@ -309,7 +309,7 @@ EMA_WHOLE_RUN = True               # the EMA side test applies to the WHOLE
 EMA_RUN_TOL = 0                    # candles inside the run allowed to sit on
                                    # the wrong side. 0 is strict; 1 forgives a
                                    # single poke through the line
-EMA_SIDE_RULE = True               # require price to be on the EMA's side.
+EMA_SIDE_RULE = False               # require price to be on the EMA's side.
                                    # OFF as of 6 Aug: the 50 EMA is here for
                                    # TREND CONTEXT ONLY now — its SLOPE says
                                    # whether a trend exists and which way, and
