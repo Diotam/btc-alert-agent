@@ -3171,8 +3171,11 @@ def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger,
     # remember WHICH setup this came from so it cannot fire a second time
     if ast.get("setup"):
         ast["traded"] = {"ft": ast["setup"].get("ft"), "dir": direction}
-        if ONE_PER_TREND:
-            tk = trend_start_t(candles, i)
+        # fire_entry's index is `idx`, NOT `i` - and both it and `candles`
+        # are optional here, so guard rather than assume. Using `i` raised
+        # NameError on every entry: INJ, 11 Aug 18:00.
+        if ONE_PER_TREND and candles is not None and idx is not None:
+            tk = trend_start_t(candles, idx)
             if tk:
                 ast["trend_taken"] = {"t": tk, "dir": direction}
     order_plan = plan_entry_orders(asset, ast["trade"], live_px)
