@@ -307,6 +307,30 @@ TREND_MAX_AGE = 3                  # how many bars after the EMA CROSS a setup
                                    # the separate rule: too late is too late,
                                    # whether or not anything fired earlier.
                                    # 0 disables the age check
+FLIP_NEEDS_NOWICK = False          # must a no-wick candle follow the flip
+                                   # before entering? FALSE as of 12 Aug, his
+                                   # call: enter at the flip itself. The wick
+                                   # test was costing a bar of the move and
+                                   # refusing turns outright when the flip
+                                   # candle happened to carry a tail. True
+                                   # restores the arm-then-trigger sequence
+SHA_FILTER = True                  # SMOOTHED HA AS A FILTER over regular HA,
+                                   # his idea 12 Aug. Regular HA still arms,
+                                   # enters and exits; the SMOOTHED series
+                                   # only has to AGREE. On HYPE the descent
+                                   # from 21 Jul was full of single green
+                                   # candles that closed a short and cost the
+                                   # trend - smoothed HA stays red through
+                                   # them, so the trade survives
+SHA_ON_ENTRY = False               # does the smoothed series have to agree
+                                   # to ENTER? FALSE as of 12 Aug, his call:
+                                   # the flip alone opens the trade. Smoothed
+                                   # HA is only there to hold the position
+                                   # through noise candles and step aside at
+                                   # the real turn - an exit filter, not an
+                                   # entry one
+SHA_IN = 5                         # the smoothing, his 5,5
+SHA_OUT = 5
 FLIP_MODE = True                   # THE 4h FLIP ENGINE, his spec 12 Aug.
                                    # ALWAYS IN THE MARKET: an HA colour flip
                                    # ARMS a side, the first no-wick candle in
@@ -316,7 +340,7 @@ FLIP_MODE = True                   # THE 4h FLIP ENGINE, his spec 12 Aug.
                                    # exists at all - a flat market trades
                                    # nothing. Replaces the flip-and-enter
                                    # engine when on
-FLIP_FLAT_PCT = 0.30               # the 50 MA must have moved this much over
+FLIP_FLAT_PCT = 0                  # the 50 MA must have moved this much over
                                    # FLIP_SLOPE_BARS to count as trending.
                                    # Below it the market is sideways and BOTH
                                    # sides are refused - the "avoid flatline"
@@ -1381,6 +1405,20 @@ def regime_side(asset):
     return side
 
 
+def sha_side(candles, i):
+    """The SMOOTHED HA colour at bar i: True green, False red, None unknown.
+
+    Built at SHA_IN/SHA_OUT, not the signal smoothing, so it is a genuinely
+    slower read of the same candles - which is the point of using it as a
+    filter rather than as the signal."""
+    if not SHA_FILTER or i < 1:
+        return None
+    sha = smoothed_ha(candles[:i + 1], SHA_IN, SHA_OUT)
+    if not sha:
+        return None
+    return ha_green(sha[-1])
+
+
 def flip_signal(ast, candles, ha, i):
     """The 4h flip engine. Returns "LONG" / "SHORT" to ENTER, else None.
 
@@ -1397,6 +1435,17 @@ def flip_signal(ast, candles, ha, i):
     if now_green != prev_green:                 # a COLOUR FLIP just closed
         arm = {"side": "LONG" if now_green else "SHORT", "t": ha[i - 1]["t"]}
         ast["flip_arm"] = arm
+        # WITHOUT the wick test the flip IS the trigger - there is nothing
+        # left to wait for, so fire on this bar rather than the next.
+        if not FLIP_NEEDS_NOWICK:
+            if SHA_ON_ENTRY:
+                sh = sha_side(candles, i - 1)
+                if sh is not None and sh != now_green:
+                    return None
+            log(f"{ast.get('sym', '?')}: HA flipped "
+                f"{'green' if now_green else 'red'} - entering "
+                f"{arm['side']} at the next open")
+            return arm["side"]
         log(f"{ast.get('sym', '?')}: HA flipped "
             f"{'green' if now_green else 'red'} - arming {arm['side']}, "
             "waiting for a no-wick candle")
@@ -1409,8 +1458,12 @@ def flip_signal(ast, candles, ha, i):
         return None
     if ha_green(ha[i - 1]) != want_long:
         return None
-    if not no_wick(ha[i - 1], want_long):
+    if FLIP_NEEDS_NOWICK and not no_wick(ha[i - 1], want_long):
         return None
+    if SHA_ON_ENTRY:
+        sh = sha_side(candles, i - 1)
+        if sh is not None and sh != want_long:
+            return None
     return arm["side"]
 
 
@@ -1588,7 +1641,7 @@ def flip_gate(ast, candles, ha, i):
     d = {"dir": arm.get("side") or ("LONG" if ha_green(ha[i - 1]) else "SHORT"),
          "trend": "up" if tr > 0 else ("down" if tr < 0 else "flat"),
          "age": 0, "need": 1, "t": candles[i]["t"], "px": candles[i]["c"]}
-    if tr == 0:
+    if FLIP_FLAT_PCT and tr == 0:
         d.update(stage="flat - MA going nowhere",
                  detail=f"needs {FLIP_FLAT_PCT}% over {FLIP_SLOPE_BARS} bars")
         return d
@@ -1597,7 +1650,7 @@ def flip_gate(ast, candles, ha, i):
                  detail=f"MA trending {'up' if tr > 0 else 'down'}")
         return d
     want_long = arm["side"] == "LONG"
-    if (tr > 0) != want_long:
+    if FLIP_FLAT_PCT and (tr > 0) != want_long:
         d.update(stage="MA disagrees",
                  detail=f"armed {arm['side']} but the MA is "
                         f"{'up' if tr > 0 else 'down'}")
@@ -2336,7 +2389,12 @@ def process_open_trade(asset, trade, candles, ha, last_closed_t):
             idx = next((n for n, x in enumerate(candles)
                         if x["t"] == c["t"]), None)
             if idx is not None and idx >= 1:
-                if ha_green(ha[idx]) != long:
+                # the regular HA flip alone is too twitchy - on HYPE it closed
+                # eight shorts inside one 16% descent. The SMOOTHED series has
+                # to flip too before the trade is given up.
+                sh = sha_side(candles, idx)
+                agreed = (sh is None) or (sh != long)
+                if ha_green(ha[idx]) != long and agreed:
                     log(f"{asset['symbol']}: HA flipped "
                         f"{'red' if long else 'green'} - closing the "
                         f"{trade['verdict']} at ${fmt_px(c['c'])}")
@@ -3455,18 +3513,22 @@ def process_candle(asset, ast, candles, ha, i):
             ast["gate"] = flip_gate(ast, candles, ha, i)
             return False
         want_long = side == "LONG"
-        tr = flip_trending(candles, i)
-        if tr == 0:
-            if LOG_SKIPS:
-                log(f"{sym}: {side} armed but the {EMA_FILTER_LEN} MA is flat "
-                    f"(needs {FLIP_FLAT_PCT}% over {FLIP_SLOPE_BARS} bars) "
-                    "- skipped")
-            return False
-        if (tr > 0) != want_long:
-            if LOG_SKIPS:
-                log(f"{sym}: {side} armed but the {EMA_FILTER_LEN} MA is "
-                    f"trending {'UP' if tr > 0 else 'DOWN'} - skipped")
-            return False
+        # the MA gate is OPTIONAL. At FLIP_FLAT_PCT = 0 it is bypassed
+        # ENTIRELY - flip_trending returns 1 in that case, and reading that
+        # as "trending up" would have blocked every short.
+        if FLIP_FLAT_PCT:
+            tr = flip_trending(candles, i)
+            if tr == 0:
+                if LOG_SKIPS:
+                    log(f"{sym}: {side} armed but the {EMA_FILTER_LEN} MA is "
+                        f"flat (needs {FLIP_FLAT_PCT}% over "
+                        f"{FLIP_SLOPE_BARS} bars) - skipped")
+                return False
+            if (tr > 0) != want_long:
+                if LOG_SKIPS:
+                    log(f"{sym}: {side} armed but the {EMA_FILTER_LEN} MA is "
+                        f"trending {'UP' if tr > 0 else 'DOWN'} - skipped")
+                return False
         if not ALLOW_SHORTS and not want_long:
             return False
         entry = c["o"] if ENTRY_AT_OPEN else c["c"]
