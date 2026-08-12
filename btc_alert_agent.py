@@ -50,23 +50,31 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 # --- asset universe -------------------------------------------------------
 DISCOVER_ALL = True
-DISCOVER_DEXES = True              # scan HIP-3 builder venues. ON as of
-                                   # 2 Aug: with EXEC_BUILDER_DEXES empty
-                                   # they could only ever alert, never trade,
-                                   # so every xyz signal was noise that also
-                                   # booked paper rows into the ledger. False
-                                   # falls back to DEXES = [""], the main dex
-                                   # alone. Turn both back on together if the
-                                   # xyz pool is ever funded again
-ADMIT_COMMODITIES = True
-ADMIT_STOCKS = True                # equities IN the universe. Moot while
-                                   # DISCOVER_DEXES is off - every xyz market
-                                   # is out either way. COMMODITIES DO NOT
-                                   # NEED THIS DOOR: the ones he trades, PAXG
-                                   # among them, are MAIN-DEX perps already
-                                   # in the crypto universe. Original note:
-                                   # they are
-                                   # is one line to flip back
+DISCOVER_DEXES = False             # scan HIP-3 builder venues. OFF as of
+                                   # 12 Aug, his call: CRYPTO ONLY. With this
+                                   # False list_dexes() returns DEXES = [""],
+                                   # the main perp dex alone, so no xyz market
+                                   # - commodity or equity - can enter the
+                                   # universe at all. Open xyz trades are NOT
+                                   # abandoned: the zombie sweep keeps
+                                   # monitoring any symbol with a live trade
+                                   # after it drops out of the universe, so
+                                   # the four open ones exit on their own HA
+                                   # flip. Turn back on together with the two
+                                   # ADMIT flags below
+ADMIT_COMMODITIES = False
+ADMIT_STOCKS = False               # BOTH FALSE 12 Aug, his call: crypto only.
+                                   # Belt and braces - DISCOVER_DEXES above
+                                   # already keeps every xyz market out, and
+                                   # these two make sure re-enabling dex
+                                   # discovery for some other reason cannot
+                                   # quietly let gold and equities back in.
+                                   # NOTE what this does NOT remove: main-dex
+                                   # perps that track a commodity, PAXG among
+                                   # them, are ordinary crypto markets on the
+                                   # main dex and never pass through the
+                                   # commodity door at all. EXCLUDE is the
+                                   # lever for those
 DEXES = [""]                       # fallback when dex discovery fails
 # EXACT names, never prefixes. This used to be a startswith() match, which
 # on an equities venue swallowed every ticker beginning with CL, NG or HG -
