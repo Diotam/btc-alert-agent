@@ -603,7 +603,7 @@ h1{font-size:17px;margin:4px 0 12px}
   <div id=obars></div>
 </div>
 <div class="section shead" onclick="toggle('trades')"><span class=chev id=c-trades>\u25be</span>Open trades<span class=cnt id=n-trades>0</span></div><div id=trades></div>
-<div class="section shead" onclick="toggle('gates')"><span class=chev id=c-gates>\u25be</span>Setup pipeline<span class=cnt id=n-gates>0</span> <span id=gsub class=muted style="float:right;text-transform:none;letter-spacing:0"></span></div><div id=gates></div>
+<div id=gates style="display:none"></div>
 <div class="section shead" onclick="toggle('closed')"><span class=chev id=c-closed>\u25be</span>Closed trades<span class=cnt id=n-closed>0</span> <span id=csub class=muted style="float:right;text-transform:none;letter-spacing:0"></span></div><div id=closed></div>
 <div class="section shead" onclick="toggle('events')"><span class=chev id=c-events>\u25be</span>Recent events<span class=cnt id=n-events>0</span></div><div id=events></div>
 <script>
@@ -815,13 +815,17 @@ function render(d){
    // from stop (0%) through entry to TP (100%), so a trade 61% of the way
    // to its stop drew a 16% bar - the number and the picture disagreed.
    // Both are now measured FROM ENTRY toward whichever side price is on.
+   // NO TARGET under the flip engine, so "% of the way to TP" is
+   // meaningless. The bar instead shows how far the move has run in R
+   // against a 3R reference - a full bar means a 3R move, not an exit.
    const rp=showR==null?0
+     :NOTGT?Math.max(0,Math.min(100,Math.abs(showR)/3*100))
      :showR>=0?Math.max(0,Math.min(100,showR/RRT*100))
      :Math.max(0,Math.min(100,-showR*100));
    const rc=showR==null?'#8b949e':showR>=0?'#3fb950':'#f85149';
    const rlbl=showR==null?''
      :slDone?'Stop traded - waiting for the close confirmation'
-     :NOTGT?`${showR.toFixed(2)}R \u00b7 runs until the HA colour flips`
+     :NOTGT?`${showR.toFixed(2)}R \u00b7 ${showR>=0?'in profit':'underwater'} \u00b7 holds until the HA flips`
      :atTarget?`${showR.toFixed(2)}R \u00b7 target reached, ${PARTIAL>=1?'closing the position':'booking '+Math.round(PARTIAL*100)+'%'}`
      :t.half?`${showR.toFixed(2)}R from entry \u00b7 runs until the HA flips`
      :showR>=0
@@ -841,9 +845,11 @@ function render(d){
   // SETUP PIPELINE - only symbols that have reached a colour flip. The
   // agent writes null for everything else, so this list is already short.
   const G=d.gates||[];
-  document.getElementById('n-gates').textContent=G.length;
-  document.getElementById('gsub').textContent=
-    G.filter(g=>g.stage==='ready').length+' ready';
+  // the pipeline section is gone - the flip engine enters ON the flip, so
+  // there is no approaching state to display. The container is kept hidden
+  // so this block stays harmless rather than being ripped out.
+  const _n=document.getElementById('n-gates'); if(_n) _n.textContent=G.length;
+  const _g=document.getElementById('gsub'); if(_g) _g.textContent='';
   document.getElementById('gates').innerHTML=G.length?G.map(g=>{
     const cls=g.dir==='LONG'?'long':'short';
     const live=g.stage==='ready'||g.stage==='flipped';
