@@ -729,7 +729,12 @@ function render(d){
     // the way to TP, left = % of the way to the stop, fixed scale.
     const ts=(d.trades||[]).filter(t=>t.r!=null&&t.risk);
     if(!ts.length){ box.className='ob'; box.innerHTML='<div class=ob-none>no open trades</div>'; return; }
+    // A PARKED target means there is nothing to be a fraction of, so the
+    // bar scales |R| against a 3R reference - the same measure the card
+    // uses. Without this LIT sat at 0% while its card read 0.05R in profit.
     const prog=t=>{
+      const parked=t.tp!=null&&t.entry&&(t.tp/t.entry>2||t.tp/t.entry<0.5);
+      if(parked) return Math.min(100,Math.abs(t.r||0)/3*100);
       const rrt=(t.tp!=null&&t.risk)?Math.abs((t.tp-t.entry)/t.risk):(t.rr||1.5);
       return t.r>=0?Math.min(100,t.r/rrt*100):Math.min(100,-t.r*100);
     };
