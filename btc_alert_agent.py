@@ -255,7 +255,7 @@ REGIME_EMA_LEN = 50                # 50 x 4h = 200 hours, about 8 days. Slow
                                    # revoke permission
 _REGIME = {}                       # per-symbol cache, TTL below
 REGIME_TTL_S = 300                 # one higher-TF fetch per symbol per scan
-ALLOW_SHORTS = True                # take the short side at all. FALSE as of
+ALLOW_SHORTS = False               # take the short side at all. FALSE as of
                                    # 9 Aug, from 580 legs of his own ledger
                                    # spanning 19 Jul - 9 Aug: LONGS made
                                    # +82.61% at a 39% win rate while SHORTS
