@@ -790,7 +790,13 @@ function render(d){
    const sgn=t.dir==='LONG'?1:-1;
    // each trade's true RR from its own prices (targets vary: 2R..3R/structure)
    const PARTIAL=(d._meta&&d._meta.partial!=null)?d._meta.partial:1;
-   const NOTGT=t.tp!=null&&t.entry&&Math.abs(t.tp-t.entry)/t.entry>2;
+   // A PARKED TARGET IS entry x 100 ON A LONG BUT entry x 0.01 ON A SHORT,
+   // and the short version is only 99% away from entry - under the old
+   // "more than 2x entry" test, so EVERY SHORT still read as having a real
+   // target. That is why LINK's card said "1% of the way to TP" against a
+   // target 59R away while the bar graph, which uses the ratio test below,
+   // read the same trade as 17% of a 3R move. Same test both places now.
+   const NOTGT=t.tp!=null&&t.entry&&(t.tp/t.entry>2||t.tp/t.entry<0.5);
    const RRT=(t.tp!=null&&t.risk&&!NOTGT)?Math.abs((t.tp-t.entry)/t.risk)
      :((t.tp!=null&&t.entry!==t.stop)?Math.abs((t.tp-t.entry)/(t.entry-t.stop)):2);
    // freeze the card once TP or stop has traded - the agent confirms the
@@ -806,7 +812,15 @@ function render(d){
    // STOP still fully closes a trade, and only before the partial: after
    // it the stop sits at entry, so hitting it is a breakeven close.
    if(window.__froz[fkey]==='tp') delete window.__froz[fkey];   // stale latch
-   if(t.r!=null && t.r<=-1) window.__froz[fkey]='sl';
+   // UNDER A PARKED TARGET THE STOP DOES NOT CLOSE ANYTHING. The flip and
+   // cross engines run with STOP_EXIT off - the colour flip is the only
+   // exit - so latching at -1R froze the card at the stop price and left it
+   // reading "waiting for the close confirmation" for a close that never
+   // comes, while the position kept losing behind a stale number. 2Z, 12
+   // Aug: card frozen at -1.00R / -7.61% while the bar graph, which reads
+   // the live r, showed -1.56R.
+   if(NOTGT) delete window.__froz[fkey];                        // stale latch
+   else if(t.r!=null && t.r<=-1) window.__froz[fkey]='sl';
    const slDone=window.__froz[fkey]==='sl';
    const showR=slDone?-1:t.r;
    const showPnl=slDone?sgn*(t.stop-t.entry)/t.entry*100:t.pnl;
