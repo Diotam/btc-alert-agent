@@ -3550,17 +3550,23 @@ def process_candle(asset, ast, candles, ha, i):
             return False
         stop = (min(x["l"] for x in win) if want_long
                 else max(x["h"] for x in win))
-        log(f"{sym}: FLIP ENTRY {side} at ${fmt_px(entry)} - no-wick candle "
-            f"after the colour flip, exits on the next flip")
+        log(f"{sym}: FLIP ENTRY {side} at ${fmt_px(entry)} - HA flipped "
+            f"{'green' if want_long else 'red'}, exits when it flips back")
         # NO TARGET. The colour flip is the exit, so a 1.5R take-profit would
         # cut the trade short of the design - it would book before the flip
         # ever came. Parked out of reach, as cross mode does.
         tp_far = (entry * 100) if want_long else (entry * 0.01)
         return fire_entry(asset, ast, side, dict(c, c=entry), stop,
                           c["h"], c["l"], "FLIP",
-                          f"HA flipped {'green' if want_long else 'red'}, then "
-                          f"a no-wick candle - entered at the next open, "
-                          f"exits when the colour flips back",
+                          # the wick step is gone under FLIP_NEEDS_NOWICK -
+                          # saying it happened described a rule the engine
+                          # had stopped running
+                          ((f"HA flipped {'green' if want_long else 'red'} "
+                            f"on the {TF}")
+                           if not FLIP_NEEDS_NOWICK else
+                           (f"HA flipped {'green' if want_long else 'red'}, "
+                            f"then a no-wick candle - entered at the next "
+                            f"open, exits when the colour flips back")),
                           live_px=candles[-1]["c"], engine="flip",
                           candles=candles, idx=i, tp_override=tp_far)
 
