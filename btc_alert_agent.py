@@ -711,7 +711,18 @@ DISCOVERY_TTL_S = 1800             # the tradable universe barely moves
                                    # markets every 5 min is pure API burn
 RUN_BUDGET_S = 480                 # hard per-run budget; the rest resume next
                                    # run via a rotating cursor
-REPLAY_CANDLES = 3                 # candles replayed per run (covers a run gap)
+REPLAY_CANDLES = 0                 # candles replayed per run. 3 -> 0 on 12 Aug:
+                                   # the replay existed to cover a missed
+                                   # scan, but it also meant a setup found on
+                                   # an ALREADY-CLOSED bar was entered at that
+                                   # bar's open - a price hours in the past.
+                                   # VVV booked 11.667 while the market was at
+                                   # 11.823, turning a 2.7% stop into 4.0%.
+                                   # At 0 only the FORMING bar is evaluated,
+                                   # so the alerted price is always live.
+                                   # The cost: a scan missed entirely loses
+                                   # that candle's setups rather than catching
+                                   # them late
 
 
 # --------------------------- small helpers ---------------------------------
