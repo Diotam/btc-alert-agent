@@ -288,6 +288,14 @@ EMA_FILTER_TF = "1h"                # TIMEFRAME the filter's EMA is measured
                                    # must be a whole multiple of TF, and
                                    # LOOKBACK has to leave enough bars after
                                    # the resample. "4h" is the slower option
+LOG_SKIPS = False                  # log every gate refusal. FALSE as of
+                                   # 11 Aug: with 71 markets the whole-run
+                                   # test refuses dozens per scan and the
+                                   # RECENT EVENTS panel became nothing but
+                                   # skip lines, burying the entries and the
+                                   # errors that matter. The PIPELINE PANEL
+                                   # still shows every refusal with its
+                                   # reason - that is the place to read them
 ONE_PER_TREND = True               # ONE ALERT PER TREND. His spec, 11 Aug:
                                    # PUMP's trend began with the first no-wick
                                    # candle above the 50 EMA on 8 Aug 11:00,
@@ -3321,9 +3329,10 @@ def process_candle(asset, ast, candles, ha, i):
                        f"{EMA_SLOPE_PCT:+.2f}%) around")
             else:
                 why = f"{gap:.2f}% from (needs <= {EMA_RETEST_PCT}%)"
-            log(f"{sym}: {direction} setup but "
-                f"price ${fmt_px(ema_px)} is {why} the "
-                f"{EMA_FILTER_LEN} EMA ${fmt_px(ema_v)} - skipped")
+            if LOG_SKIPS:
+                log(f"{sym}: {direction} setup but "
+                    f"price ${fmt_px(ema_px)} is {why} the "
+                    f"{EMA_FILTER_LEN} EMA ${fmt_px(ema_v)} - skipped")
             continue
         d = found[0]                         # the FLIP bar - what the stop
         #                                      window sits behind
@@ -3359,7 +3368,8 @@ def process_candle(asset, ast, candles, ha, i):
         # excluded - they are already part of the new direction and would
         # drag the stop toward entry.
         if not ALLOW_SHORTS and not want_long:
-            log(f"{sym}: SHORT setup but ALLOW_SHORTS is off - skipped")
+            if LOG_SKIPS:
+                log(f"{sym}: SHORT setup but ALLOW_SHORTS is off - skipped")
             continue
 
         # ONE PER TREND. The key is the EMA cross that started this side, so
@@ -3375,9 +3385,10 @@ def process_candle(asset, ast, candles, ha, i):
         # found[1] is the run start, i-1 the no-wick candle.
         ok_run, bad = ema_run_side(candles, found[1], i - 1, want_long)
         if not ok_run:
-            log(f"{sym}: {direction} setup but {bad} of the run's candles "
-                f"sat on the wrong side of the {EMA_FILTER_LEN} EMA - "
-                "skipped")
+            if LOG_SKIPS:
+                log(f"{sym}: {direction} setup but {bad} of the run's candles "
+                    f"sat on the wrong side of the {EMA_FILTER_LEN} EMA - "
+                    "skipped")
             continue
 
         # HIGHER-TIMEFRAME PERMISSION. A neutral or unreadable regime blocks
@@ -3385,9 +3396,10 @@ def process_candle(asset, ast, candles, ha, i):
         if REGIME_ON:
             rg = regime_side(asset)
             if rg and (rg > 0) != want_long:
-                log(f"{sym}: {direction} setup but the {REGIME_TF} trend is "
-                    f"{'UP' if rg > 0 else 'DOWN'} "
-                    f"({REGIME_EMA_LEN} EMA) - skipped")
+                if LOG_SKIPS:
+                    log(f"{sym}: {direction} setup but the {REGIME_TF} trend is "
+                        f"{'UP' if rg > 0 else 'DOWN'} "
+                        f"({REGIME_EMA_LEN} EMA) - skipped")
                 continue
 
         # BITCOIN CORRELATION. BTC cannot follow itself, and a NEUTRAL BTC
