@@ -3592,14 +3592,23 @@ def process_candle(asset, ast, candles, ha, i):
                    # Building this from want_long printed "uptrend faded,
                    # flipped red" on a SHORT that was actually a downtrend
                    # pausing - the exact opposite bars. Live on ACE, 7 Aug.
-                   f"HA {'down' if signal_long else 'up'}trend "
-                   f"{'faded' if HA_MODE == 'reversal' else 'paused'}, "
-                   f"flipped {'green' if signal_long else 'red'}, then a "
-                   f"no-wick candle - "
-                   f"{'reversing it' if HA_MODE == 'reversal' else 'joining the run'}"
-                   f" at the next open, stop at the "
-                   f"{len(window)}-candle extreme before the flip, "
-                   f"{'low' if want_long else 'high'}",
+                   # UNDER NOWICK_ONLY there is no run and no flip to
+                   # describe - saying there was made the alert claim a
+                   # pattern the engine had stopped requiring.
+                   ((f"a no-wick {'green' if want_long else 'red'} candle "
+                     f"{'above' if want_long else 'below'} the "
+                     f"{EMA_FILTER_LEN} EMA - entered at the next open, "
+                     f"stop at the {len(window)}-candle extreme, "
+                     f"{'low' if want_long else 'high'}")
+                    if NOWICK_ONLY else
+                    (f"HA {'down' if signal_long else 'up'}trend "
+                     f"{'faded' if HA_MODE == 'reversal' else 'paused'}, "
+                     f"flipped {'green' if signal_long else 'red'}, then a "
+                     f"no-wick candle - "
+                     f"{'reversing it' if HA_MODE == 'reversal' else 'joining the run'}"
+                     f" at the next open, stop at the "
+                     f"{len(window)}-candle extreme before the flip, "
+                     f"{'low' if want_long else 'high'}")),
                    live_px=candles[-1]["c"], engine=ENGINE_TAG,
                    candles=candles, idx=i)
         return True
