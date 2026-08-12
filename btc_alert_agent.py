@@ -296,6 +296,27 @@ LOG_SKIPS = False                  # log every gate refusal. FALSE as of
                                    # errors that matter. The PIPELINE PANEL
                                    # still shows every refusal with its
                                    # reason - that is the place to read them
+TREND_MAX_AGE = 3                  # how many bars after the EMA CROSS a setup
+                                   # may still be called "the beginning" of
+                                   # the trend. His spec, 12 Aug, from AMZN:
+                                   # the downtrend crossed at 09:00 and the
+                                   # first setup to survive every gate fired
+                                   # at 23:00 - FOURTEEN HOURS IN. ONE_PER_TREND
+                                   # did not block it because nothing had fired
+                                   # yet, so it counted as the first. This is
+                                   # the separate rule: too late is too late,
+                                   # whether or not anything fired earlier.
+                                   # 0 disables the age check
+NOWICK_ONLY = True                 # THE SIMPLEST FORM, his spec 12 Aug: "as
+                                   # long as there is a no-wick candle in
+                                   # either direction above or below the 50
+                                   # EMA it qualifies". No run, no colour
+                                   # flip, no fade - just a clean candle on
+                                   # the correct side. That also shortens the
+                                   # pattern to TWO bars after the cross, so
+                                   # TREND_MAX_AGE can actually be met.
+                                   # False restores the run-flip-nowick
+                                   # sequence
 ONE_PER_TREND = True               # ONE ALERT PER TREND. His spec, 11 Aug:
                                    # PUMP's trend began with the first no-wick
                                    # candle above the 50 EMA on 8 Aug 11:00,
@@ -397,7 +418,7 @@ HA_MIN_RUN_PCT = 0                 # MINIMUM MOVE across the run, start to
                                    # this: it only asks that ONE body in the
                                    # run clears a floor, not that the run
                                    # went anywhere. 0 disables
-HA_MIN_RUN = 2                     # MINIMUM trend-coloured HA candles before
+HA_MIN_RUN = 0                     # MINIMUM trend-coloured HA candles before
                                    # the flip counts. Back on 3 Aug at 5,
                                    # after LIT showed a ONE-candle red run
                                    # inside an uptrend being read as a trend
@@ -1398,6 +1419,16 @@ def ha_nowick_signal(ha, i, want_long):
     nw, fl = i - 1, i - 2
     if fl < 1:
         return None
+    # NOWICK_ONLY: the candle before the entry bar must simply be the trade's
+    # colour with no wick against it. The run and the flip are not consulted,
+    # so (flip_index, run_start) both point at that candle - downstream only
+    # uses them to size the stop window.
+    if NOWICK_ONLY:
+        if ha_green(ha[nw]) != want_long:
+            return None
+        if not no_wick(ha[nw], want_long):
+            return None
+        return nw, nw
     # the no-wick bar and the flip bar must both be the NEW colour
     if ha_green(ha[nw]) != want_long or ha_green(ha[fl]) != want_long:
         return None
@@ -1526,6 +1557,18 @@ def gate_status(ha, candles, i, sym=None, ast_for_gate=None):
     # through flipped / forming / missed for every setup inside that trend.
     # The cost is that a card no longer says what ELSE would have refused
     # it - this answer wins outright.
+    # TOO LATE IN THE TREND - checked with the trend rules, before the
+    # pattern stages, so a card says "mid-trend" rather than "ready".
+    if TREND_MAX_AGE:
+        tk0 = trend_start_t(candles, i)
+        if tk0 is not None:
+            age_bars = sum(1 for c in candles[:i + 1] if c["t"] >= tk0) - 1
+            if age_bars > TREND_MAX_AGE:
+                d.update(stage="too late in the trend",
+                         detail=f"{age_bars} bars since the EMA cross, "
+                                f"max {TREND_MAX_AGE}")
+                return d
+
     if ONE_PER_TREND and sym:
         dn = (ast_for_gate or {}).get("trend_taken") or {}
         if dn:
@@ -1555,7 +1598,7 @@ def gate_status(ha, candles, i, sym=None, ast_for_gate=None):
                      detail=f"{bd} candles of the run sat across the "
                             f"{EMA_FILTER_LEN} EMA")
             return d
-    if len(run) < max(1, HA_MIN_RUN):
+    if not NOWICK_ONLY and len(run) < max(1, HA_MIN_RUN):
         # ha_nowick_signal refuses this outright, so listing it as "flipped,
         # needs a no-wick bar next" promises a trade that can never fire
         d.update(stage="run too short",
@@ -3386,6 +3429,21 @@ def process_candle(asset, ast, candles, ha, i):
         # ONE PER TREND. The key is the EMA cross that started this side, so
         # a second setup inside the same move is refused - it is the same
         # trend, not a new one.
+        # TOO LATE IN THE TREND. Distinct from ONE_PER_TREND: that one asks
+        # "have we already traded this trend?", this asks "is this still the
+        # BEGINNING of it?". A setup fourteen hours after the cross is
+        # mid-trend even if nothing has fired.
+        if TREND_MAX_AGE:
+            tk0 = trend_start_t(candles, i)
+            if tk0 is not None:
+                age_bars = sum(1 for c in candles[:i + 1] if c["t"] >= tk0) - 1
+                if age_bars > TREND_MAX_AGE:
+                    if LOG_SKIPS:
+                        log(f"{sym}: {direction} setup but the trend is "
+                            f"{age_bars} bars old (max {TREND_MAX_AGE}) - "
+                            "skipped")
+                    continue
+
         if ONE_PER_TREND:
             tkey = trend_start_t(candles, i)
             done = ast.get("trend_taken") or {}
