@@ -619,11 +619,13 @@ const TVBASE='https://www.tradingview.com/chart/'+(TVLAYOUT?TVLAYOUT+'/':'')+'?s
 // (xyz:ARM, xyz:CL) are equities and commodities TradingView carries under
 // their own tickers, so the bare name resolves better.
 function tradeAge(openedT){
-  // how long the position has been on. opened_t is the candle open, the fill
-  // is at its close, so add one candle.
+  // how long the position has been on. opened_t IS the entry bar's open and
+  // the fill is at that open, so nothing is added. The old version added a
+  // whole candle, which on 4h left every card reading "just now" for four
+  // hours before the clock started.
   if(!openedT) return '';
-  var ms = Date.now() - (openedT + (window.__tfms||900000));
-  if(ms < 0) return 'just now';
+  var ms = Date.now() - openedT;
+  if(ms < 60000) return 'just now';
   var m = Math.floor(ms/60000), h = Math.floor(m/60), dd = Math.floor(h/24);
   if(dd >= 1) return dd + 'd ' + (h%24) + 'h';
   if(h >= 1)  return h + 'h ' + (m%60) + 'm';
