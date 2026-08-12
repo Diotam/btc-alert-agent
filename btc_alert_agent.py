@@ -1999,10 +1999,22 @@ def entry_message(asset, direction, plan, zhi, zlo, source, t, trigger):
         f"Entry: <code>${fmt_px(plan['entry'])}</code>",
         # a SHORT's stop is the zone HIGH; "low" was hardcoded and read
         # backwards on every short the engine has ever sent
-        f"Stop:  <code>${fmt_px(plan['stop'])}</code>  "
-        f"({'HA zone low' if direction == 'LONG' else 'HA zone high'})",
-        f"TP:    <code>${fmt_px(plan['tp'])}</code>  "
-        f"({HA_RR}x the stop \u00b7 {HA_PARTIAL:.0%} booked there)",
+        (f"Stop:  <code>${fmt_px(plan['stop'])}</code>  "
+         f"(sizing reference only - not placed)"
+         if not STOP_EXIT else
+         f"Stop:  <code>${fmt_px(plan['stop'])}</code>  "
+         f"({'HA zone low' if direction == 'LONG' else 'HA zone high'})"),
+        # a PARKED target means there is no take-profit at all - saying
+        # "1.5x the stop" on a flip trade promised an exit that will never
+        # fire. The flip is the exit.
+        # a parked target is 100x entry for a LONG and 0.01x for a SHORT -
+        # the ratio catches both; a difference test only caught the long.
+        (f"Exit:  <b>when the HA colour flips back</b>"
+         if (plan.get('tp') and plan.get('entry')
+             and (plan['tp'] / plan['entry'] > 2
+                  or plan['tp'] / plan['entry'] < 0.5))
+         else f"TP:    <code>${fmt_px(plan['tp'])}</code>  "
+              f"({HA_RR}x the stop \u00b7 {HA_PARTIAL:.0%} booked there)"),
         f"<i>data: {esc(source)}</i>",
     ])
 
