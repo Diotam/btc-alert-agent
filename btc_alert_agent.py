@@ -1521,6 +1521,21 @@ def gate_status(ha, candles, i, sym=None, ast_for_gate=None):
          "trend": "down" if want_long else "up",
          "age": age, "need": 1}
 
+    # ONE PER TREND, CHECKED FIRST. His call, 11 Aug. A symbol already
+    # trading its current trend shows ONE steady row instead of cycling
+    # through flipped / forming / missed for every setup inside that trend.
+    # The cost is that a card no longer says what ELSE would have refused
+    # it - this answer wins outright.
+    if ONE_PER_TREND and sym:
+        dn = (ast_for_gate or {}).get("trend_taken") or {}
+        if dn:
+            tk = trend_start_t(candles, i)
+            if tk and dn.get("t") == tk and dn.get("dir") == d["dir"]:
+                d.update(stage="trend already taken",
+                         detail="one alert per trend - waiting for the EMA "
+                                "to cross back")
+                return d
+
     r = f - 1
     while r >= 0 and ha_green(ha[r]) != want_long:
         r -= 1
@@ -1529,6 +1544,17 @@ def gate_status(ha, candles, i, sym=None, ast_for_gate=None):
     d["run"] = len(run)
     if not run:
         return None
+    # THE WHOLE-RUN EMA TEST, checked as soon as the run is known. It does
+    # not depend on the no-wick bar, so gating it behind age == 2 hid it from
+    # every "flipped" and "no-wick bar forming" card - which is why the stage
+    # never appeared on the panel.
+    if EMA_WHOLE_RUN and run:
+        okr, bd = ema_run_side(candles, r, min(i, f), traded_long)
+        if not okr:
+            d.update(stage="run was on the wrong side",
+                     detail=f"{bd} candles of the run sat across the "
+                            f"{EMA_FILTER_LEN} EMA")
+            return d
     if len(run) < max(1, HA_MIN_RUN):
         # ha_nowick_signal refuses this outright, so listing it as "flipped,
         # needs a no-wick bar next" promises a trade that can never fire
@@ -1665,21 +1691,6 @@ def gate_status(ha, candles, i, sym=None, ast_for_gate=None):
         if not ALLOW_SHORTS and not traded_long:
             d.update(stage="shorts are off", detail="long-only, by config")
             return d
-        if ONE_PER_TREND and sym:
-            tk = trend_start_t(candles, i)
-            dn = (ast_for_gate or {}).get("trend_taken") or {}
-            if tk and dn.get("t") == tk and dn.get("dir") == d["dir"]:
-                d.update(stage="trend already taken",
-                         detail="one alert per trend - waiting for the EMA "
-                                "to cross back")
-                return d
-        if EMA_WHOLE_RUN:
-            okr, bd = ema_run_side(candles, f, i - 1, traded_long)
-            if not okr:
-                d.update(stage="run was on the wrong side",
-                         detail=f"{bd} candles of the run sat across the "
-                                f"{EMA_FILTER_LEN} EMA")
-                return d
         if REGIME_ON and sym:
             rg = regime_side({"symbol": sym, "hl_coin": sym,
                               "fallbacks": [], "cls": "crypto"})
