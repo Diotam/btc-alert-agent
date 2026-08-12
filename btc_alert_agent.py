@@ -121,7 +121,7 @@ ASSETS = [                         # used when DISCOVER_ALL = False, or when
 ]
 
 # --- strategy dials -------------------------------------------------------
-TF = "1h"                          # execution timeframe. 15m -> 30m on
+TF = "4h"                          # execution timeframe. 15m -> 30m on
                                    # 9 Aug: a 50 EMA on 15m was too fast
                                    # for these markets, so price crossed
                                    # it constantly without going
@@ -255,7 +255,7 @@ REGIME_EMA_LEN = 50                # 50 x 4h = 200 hours, about 8 days. Slow
                                    # revoke permission
 _REGIME = {}                       # per-symbol cache, TTL below
 REGIME_TTL_S = 300                 # one higher-TF fetch per symbol per scan
-ALLOW_SHORTS = False               # take the short side at all. FALSE as of
+ALLOW_SHORTS = True                # take the short side at all. FALSE as of
                                    # 9 Aug, from 580 legs of his own ledger
                                    # spanning 19 Jul - 9 Aug: LONGS made
                                    # +82.61% at a 39% win rate while SHORTS
@@ -276,7 +276,7 @@ HA_MODE = "reversal"                   # what the doji MEANS.
                                    #                    not the end of it.
                                    # Detection is IDENTICAL either way - only
                                    # the resulting side flips
-EMA_FILTER_TF = "1h"                # TIMEFRAME the filter's EMA is measured
+EMA_FILTER_TF = "4h"                # TIMEFRAME the filter's EMA is measured
                                    # on, which need not be TF. A 50 EMA on
                                    # 15m spans about 12 hours, so an ordinary
                                    # pullback inside a two-day uptrend
@@ -307,6 +307,21 @@ TREND_MAX_AGE = 3                  # how many bars after the EMA CROSS a setup
                                    # the separate rule: too late is too late,
                                    # whether or not anything fired earlier.
                                    # 0 disables the age check
+FLIP_MODE = True                   # THE 4h FLIP ENGINE, his spec 12 Aug.
+                                   # ALWAYS IN THE MARKET: an HA colour flip
+                                   # ARMS a side, the first no-wick candle in
+                                   # that direction ENTERS, and the next
+                                   # colour flip EXITS and arms the other way.
+                                   # The 50 MA only says whether a trend
+                                   # exists at all - a flat market trades
+                                   # nothing. Replaces the flip-and-enter
+                                   # engine when on
+FLIP_FLAT_PCT = 0.30               # the 50 MA must have moved this much over
+                                   # FLIP_SLOPE_BARS to count as trending.
+                                   # Below it the market is sideways and BOTH
+                                   # sides are refused - the "avoid flatline"
+                                   # half of his spec
+FLIP_SLOPE_BARS = 6                # bars the slope is measured over
 NOWICK_ONLY = True                 # THE SIMPLEST FORM, his spec 12 Aug: "as
                                    # long as there is a no-wick candle in
                                    # either direction above or below the 50
@@ -1366,6 +1381,64 @@ def regime_side(asset):
     return side
 
 
+def flip_signal(ast, candles, ha, i):
+    """The 4h flip engine. Returns "LONG" / "SHORT" to ENTER, else None.
+
+    Two steps kept deliberately apart, as in cross mode: an HA COLOUR FLIP
+    arms a side, and the first NO-WICK candle in that direction pulls the
+    trigger. Arming lives on the state record so a flip on one bar can still
+    fire several bars later."""
+    if i < 2:
+        return None
+    now_green = ha_green(ha[i - 1])
+    prev_green = ha_green(ha[i - 2])
+    arm = ast.get("flip_arm") or {}
+
+    if now_green != prev_green:                 # a COLOUR FLIP just closed
+        arm = {"side": "LONG" if now_green else "SHORT", "t": ha[i - 1]["t"]}
+        ast["flip_arm"] = arm
+        log(f"{ast.get('sym', '?')}: HA flipped "
+            f"{'green' if now_green else 'red'} - arming {arm['side']}, "
+            "waiting for a no-wick candle")
+        return None
+
+    if not arm:
+        return None
+    want_long = arm["side"] == "LONG"
+    if ha[i - 1]["t"] <= arm["t"]:              # must come AFTER the flip
+        return None
+    if ha_green(ha[i - 1]) != want_long:
+        return None
+    if not no_wick(ha[i - 1], want_long):
+        return None
+    return arm["side"]
+
+
+def flip_trending(candles, i):
+    """Is the 50 MA actually going somewhere? +1 up, -1 down, 0 flat.
+
+    The spec asks the MA to say "upward or downward trend, avoid flatline
+    sideways" - so this answers direction AND flatness in one number, and 0
+    refuses both sides."""
+    if not FLIP_FLAT_PCT:
+        return 1
+    base = candles[:max(0, i) + 1]
+    if len(base) < EMA_FILTER_LEN + FLIP_SLOPE_BARS + 1:
+        return 0
+    e = ema([c["c"] for c in base], EMA_FILTER_LEN)
+    if len(e) <= FLIP_SLOPE_BARS:
+        return 0
+    then = e[-1 - FLIP_SLOPE_BARS]
+    if not then:
+        return 0
+    slope = (e[-1] - then) / then * 100
+    if slope >= FLIP_FLAT_PCT:
+        return 1
+    if slope <= -FLIP_FLAT_PCT:
+        return -1
+    return 0
+
+
 def ema_cross_side(candles, i):
     """Which side of the 50 EMA is price on at bar i? +1 above, -1 below.
 
@@ -1504,6 +1577,39 @@ def confirmed(ha, candles, d, i, want_long, final=True):
     if real_up != want_long:
         return False, "real candle closed the wrong way"
     return True, ""
+
+
+def flip_gate(ast, candles, ha, i):
+    """What the pipeline card shows in FLIP_MODE."""
+    if i < 2:
+        return None
+    arm = ast.get("flip_arm") or {}
+    tr = flip_trending(candles, i)
+    d = {"dir": arm.get("side") or ("LONG" if ha_green(ha[i - 1]) else "SHORT"),
+         "trend": "up" if tr > 0 else ("down" if tr < 0 else "flat"),
+         "age": 0, "need": 1, "t": candles[i]["t"], "px": candles[i]["c"]}
+    if tr == 0:
+        d.update(stage="flat - MA going nowhere",
+                 detail=f"needs {FLIP_FLAT_PCT}% over {FLIP_SLOPE_BARS} bars")
+        return d
+    if not arm:
+        d.update(stage="waiting for a colour flip",
+                 detail=f"MA trending {'up' if tr > 0 else 'down'}")
+        return d
+    want_long = arm["side"] == "LONG"
+    if (tr > 0) != want_long:
+        d.update(stage="MA disagrees",
+                 detail=f"armed {arm['side']} but the MA is "
+                        f"{'up' if tr > 0 else 'down'}")
+        return d
+    w, b = ha_wick(ha[i], upper=not want_long), ha_body(ha[i])
+    pct = (w / b * 100) if b else 999
+    d.update(stage="no-wick bar forming",
+             detail=(f"clean so far ({pct:.0f}% of body)"
+                     if pct <= HA_NOWICK_TOL_PCT
+                     else f"wick {pct:.0f}% of body, needs "
+                          f"<= {HA_NOWICK_TOL_PCT:.0f}%"))
+    return d
 
 
 def cross_gate(ast, candles, ha, i):
@@ -1861,6 +1967,8 @@ def lifecycle_message(asset, kind, trade, exit_px, event_t, note):
         # a stop the TRAIL had already ratcheted above entry is a WIN, and
         # calling it "STOPPED OUT" made a +6% CASHCAT exit read as a loss
         "TRAIL": ("\u2705", "TRAIL EXIT", "trailing stop took the profit"),
+        "FLIP": ("\U0001f504", "COLOUR FLIP EXIT",
+                 "the HA flipped against the trade"),
         "MANUAL": ("\u270b", "CLOSED BY HAND",
                    "closed from the dashboard at market"),
         "TP": ("\u2705", "TAKE PROFIT HIT", "target reached"),
@@ -2222,6 +2330,19 @@ def process_open_trade(asset, trade, candles, ha, last_closed_t):
                           else (c["h"] >= trade["stop"])):
             kind = _stop_kind(trade)
             return _close_trade(asset, trade, trade["stop"], kind, event_t)
+        # FLIP_MODE: the ONLY exit is the HA colour flipping against the
+        # trade. The next scan's flip_signal then arms the other side.
+        if FLIP_MODE:
+            idx = next((n for n, x in enumerate(candles)
+                        if x["t"] == c["t"]), None)
+            if idx is not None and idx >= 1:
+                if ha_green(ha[idx]) != long:
+                    log(f"{asset['symbol']}: HA flipped "
+                        f"{'red' if long else 'green'} - closing the "
+                        f"{trade['verdict']} at ${fmt_px(c['c'])}")
+                    return _close_trade(asset, trade, c["c"], "FLIP", event_t)
+            continue
+
         # CROSS_MODE: the ONLY exit is price crossing back. Checked before
         # the trail, which is inert here anyway - there is no R target for
         # it to protect.
@@ -3322,6 +3443,52 @@ def process_candle(asset, ast, candles, ha, i):
     sym = asset["symbol"]
     c = candles[i]
     hd = ha[i]
+
+    # ---------------- 4h FLIP ENGINE ----------------
+    # Always in the market: a colour flip arms, a no-wick candle enters, the
+    # next flip exits and arms the other way. The 50 MA only vetoes a market
+    # going nowhere.
+    if FLIP_MODE:
+        ast["sym"] = sym
+        side = flip_signal(ast, candles, ha, i)
+        if not side:
+            ast["gate"] = flip_gate(ast, candles, ha, i)
+            return False
+        want_long = side == "LONG"
+        tr = flip_trending(candles, i)
+        if tr == 0:
+            if LOG_SKIPS:
+                log(f"{sym}: {side} armed but the {EMA_FILTER_LEN} MA is flat "
+                    f"(needs {FLIP_FLAT_PCT}% over {FLIP_SLOPE_BARS} bars) "
+                    "- skipped")
+            return False
+        if (tr > 0) != want_long:
+            if LOG_SKIPS:
+                log(f"{sym}: {side} armed but the {EMA_FILTER_LEN} MA is "
+                    f"trending {'UP' if tr > 0 else 'DOWN'} - skipped")
+            return False
+        if not ALLOW_SHORTS and not want_long:
+            return False
+        entry = c["o"] if ENTRY_AT_OPEN else c["c"]
+        lo = max(0, i - stop_bars())
+        win = candles[lo:i]
+        if not win:
+            return False
+        stop = (min(x["l"] for x in win) if want_long
+                else max(x["h"] for x in win))
+        log(f"{sym}: FLIP ENTRY {side} at ${fmt_px(entry)} - no-wick candle "
+            f"after the colour flip, exits on the next flip")
+        # NO TARGET. The colour flip is the exit, so a 1.5R take-profit would
+        # cut the trade short of the design - it would book before the flip
+        # ever came. Parked out of reach, as cross mode does.
+        tp_far = (entry * 100) if want_long else (entry * 0.01)
+        return fire_entry(asset, ast, side, dict(c, c=entry), stop,
+                          c["h"], c["l"], "FLIP",
+                          f"HA flipped {'green' if want_long else 'red'}, then "
+                          f"a no-wick candle - entered at the next open, "
+                          f"exits when the colour flips back",
+                          live_px=candles[-1]["c"], engine="flip",
+                          candles=candles, idx=i, tp_override=tp_far)
 
     # ---------------- CROSSOVER ENGINE ----------------
     # Replaces the flip engine entirely when on. No run gates, no fade, no
