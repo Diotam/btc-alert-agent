@@ -50,31 +50,23 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 # --- asset universe -------------------------------------------------------
 DISCOVER_ALL = True
-DISCOVER_DEXES = False             # scan HIP-3 builder venues. OFF as of
-                                   # 12 Aug, his call: CRYPTO ONLY. With this
-                                   # False list_dexes() returns DEXES = [""],
-                                   # the main perp dex alone, so no xyz market
-                                   # - commodity or equity - can enter the
-                                   # universe at all. Open xyz trades are NOT
-                                   # abandoned: the zombie sweep keeps
-                                   # monitoring any symbol with a live trade
-                                   # after it drops out of the universe, so
-                                   # the four open ones exit on their own HA
-                                   # flip. Turn back on together with the two
-                                   # ADMIT flags below
-ADMIT_COMMODITIES = False
-ADMIT_STOCKS = False               # BOTH FALSE 12 Aug, his call: crypto only.
-                                   # Belt and braces - DISCOVER_DEXES above
-                                   # already keeps every xyz market out, and
-                                   # these two make sure re-enabling dex
-                                   # discovery for some other reason cannot
-                                   # quietly let gold and equities back in.
-                                   # NOTE what this does NOT remove: main-dex
-                                   # perps that track a commodity, PAXG among
-                                   # them, are ordinary crypto markets on the
-                                   # main dex and never pass through the
-                                   # commodity door at all. EXCLUDE is the
-                                   # lever for those
+DISCOVER_DEXES = True              # scan HIP-3 builder venues. ON as of
+                                   # 2 Aug: with EXEC_BUILDER_DEXES empty
+                                   # they could only ever alert, never trade,
+                                   # so every xyz signal was noise that also
+                                   # booked paper rows into the ledger. False
+                                   # falls back to DEXES = [""], the main dex
+                                   # alone. Turn both back on together if the
+                                   # xyz pool is ever funded again
+ADMIT_COMMODITIES = True
+ADMIT_STOCKS = True                # equities IN the universe. Moot while
+                                   # DISCOVER_DEXES is off - every xyz market
+                                   # is out either way. COMMODITIES DO NOT
+                                   # NEED THIS DOOR: the ones he trades, PAXG
+                                   # among them, are MAIN-DEX perps already
+                                   # in the crypto universe. Original note:
+                                   # they are
+                                   # is one line to flip back
 DEXES = [""]                       # fallback when dex discovery fails
 # EXACT names, never prefixes. This used to be a startswith() match, which
 # on an equities venue swallowed every ticker beginning with CL, NG or HG -
@@ -129,7 +121,7 @@ ASSETS = [                         # used when DISCOVER_ALL = False, or when
 ]
 
 # --- strategy dials -------------------------------------------------------
-TF = "4h"                          # execution timeframe. 15m -> 30m on
+TF = "1h"                          # execution timeframe. 15m -> 30m on
                                    # 9 Aug: a 50 EMA on 15m was too fast
                                    # for these markets, so price crossed
                                    # it constantly without going
@@ -263,7 +255,7 @@ REGIME_EMA_LEN = 50                # 50 x 4h = 200 hours, about 8 days. Slow
                                    # revoke permission
 _REGIME = {}                       # per-symbol cache, TTL below
 REGIME_TTL_S = 300                 # one higher-TF fetch per symbol per scan
-ALLOW_SHORTS = True                # take the short side at all. FALSE as of
+ALLOW_SHORTS = False               # take the short side at all. FALSE as of
                                    # 9 Aug, from 580 legs of his own ledger
                                    # spanning 19 Jul - 9 Aug: LONGS made
                                    # +82.61% at a 39% win rate while SHORTS
@@ -284,7 +276,7 @@ HA_MODE = "reversal"                   # what the doji MEANS.
                                    #                    not the end of it.
                                    # Detection is IDENTICAL either way - only
                                    # the resulting side flips
-EMA_FILTER_TF = "4h"                # TIMEFRAME the filter's EMA is measured
+EMA_FILTER_TF = "1h"                # TIMEFRAME the filter's EMA is measured
                                    # on, which need not be TF. A 50 EMA on
                                    # 15m spans about 12 hours, so an ordinary
                                    # pullback inside a two-day uptrend
@@ -339,7 +331,7 @@ SHA_ON_ENTRY = False               # does the smoothed series have to agree
                                    # entry one
 SHA_IN = 5                         # the smoothing, his 5,5
 SHA_OUT = 5
-FLIP_MODE = True                   # THE 4h FLIP ENGINE, his spec 12 Aug.
+FLIP_MODE = False                  # THE 4h FLIP ENGINE, his spec 12 Aug.
                                    # ALWAYS IN THE MARKET: an HA colour flip
                                    # ARMS a side, the first no-wick candle in
                                    # that direction ENTERS, and the next
