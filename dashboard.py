@@ -688,12 +688,6 @@ function toggle(id){COLLAPSED[id]=!COLLAPSED[id];
  try{localStorage.setItem('dashCollapsed',JSON.stringify(COLLAPSED))}catch(e){}
  applyCollapse()}
 const DAYS={d:1,w:7,m:30}, LABEL={d:'last 24h',w:'last 7 days',m:'last 30 days'};
-// THE R REFERENCE FOR PARKED-TARGET ENGINES. The flip and cross engines have
-// no target, so a progress bar needs something to be a fraction OF. 1.5R,
-// his call 12 Aug. IT IS A YARDSTICK, NOT AN EXIT - a full bar means the
-// move has run 1.5R, nothing more. Both the card bar and the DAY/WEEK/MONTH
-// graph read this one constant so the two can never drift apart again.
-const RREF=1.5;
 function setP(p){PERIOD=p;
  document.querySelectorAll('.tab').forEach(t=>t.classList.toggle('active',t.dataset.p===p));
  if(LAST)render(LAST);}
@@ -738,11 +732,11 @@ function render(d){
     const ts=(d.trades||[]).filter(t=>t.r!=null&&t.risk);
     if(!ts.length){ box.className='ob'; box.innerHTML='<div class=ob-none>no open trades</div>'; return; }
     // A PARKED target means there is nothing to be a fraction of, so the
-    // bar scales |R| against the RREF reference - the same measure the card
+    // bar scales |R| against a 3R reference - the same measure the card
     // uses. Without this LIT sat at 0% while its card read 0.05R in profit.
     const prog=t=>{
       const parked=t.tp!=null&&t.entry&&(t.tp/t.entry>2||t.tp/t.entry<0.5);
-      if(parked) return Math.min(100,Math.abs(t.r||0)/RREF*100);
+      if(parked) return Math.min(100,Math.abs(t.r||0)/3*100);
       const rrt=(t.tp!=null&&t.risk)?Math.abs((t.tp-t.entry)/t.risk):(t.rr||1.5);
       return t.r>=0?Math.min(100,t.r/rrt*100):Math.min(100,-t.r*100);
     };
@@ -796,13 +790,7 @@ function render(d){
    const sgn=t.dir==='LONG'?1:-1;
    // each trade's true RR from its own prices (targets vary: 2R..3R/structure)
    const PARTIAL=(d._meta&&d._meta.partial!=null)?d._meta.partial:1;
-   // A PARKED TARGET IS entry x 100 ON A LONG BUT entry x 0.01 ON A SHORT,
-   // and the short version is only 99% away from entry - under the old
-   // "more than 2x entry" test, so EVERY SHORT still read as having a real
-   // target. That is why LINK's card said "1% of the way to TP" against a
-   // target 59R away while the bar graph, which uses the ratio test below,
-   // read the same trade as 17% of a 3R move. Same test both places now.
-   const NOTGT=t.tp!=null&&t.entry&&(t.tp/t.entry>2||t.tp/t.entry<0.5);
+   const NOTGT=t.tp!=null&&t.entry&&Math.abs(t.tp-t.entry)/t.entry>2;
    const RRT=(t.tp!=null&&t.risk&&!NOTGT)?Math.abs((t.tp-t.entry)/t.risk)
      :((t.tp!=null&&t.entry!==t.stop)?Math.abs((t.tp-t.entry)/(t.entry-t.stop)):2);
    // freeze the card once TP or stop has traded - the agent confirms the
@@ -818,22 +806,14 @@ function render(d){
    // STOP still fully closes a trade, and only before the partial: after
    // it the stop sits at entry, so hitting it is a breakeven close.
    if(window.__froz[fkey]==='tp') delete window.__froz[fkey];   // stale latch
-   // UNDER A PARKED TARGET THE STOP DOES NOT CLOSE ANYTHING. The flip and
-   // cross engines run with STOP_EXIT off - the colour flip is the only
-   // exit - so latching at -1R froze the card at the stop price and left it
-   // reading "waiting for the close confirmation" for a close that never
-   // comes, while the position kept losing behind a stale number. 2Z, 12
-   // Aug: card frozen at -1.00R / -7.61% while the bar graph, which reads
-   // the live r, showed -1.56R.
-   if(NOTGT) delete window.__froz[fkey];                        // stale latch
-   else if(t.r!=null && t.r<=-1) window.__froz[fkey]='sl';
+   if(t.r!=null && t.r<=-1) window.__froz[fkey]='sl';
    const slDone=window.__froz[fkey]==='sl';
    const showR=slDone?-1:t.r;
    const showPnl=slDone?sgn*(t.stop-t.entry)/t.entry*100:t.pnl;
    // "target reached" is now computed LIVE, never latched
    // this panel holds EVERY open position - a trade at full risk and a
    // runner whose partial has booked. There is no separate Runners list
-   const atTarget=!NOTGT && !t.half && t.r!=null && t.r>=RRT;
+   const atTarget=!t.half && t.r!=null && t.r>=RRT;
    const running=Math.round((t.left==null?1:t.left)*100);
    const badge=t.half?`<span class="badge ok">${running}% running</span>`
      :atTarget?`<span class="badge ok">target reached \u00b7 ${PARTIAL>=1?'closing':'booking '+Math.round(PARTIAL*100)+'%'}</span>`
@@ -844,17 +824,15 @@ function render(d){
    // Both are now measured FROM ENTRY toward whichever side price is on.
    // NO TARGET under the flip engine, so "% of the way to TP" is
    // meaningless. The bar instead shows how far the move has run in R
-   // against RREF - a full bar means a 1.5R move, NOT an exit. The trade
-   // still holds until the HA flips; atTarget is forced off above so the
-   // reference can never raise a "closing" badge.
+   // against a 3R reference - a full bar means a 3R move, not an exit.
    const rp=showR==null?0
-     :NOTGT?Math.max(0,Math.min(100,Math.abs(showR)/RREF*100))
+     :NOTGT?Math.max(0,Math.min(100,Math.abs(showR)/3*100))
      :showR>=0?Math.max(0,Math.min(100,showR/RRT*100))
      :Math.max(0,Math.min(100,-showR*100));
    const rc=showR==null?'#8b949e':showR>=0?'#3fb950':'#f85149';
    const rlbl=showR==null?''
      :slDone?'Stop traded - waiting for the close confirmation'
-     :NOTGT?`${showR.toFixed(2)}R \u00b7 ${Math.round(Math.min(100,Math.abs(showR)/RREF*100))}% of ${RREF}R \u00b7 ${showR>=0?'in profit':'underwater'}, holds until the HA flips`
+     :NOTGT?`${showR.toFixed(2)}R \u00b7 ${showR>=0?'in profit':'underwater'} \u00b7 holds until the HA flips`
      :atTarget?`${showR.toFixed(2)}R \u00b7 target reached, ${PARTIAL>=1?'closing the position':'booking '+Math.round(PARTIAL*100)+'%'}`
      :t.half?`${showR.toFixed(2)}R from entry \u00b7 runs until the HA flips`
      :showR>=0
