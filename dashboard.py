@@ -645,8 +645,12 @@ function tvSym(sym){
   // Without it TradingView resolves a bare "AMZNUSDC.P" against whatever
   // exchange it prefers - COINBASE for the crypto-looking names - and the
   // card opened a chart of a different instrument entirely.
+  // the builder venue is its OWN exchange on TradingView - HIP3XYZ, not
+  // HYPERLIQUID. Sending xyz:AMZN as HYPERLIQUID:AMZNUSDC.P resolved to
+  // whatever exchange TradingView preferred, which for crypto-looking
+  // tickers is Coinbase.
   if(sym.indexOf(':')>=0)
-    return encodeURIComponent('HYPERLIQUID:'+sym.split(':').pop()+'USDC.P');
+    return encodeURIComponent('HIP3XYZ:'+sym.split(':').pop()+'USDC.P');
   // main-dex perps keep their exact Hyperliquid name, k-prefix included
   return encodeURIComponent('HYPERLIQUID:'+sym+'USDC.P');
 }
