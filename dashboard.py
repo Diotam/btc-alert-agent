@@ -641,8 +641,12 @@ function tradeAge(openedT){
 //   main dex    BTC       -> HYPERLIQUID:BTCUSDC.P
 //   builder dex xyz:GOLD  -> GOLDUSDC.P
 function tvSym(sym){
+  // EVERY symbol needs the HYPERLIQUID: prefix, builder-venue ones included.
+  // Without it TradingView resolves a bare "AMZNUSDC.P" against whatever
+  // exchange it prefers - COINBASE for the crypto-looking names - and the
+  // card opened a chart of a different instrument entirely.
   if(sym.indexOf(':')>=0)
-    return encodeURIComponent(sym.split(':').pop()+'USDC.P');
+    return encodeURIComponent('HYPERLIQUID:'+sym.split(':').pop()+'USDC.P');
   // main-dex perps keep their exact Hyperliquid name, k-prefix included
   return encodeURIComponent('HYPERLIQUID:'+sym+'USDC.P');
 }
