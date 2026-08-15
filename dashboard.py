@@ -409,6 +409,9 @@ def build_data():
                            "entry": tr["entry"], "stop": tr["stop"],
                            "tp": tp, "mid": mid, "pnl": pnl, "r": r_now,
                            "rr": tr.get("rr"),
+                           # which rung of a roll ladder this is, so the card
+                           # can show that the target already paid once
+                           "rung": int(tr.get("rung") or 0),
                            "opened_t": tr.get("opened_t", 0)})
 
     # closest to firing first for the pipeline; for trades, highest R at the
@@ -828,9 +831,13 @@ function render(d){
    // runner whose partial has booked. There is no separate Runners list
    const atTarget=!t.half && t.r!=null && t.r>=RRT;
    const running=Math.round((t.left==null?1:t.left)*100);
+   // a ROLLED position is a continuation, not a fresh trade - the card said
+   // nothing about it, so a ladder three rungs deep looked like a brand new
+   // entry that had somehow started in profit
+   const rung=(t.rung||0)>0?`<span class="badge ok">rung ${t.rung} \u00b7 rolled</span>`:'';
    const badge=t.half?`<span class="badge ok">${running}% running</span>`
      :atTarget?`<span class="badge ok">target reached \u00b7 ${PARTIAL>=1?'closing':'booking '+Math.round(PARTIAL*100)+'%'}</span>`
-     :slDone?'<span class="badge warn">stop hit · closing</span>':'';
+     :slDone?'<span class="badge warn">stop hit · closing</span>':rung;
    // THE BAR NOW MEASURES WHAT THE LABEL SAYS. It used to run one scale
    // from stop (0%) through entry to TP (100%), so a trade 61% of the way
    // to its stop drew a 16% bar - the number and the picture disagreed.
