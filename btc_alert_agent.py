@@ -435,7 +435,7 @@ EMA_RETEST_PCT = 0                 # entry must be within this % of the EMA -
                                    # fits: that rally is a green run, and its
                                    # flip at the EMA is the short trigger.
                                    # 0 disables, restoring side-only
-EMA_FILTER_LEN = 50                # trend filter on the REAL closes. Only
+EMA_FILTER_LEN = 20                # trend filter on the REAL closes. Only
                                    # SHORT while price is BELOW this EMA and
                                    # only LONG while it is above, so the
                                    # reversal is never taken against the
