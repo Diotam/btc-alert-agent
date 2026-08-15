@@ -504,6 +504,17 @@ TP_MIN_RR = 1.0                    # refuse the setup when the swing sits
                                    # closer than the stop - paying 1 to make
                                    # less than 1 is a losing shape however
                                    # often it wins
+RETARGET_ON = True                 # ROLL THE TRADE AT THE TARGET. His spec
+                                   # 13 Aug: when the 1.5R target is reached,
+                                   # book it and IMMEDIATELY reopen at that
+                                   # same price with a fresh 1.5R target. The
+                                   # ladder keeps riding a move that is still
+                                   # going instead of ending at the first
+                                   # target. Risk distance carries over, so
+                                   # each rung is the same size as the first
+RETARGET_MAX = 0                   # how many rolls before it stops. 0 = no
+                                   # limit; the ladder ends when a stop or a
+                                   # flip ends it
 HA_RR = 1.5                        # first target = 3x the stop distance
 TRAIL_ON = False                   # TRAILING STOP. Ratchets ONLY - it never
                                    # moves against the trade, so it can turn a
@@ -2486,8 +2497,43 @@ def process_open_trade(asset, trade, candles, ha, last_closed_t):
                 # returns _close_trade's (None, True). Discarding that left
                 # the ledger with a TP row while state still tracked the
                 # position as open - PUMP, 5 Aug, in both panels at once.
-                done = _book_partial(asset, trade, trade["tp"], event_t)
+                tp_px = trade["tp"]
+                risk0 = trade.get("risk0") or abs(trade["entry"]
+                                                  - trade["stop"])
+                rung = int(trade.get("rung") or 0)
+                done = _book_partial(asset, trade, tp_px, event_t)
                 if done is not None:
+                    # ROLL: reopen at the target with a fresh 1.5R above it.
+                    # The stop travels with the entry so each rung risks the
+                    # same distance, and the ladder ends on a stop or a flip.
+                    if (RETARGET_ON and risk0 > 0
+                            and (not RETARGET_MAX or rung + 1 <= RETARGET_MAX)):
+                        nstop = (tp_px - risk0) if long else (tp_px + risk0)
+                        ntp = (tp_px + HA_RR * risk0 if long
+                               else tp_px - HA_RR * risk0)
+                        rolled = {
+                            "verdict": trade["verdict"], "entry": tp_px,
+                            "stop": nstop, "tp": ntp,
+                            "opened_t": c["t"], "checked_t": c["t"],
+                            "rr": HA_RR, "risk0": risk0, "half": False,
+                            "left": 1.0, "size": trade.get("size"),
+                            "engine": trade.get("engine", ENGINE_TAG),
+                            "rung": rung + 1, "source": "ROLL"}
+                        log(f"{asset['symbol']}: TARGET HIT - rolling to rung "
+                            f"{rung + 1} at ${fmt_px(tp_px)}, new target "
+                            f"${fmt_px(ntp)}, stop ${fmt_px(nstop)}")
+                        try:
+                            send_telegram(
+                                f"\U0001F501 <b>{esc(asset['symbol'])}</b> "
+                                f"target hit - rolled to rung {rung + 1} at "
+                                f"<code>${fmt_px(tp_px)}</code>, next target "
+                                f"<code>${fmt_px(ntp)}</code>")
+                        except Exception:
+                            pass
+                        # the CALLER assigns this to ast["trade"], so the
+                        # ladder continues by returning the new rung rather
+                        # than writing to a global that does not exist
+                        return rolled, True
                     return done
             continue
         h = by_t.get(c["t"])
