@@ -243,7 +243,7 @@ CROSS_DISASTER_PCT = 10.0          # ...except this. A cross-only exit can sit
                                    # brake, not a strategy stop - it should
                                    # almost never fire. 0 removes it and
                                    # makes liquidation the only backstop
-LONG_LOOKBACK_DAYS = 30            # is the 50 EMA LOWER than it was this
+LONG_LOOKBACK_DAYS = 0             # is the 50 EMA LOWER than it was this
                                    # many days ago? If so the market is in a
                                    # multi-week downtrend and no long is
                                    # taken, however good the setup looks. His
