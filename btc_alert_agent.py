@@ -624,8 +624,16 @@ MIN_TARGET_PCT = 1.5               # the TARGET must sit at least this far
                                    # are ~0.083%, so 2% keeps them near 4%
                                    # of the gross rather than half of it.
                                    # 0 disables
-MIN_STOP_PCT = 0.25                # skip entries whose stop sits closer than
-                                   # this % of price - sub-noise stops just churn
+MIN_STOP_PCT = 0.10                # skip entries whose stop sits closer than
+                                   # this % of price - sub-noise stops just
+                                   # churn. 0.25 -> 0.10 on 15 Aug: the EMA 20
+                                   # switch made runs shorter and their stops
+                                   # tighter, so the floor started refusing
+                                   # ordinary setups - xyz:MSFT was turned
+                                   # away at 0.246%, four thousandths under.
+                                   # It also never appeared in the EMA 20 vs
+                                   # 50 replay, so that +144R counted trades
+                                   # the live engine was rejecting
 TRACK_UNPLACED = True              # keep tracking a trade whose order never
                                    # reached the exchange. FALSE as of 5 Aug:
                                    # the alert still fires and says NOT
