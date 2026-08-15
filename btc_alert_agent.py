@@ -243,6 +243,15 @@ CROSS_DISASTER_PCT = 10.0          # ...except this. A cross-only exit can sit
                                    # brake, not a strategy stop - it should
                                    # almost never fire. 0 removes it and
                                    # makes liquidation the only backstop
+LONG_LOOKBACK_DAYS = 30            # is the 50 EMA LOWER than it was this
+                                   # many days ago? If so the market is in a
+                                   # multi-week downtrend and no long is
+                                   # taken, however good the setup looks. His
+                                   # call 13 Aug. Measured on the 4h series -
+                                   # 30 days is 180 4h bars, where 1h only
+                                   # reaches ~21 days at LOOKBACK 500.
+                                   # 0 disables
+_LTREND = {}                       # per-symbol cache, same TTL as the regime
 REGIME_ON = True                   # THE HIGHER-TIMEFRAME PERMISSION GATE.
                                    # The 15m pattern says WHEN; this says
                                    # WHETHER. Longs only while price is above
@@ -1374,6 +1383,38 @@ def breakout_signal(candles, i):
     return None
 
 
+def long_trend_ok(asset, want_long):
+    """Refuse a LONG while the 50 EMA is below where it was 30 days ago.
+
+    Uses the 4h series because 1h cannot reach back far enough. Fails OPEN -
+    a read it cannot make must not veto every trade."""
+    if not LONG_LOOKBACK_DAYS or not want_long:
+        return True, 0.0
+    sym = asset["symbol"]
+    now = time.time()
+    hit = _LTREND.get(sym)
+    if hit and now - hit[0] < REGIME_TTL_S:
+        return hit[1], hit[2]
+    ok, chg = True, 0.0
+    try:
+        bars = int(LONG_LOOKBACK_DAYS * 24 * 3600000 / MS["4h"])
+        _, cs = fetch(asset, "4h", LOOKBACK.get("4h", 400))
+        if not cs or len(cs) < EMA_FILTER_LEN + bars:
+            _, h1 = fetch(asset, "1h", LOOKBACK.get("1h", 500))
+            cs = resample(h1, 4) if h1 else None
+        if cs and len(cs) >= EMA_FILTER_LEN + bars:
+            e = ema([c["c"] for c in cs], EMA_FILTER_LEN)
+            if len(e) > bars and e[-1 - bars]:
+                chg = (e[-1] - e[-1 - bars]) / e[-1 - bars] * 100
+                ok = chg >= 0
+    except Exception as ex:
+        log(f"{sym}: 30-day trend read failed ({type(ex).__name__}) - "
+            "not gating")
+        ok, chg = True, 0.0
+    _LTREND[sym] = (now, ok, chg)
+    return ok, chg
+
+
 def regime_side(asset):
     """+1 if price is above the higher-timeframe EMA, -1 below, 0 unknown.
 
@@ -1904,6 +1945,14 @@ def gate_status(ha, candles, i, sym=None, ast_for_gate=None):
         if not ALLOW_SHORTS and not traded_long:
             d.update(stage="shorts are off", detail="long-only, by config")
             return d
+        if LONG_LOOKBACK_DAYS and traded_long and sym:
+            okl, chg = long_trend_ok({"symbol": sym, "hl_coin": sym,
+                                      "fallbacks": [], "cls": "crypto"}, True)
+            if not okl:
+                d.update(stage="30-day downtrend",
+                         detail=f"the {EMA_FILTER_LEN} EMA is {chg:+.2f}% "
+                                f"over {LONG_LOOKBACK_DAYS} days")
+                return d
         if REGIME_ON and sym:
             rg = regime_side({"symbol": sym, "hl_coin": sym,
                               "fallbacks": [], "cls": "crypto"})
@@ -3718,6 +3767,16 @@ def process_candle(asset, ast, candles, ha, i):
                     "skipped")
             continue
 
+        # THE 30-DAY TREND. A long into a multi-week decline is refused
+        # whatever the setup looks like on the hour.
+        ok_lt, chg = long_trend_ok(asset, want_long)
+        if not ok_lt:
+            if LOG_SKIPS:
+                log(f"{sym}: {direction} setup but the {EMA_FILTER_LEN} EMA "
+                    f"is {chg:+.2f}% over {LONG_LOOKBACK_DAYS} days - "
+                    "skipped")
+            continue
+
         # HIGHER-TIMEFRAME PERMISSION. A neutral or unreadable regime blocks
         # nothing; only an ACTIVE disagreement refuses the trade.
         if REGIME_ON:
@@ -4248,6 +4307,10 @@ def check_once():
                               # books HALF or the WHOLE position, and said
                               # "booking half" on a full close for two days
                               partial=HA_PARTIAL,
+                              # the dashboard froze cards at "stop hit,
+                              # closing" and waited forever for a close the
+                              # agent never makes when STOP_EXIT is off
+                              stop_exit=bool(STOP_EXIT),
                               tz=TIMEZONE,
                               last_scan_utc=datetime.now(timezone.utc)
                               .isoformat(timespec="seconds"))
