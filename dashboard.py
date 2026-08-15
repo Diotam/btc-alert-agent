@@ -417,7 +417,7 @@ def build_data():
     _ORDER = {"ready": 0, "no-wick bar forming": 1, "flipped": 2,
               "waiting for a cross": 2.5,
               "too far from EMA": 3, "range - EMA is flat": 3.5,
-              "BTC disagrees": 3.7, "shorts are off": 3.8, "4h trend disagrees": 3.9, "run was on the wrong side": 3.95, "trend already taken": 3.97, "too late in the trend": 3.98, "flat - MA going nowhere": 3.99, "waiting for a colour flip": 2.4, "MA disagrees": 3.96, "wrong side of EMA": 4, "wick too long": 5,
+              "BTC disagrees": 3.7, "shorts are off": 3.8, "4h trend disagrees": 3.9, "run was on the wrong side": 3.95, "trend already taken": 3.97, "too late in the trend": 3.98, "30-day downtrend": 3.985, "flat - MA going nowhere": 3.99, "waiting for a colour flip": 2.4, "MA disagrees": 3.96, "wrong side of EMA": 4, "wick too long": 5,
               "run was expanding": 6, "run too flat": 7,
               "run went nowhere": 8, "run too short": 9, "missed": 10}
     gates.sort(key=lambda x: (_ORDER.get(x.get("stage"), 9), x["sym"]))
@@ -814,7 +814,12 @@ function render(d){
    // STOP still fully closes a trade, and only before the partial: after
    // it the stop sits at entry, so hitting it is a breakeven close.
    if(window.__froz[fkey]==='tp') delete window.__froz[fkey];   // stale latch
-   if(t.r!=null && t.r<=-1) window.__froz[fkey]='sl';
+   // ...and NO stop freeze either when STOP_EXIT is off. Touching the stop
+   // level then closes nothing, so latching left seven cards stuck reading
+   // "stop hit - closing" against a confirmation that never comes.
+   const SLEXIT=!(d._meta&&d._meta.stop_exit===false);
+   if(!SLEXIT) delete window.__froz[fkey];
+   if(SLEXIT && t.r!=null && t.r<=-1) window.__froz[fkey]='sl';
    const slDone=window.__froz[fkey]==='sl';
    const showR=slDone?-1:t.r;
    const showPnl=slDone?sgn*(t.stop-t.entry)/t.entry*100:t.pnl;
