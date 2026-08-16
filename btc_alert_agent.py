@@ -262,6 +262,18 @@ REGIME_TF = "4h"                   # timeframe the permission EMA lives on.
 REGIME_EMA_LEN = 50                # 50 x 4h = 200 hours, about 8 days. Slow
                                    # enough that a two-day pullback does not
                                    # revoke permission
+REGIME_SLOPE_BARS = 2              # the regime EMA must also be MOVING, not
+                                   # just have price on one side of it. His
+                                   # call 15 Aug: a short needs a genuine
+                                   # downtrend, and price can sit below a
+                                   # RISING EMA during a pullback inside an
+                                   # uptrend. Measured over this many
+                                   # REGIME_TF bars - 2 x 4h = EIGHT HOURS
+REGIME_SLOPE_PCT = 0.0             # how far it must have moved, as a % of the
+                                   # EMA. 0 means "any movement in the right
+                                   # direction"; raise it to demand a steeper
+                                   # trend. A FLAT EMA returns 0 and blocks
+                                   # NOTHING, as before
 _REGIME = {}                       # per-symbol cache, TTL below
 REGIME_TTL_S = 300                 # one higher-TF fetch per symbol per scan
 ALLOW_SHORTS = True                # take the short side at all. FALSE as of
@@ -1454,10 +1466,20 @@ def regime_side(asset):
             _, h1 = fetch(asset, "1h", LOOKBACK.get("1h", 400))
             factor = max(1, MS.get(REGIME_TF, MS["1h"]) // MS["1h"])
             cs = resample(h1, factor) if h1 else None
-        if cs and len(cs) >= REGIME_EMA_LEN + 2:
-            e = ema([c["c"] for c in cs], REGIME_EMA_LEN)[-1]
+        if cs and len(cs) >= REGIME_EMA_LEN + REGIME_SLOPE_BARS + 2:
+            series = ema([c["c"] for c in cs], REGIME_EMA_LEN)
+            e = series[-1]
             px = cs[-1]["c"]
             side = 1 if px > e else -1
+            # POSITION IS NOT A TREND. Price can sit below a RISING EMA in a
+            # pullback, which used to permit a short into an uptrend. The
+            # line has to be moving the same way before the side counts.
+            if REGIME_SLOPE_BARS and len(series) > REGIME_SLOPE_BARS:
+                then = series[-1 - REGIME_SLOPE_BARS]
+                if then:
+                    chg = (e - then) / then * 100
+                    if abs(chg) < REGIME_SLOPE_PCT or (chg > 0) != (side > 0):
+                        side = 0        # flat, or disagreeing - permit both
     except Exception as ex:
         log(f"{sym}: regime read failed ({type(ex).__name__}) - not gating")
         side = 0
