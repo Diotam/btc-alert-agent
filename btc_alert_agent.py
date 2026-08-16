@@ -364,7 +364,7 @@ SHA_FILTER = True                  # SMOOTHED HA AS A FILTER over regular HA,
                                    # candles that closed a short and cost the
                                    # trend - smoothed HA stays red through
                                    # them, so the trade survives
-SHA_ON_ENTRY = False               # does the smoothed series have to agree
+SHA_ON_ENTRY = True                # does the smoothed series have to agree
                                    # to ENTER? FALSE as of 12 Aug, his call:
                                    # the flip alone opens the trade. Smoothed
                                    # HA is only there to hold the position
