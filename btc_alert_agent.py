@@ -335,6 +335,17 @@ FLIP_NEEDS_NOWICK = False          # must a no-wick candle follow the flip
                                    # refusing turns outright when the flip
                                    # candle happened to carry a tail. True
                                    # restores the arm-then-trigger sequence
+FLIP_EXIT = True                   # CLOSE ON THE HA FLIP, independently of
+                                   # FLIP_MODE. His call 15 Aug. With
+                                   # STOP_EXIT False the 1.5R target was the
+                                   # ONLY way out, so a losing trade sat open
+                                   # forever - the backtests all booked those
+                                   # as -1R stop-outs, which the live engine
+                                   # never does. This is the exit that ends
+                                   # losers. The SMOOTHED series must agree,
+                                   # or a single opposite candle closes the
+                                   # trade: on HYPE that turned +10.2% into
+                                   # -2.0% across the same decline
 SHA_FILTER = True                  # SMOOTHED HA AS A FILTER over regular HA,
                                    # his idea 12 Aug. Regular HA still arms,
                                    # enters and exits; the SMOOTHED series
@@ -2485,9 +2496,10 @@ def process_open_trade(asset, trade, candles, ha, last_closed_t):
                           else (c["h"] >= trade["stop"])):
             kind = _stop_kind(trade)
             return _close_trade(asset, trade, trade["stop"], kind, event_t)
-        # FLIP_MODE: the ONLY exit is the HA colour flipping against the
-        # trade. The next scan's flip_signal then arms the other side.
-        if FLIP_MODE:
+        # THE HA FLIP EXIT. Under FLIP_MODE it is the ONLY exit; with
+        # FLIP_EXIT it runs ALONGSIDE the target, closing the trades that
+        # never reach it.
+        if FLIP_MODE or FLIP_EXIT:
             idx = next((n for n, x in enumerate(candles)
                         if x["t"] == c["t"]), None)
             if idx is not None and idx >= 1:
@@ -2501,7 +2513,8 @@ def process_open_trade(asset, trade, candles, ha, last_closed_t):
                         f"{'red' if long else 'green'} - closing the "
                         f"{trade['verdict']} at ${fmt_px(c['c'])}")
                     return _close_trade(asset, trade, c["c"], "FLIP", event_t)
-            continue
+            if FLIP_MODE:
+                continue        # flip mode has no target to fall through to
 
         # CROSS_MODE: the ONLY exit is price crossing back. Checked before
         # the trail, which is inert here anyway - there is no R target for
