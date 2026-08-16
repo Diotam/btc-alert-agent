@@ -262,7 +262,7 @@ REGIME_TF = "4h"                   # timeframe the permission EMA lives on.
 REGIME_EMA_LEN = 50                # 50 x 4h = 200 hours, about 8 days. Slow
                                    # enough that a two-day pullback does not
                                    # revoke permission
-REGIME_SLOPE_BARS = 2              # the regime EMA must also be MOVING, not
+REGIME_SLOPE_BARS = 0              # the regime EMA must also be MOVING, not
                                    # just have price on one side of it. His
                                    # call 15 Aug: a short needs a genuine
                                    # downtrend, and price can sit below a
