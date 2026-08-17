@@ -293,6 +293,24 @@ CROSS_TREND_GATE = True            # 16 Aug: LONGS need the 20 EMA's slope to
 CROSS_SLOPE_BARS = 5               # bars per slope window. 5 on 30m = 2.5h.
                                    # Two adjacent windows are compared, so
                                    # this needs 2x this many bars of history.
+CROSS_TRIGGER = "sha_flip"         # 17 Aug: WHAT OPENS THE TRADE.
+                                   #   "sha_flip"  - the SMOOTHED HA colour
+                                   #                 flip. Fires EARLY: the
+                                   #                 smoothed series turns
+                                   #                 before price clears a
+                                   #                 20-bar average.
+                                   #   "ema_cross" - the 8 Aug price/EMA20
+                                   #                 cross. LAGGING BY
+                                   #                 CONSTRUCTION - enough move
+                                   #                 has to pile up to drag
+                                   #                 price past the average of
+                                   #                 the last ten hours, which
+                                   #                 is why alerts kept landing
+                                   #                 at the END of trends.
+                                   # The EMA is now a FILTER (slope + flat
+                                   # zone), not the trigger. Everything else -
+                                   # volume, swing stop, 1.5R, the 3-bar
+                                   # expiry - is unchanged and shared.
 CROSS_MAX_TREND_AGE = 6            # 17 Aug: NO ENTRIES INTO A TREND ALREADY
                                    # UNDERWAY. The smoothed HA is the trend
                                    # read: if it has ALREADY been the trade's
@@ -382,16 +400,28 @@ REGIME_SLOPE_PCT = 0.0             # how far it must have moved, as a % of the
                                    # NOTHING, as before
 _REGIME = {}                       # per-symbol cache, TTL below
 REGIME_TTL_S = 300                 # one higher-TF fetch per symbol per scan
-ALLOW_SHORTS = True                # take the short side at all. FALSE as of
-                                   # 9 Aug, from 580 legs of his own ledger
-                                   # spanning 19 Jul - 9 Aug: LONGS made
-                                   # +82.61% at a 39% win rate while SHORTS
-                                   # lost -25.37% at 32% over a comparable
-                                   # 280 legs. THE CAVEAT: that window was a
-                                   # broadly rising market, so a long-only
-                                   # engine will look excellent in an uptrend
-                                   # and bleed in a downtrend. True restores
-                                   # both sides
+ALLOW_SHORTS = False               # take the short side at all. FALSE again
+                                   # as of 17 Aug, at his call, on the 580
+                                   # legs of his own ledger spanning 19 Jul -
+                                   # 9 Aug: LONGS made +82.61% at a 39% win
+                                   # rate while SHORTS lost -25.37% at 32%
+                                   # over a comparable 280 legs.
+                                   # THE CAVEAT, and it is not small: that
+                                   # window was a broadly rising market, so a
+                                   # long-only engine looks excellent in an
+                                   # uptrend and bleeds in a downtrend.
+                                   # THE CONTRADICTING MEASUREMENT: the
+                                   # full-year 2026 replay put long-only at
+                                   # -424.5R, against +444R for both sides
+                                   # with the regime filter - a ~870R swing on
+                                   # the same codebase. The three-week ledger
+                                   # sample simply did not contain the regime
+                                   # where the short side pays. Both numbers
+                                   # were taken on the 1h no-wick FLIP engine,
+                                   # not this one, so neither transfers
+                                   # cleanly - but the year is the larger
+                                   # sample and it points the other way.
+                                   # True restores both sides.
 HA_MODE = "reversal"                   # what the doji MEANS.
                                    #   "reversal"     - a doji ending a red
                                    #                    run turns us LONG.
@@ -1896,10 +1926,32 @@ def cross_vol_ok(candles, i, now_ms=None):
     return True if need is None else v >= need
 
 
+def sha_flip_signal(ast, candles, i):
+    """Trigger: the SMOOTHED HA colour on the last CLOSED bar, but only while
+    the run is still young.
+
+    Returns "LONG" / "SHORT" / None. run == 1 is the flip bar itself; up to
+    CROSS_MAX_TREND_AGE lets an entry still fire when volume or slope only
+    confirmed a bar or two after the turn. Past that the move is underway and
+    we would be buying the end of it, which is the whole complaint.
+
+    Read on i-1 because the forming bar's smoothed HA repaints.
+    """
+    side, run = sha_run_len(candles, i - 1)
+    if side is None:
+        return None
+    if run > max(1, CROSS_MAX_TREND_AGE):
+        return None
+    return "LONG" if side else "SHORT"
+
+
 def cross_signal(ast, candles, ha, i):
     """The crossover engine.
 
     Returns "LONG" / "SHORT" when this bar should ENTER, else None.
+
+    Under CROSS_TRIGGER = "sha_flip" the SMOOTHED HA flip opens the trade and
+    the EMA is only a filter. Under "ema_cross" the 8 Aug behaviour applies.
 
     16 Aug: the CROSS ITSELF enters. Under CROSS_INTRABAR the live price of
     the FORMING bar is compared against the last CLOSED bar's side, so the
@@ -1911,6 +1963,31 @@ def cross_signal(ast, candles, ha, i):
 
     CROSS_NEEDS_NOWICK restores the old 8 Aug two-step behaviour.
     """
+    if CROSS_TRIGGER == "sha_flip":
+        want = sha_flip_signal(ast, candles, i)
+        if not want:
+            return None
+        want_long = want == "LONG"
+        if not cross_vol_ok(candles, i):
+            if LOG_SKIPS:
+                v, need = cross_vol_need(candles, i)
+                log(f"{ast.get('sym','?')}: smoothed HA flipped "
+                    f"{'green' if want_long else 'red'} but volume {v:g} is "
+                    f"under the {('%g' % need) if need is not None else '0'} "
+                    f"required - no entry")
+            return None
+        ok, why = cross_trend_ok(candles, i, want_long)
+        if not ok:
+            if LOG_SKIPS:
+                log(f"{ast.get('sym','?')}: smoothed HA flipped "
+                    f"{'green' if want_long else 'red'} refused - {why}")
+            return None
+        _, run = sha_run_len(candles, i - 1)
+        ast["cross_why"] = (f"smoothed HA {SHA_IN},{SHA_OUT} turned "
+                            f"{'green' if want_long else 'red'} {run} bar"
+                            f"{'s' if run != 1 else ''} ago, {why}")
+        return want
+
     side = ema_cross_side(candles, i)
     prev = ema_cross_side(candles, i - 1)
     if side is None or prev is None:
@@ -4115,17 +4192,13 @@ def process_candle(asset, ast, candles, ha, i):
         # ways out are this and the stop.
         tp = ((entry + HA_RR * risk_t) if want_long
               else (entry - HA_RR * risk_t))
-        log(f"{sym}: CROSS ENTRY {side} at ${fmt_px(entry)} - price crossed "
-            f"{'above' if want_long else 'below'} the {EMA_FILTER_LEN} EMA "
-            f"on the {EMA_FILTER_TF} ({ast.get('cross_why','?')}), "
-            f"vol {c.get('v', 0)} - target "
+        log(f"{sym}: CROSS ENTRY {side} at ${fmt_px(entry)} - "
+            f"{ast.get('cross_why','?')}, vol {c.get('v', 0)} - target "
             f"${fmt_px(tp)} ({HA_RR}R), stop ${fmt_px(stop)}")
         return fire_entry(asset, ast, side, dict(c, c=entry), stop,
                           c["h"], c["l"], "CROSS",
-                          f"price crossed {'above' if want_long else 'below'} "
-                          f"the {EMA_FILTER_LEN} EMA on the {EMA_FILTER_TF} "
-                          f"with volume, {ast.get('cross_why','?')} - "
-                          f"{HA_RR}R target or the stop",
+                          f"{ast.get('cross_why','?')} - {HA_RR}R target, "
+                          f"the stop, or {CROSS_MAX_BARS} bars",
                           live_px=candles[-1]["c"], engine="cross",
                           candles=candles, idx=i, tp_override=tp)
 
