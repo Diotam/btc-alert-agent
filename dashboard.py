@@ -805,7 +805,12 @@ function render(d){
    const sgn=t.dir==='LONG'?1:-1;
    // each trade's true RR from its own prices (targets vary: 2R..3R/structure)
    const PARTIAL=(d._meta&&d._meta.partial!=null)?d._meta.partial:1;
-   const NOTGT=t.tp!=null&&t.entry&&Math.abs(t.tp-t.entry)/t.entry>2;
+   // a parked target is 100x entry for a LONG and 0.01x for a SHORT. The
+   // ratio catches both; the old difference test (|tp-entry|/entry > 2) only
+   // caught the long - a short's parked target sits 0.99 away and read as a
+   // real TP, so every short showed a bogus "% of the way to TP" and never
+   // reached the RREF branch below. Matches the agent's own test at L2133.
+   const NOTGT=t.tp!=null&&t.entry&&(t.tp/t.entry>2||t.tp/t.entry<0.5);
    const RRT=(t.tp!=null&&t.risk&&!NOTGT)?Math.abs((t.tp-t.entry)/t.risk)
      :((t.tp!=null&&t.entry!==t.stop)?Math.abs((t.tp-t.entry)/(t.entry-t.stop)):2);
    // freeze the card once TP or stop has traded - the agent confirms the
