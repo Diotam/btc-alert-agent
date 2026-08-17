@@ -121,7 +121,7 @@ ASSETS = [                         # used when DISCOVER_ALL = False, or when
 ]
 
 # --- strategy dials -------------------------------------------------------
-TF = "30m"                         # execution timeframe. 15m -> 30m on
+TF = "15m"                         # execution timeframe. 15m -> 30m on
                                    # 9 Aug: a 50 EMA on 15m was too fast
                                    # for these markets, so price crossed
                                    # it constantly without going
@@ -225,7 +225,7 @@ ENGINE_TAG = "ha"                  # which detector produced a trade. Written
                                    # Rows written before 6 Aug have no tag;
                                    # any analysis should read a missing tag
                                    # as "ha"
-CROSS_MODE = True                  # THE EMA-CROSSOVER ENGINE, 8 Aug, his
+CROSS_MODE = False                 # THE EMA-CROSSOVER ENGINE, 8 Aug, his
                                    # spec. REPLACES the HA flip engine when
                                    # on. Price crossing the 50 EMA arms a
                                    # side; the first NO-WICK candle after the
@@ -293,6 +293,58 @@ CROSS_TREND_GATE = True            # 16 Aug: LONGS need the 20 EMA's slope to
 CROSS_SLOPE_BARS = 5               # bars per slope window. 5 on 30m = 2.5h.
                                    # Two adjacent windows are compared, so
                                    # this needs 2x this many bars of history.
+# ===================== STOCH-DOJI ENGINE, his spec 17 Aug =====================
+# A doji ends an HA run, two clean candles the other way confirm the turn, and
+# the stochastic must be oversold WITHOUT strong momentum behind the fall.
+# This engine is SELF-CONTAINED: it does not use any of the 16-17 Aug cross
+# filters (volume pace, EMA slope, flat zone, trend age). CROSS_MODE = False
+# switches all of that off.
+SD_MODE = True                     # the stoch-doji engine owns entries
+STOCH_N = 14                       # %K lookback
+STOCH_SMOOTH_K = 1                 # 14,1,3 - the FAST stochastic, his pick
+STOCH_D = 3                        # %D = SMA of %K over this
+STOCH_LOW = 20.0                   # the "bottom line"
+STOCH_HIGH = 80.0                  # the top line, for shorts
+STOCH_CROSS_LOOKBACK = 6           # the oversold CROSS does not happen on the
+                                   # same bar as the entry - the doji plus two
+                                   # confirmations take at least three bars -
+                                   # so the cross is allowed to have happened
+                                   # this many bars back.
+SD_CONFIRM_BARS = 2                # candles the other way needed after the
+                                   # doji. His rule: each must have a wick on
+                                   # ONE side only (the side the trade runs
+                                   # WITH). A candle wicked at BOTH ends is
+                                   # SKIPPED, not counted and not fatal.
+SD_CONFIRM_WINDOW = 8              # give up if two clean candles have not
+                                   # appeared within this many bars.
+# ---- WEAK vs STRONG momentum. His definition: weak = the prior HA run was
+# SHORT and SHALLOW. A long deep fall is a strong one and we stay out.
+# NOTE THE REVERSAL: on 17 Aug morning the rule was "enter after a STRONG
+# downtrend flip" and CROSS_REVERSAL_MIN_BARS/PCT were MINIMUMS. These are
+# MAXIMUMS. The two specs are opposites; this one is live.
+SD_WEAK_MAX_BARS = 8               # prior opposite run at most this long
+SD_WEAK_MAX_PCT = 2.0              # ...and moved at most this far, in %
+# =============================================================================
+
+CROSS_REVERSAL_ON = True           # 17 Aug: ENTER AFTER A STRONG DOWNTREND
+                                   # HA COLOUR FLIP. This DELIBERATELY
+                                   # OVERRIDES the slope gate, which would
+                                   # otherwise refuse the setup as
+                                   # "downtrend still steepening" - a flip out
+                                   # of a downtrend is counter-trend by
+                                   # definition, and earlier today that was
+                                   # the thing being screened OUT. It is now
+                                   # the thing being screened FOR.
+                                   # The slope/flat gates still apply to
+                                   # NON-reversal entries.
+CROSS_REVERSAL_MIN_BARS = 6        # the prior opposite run must be at least
+                                   # this many smoothed-HA bars. "Strong"
+                                   # means sustained, not a two-bar dip.
+CROSS_REVERSAL_MIN_PCT = 2.0       # ...AND price must have moved at least
+                                   # this far against us across that run, in
+                                   # %. Bars alone would pass a long slow
+                                   # drift; this is what makes it a downtrend
+                                   # rather than a slope.
 CROSS_TRIGGER = "sha_flip"         # 17 Aug: WHAT OPENS THE TRADE.
                                    #   "sha_flip"  - the SMOOTHED HA colour
                                    #                 flip. Fires EARLY: the
@@ -1830,6 +1882,210 @@ def cross_age_ok(candles, i, want_long):
                   + ("s" if bars != 1 else ""))
 
 
+def stoch_kd(candles, i):
+    """(%K, %D) of the FAST stochastic at bar i, or (None, None).
+
+    raw %K = 100 * (close - lowest low N) / (highest high N - lowest low N)
+    %K     = SMA(raw %K, STOCH_SMOOTH_K)      -- 1 means raw, the fast form
+    %D     = SMA(%K, STOCH_D)
+    """
+    need = STOCH_N + STOCH_SMOOTH_K + STOCH_D
+    if i < need or i >= len(candles):
+        return None, None
+    raws = []
+    for j in range(i - STOCH_SMOOTH_K - STOCH_D + 1, i + 1):
+        w = candles[j - STOCH_N + 1:j + 1]
+        hh = max(x["h"] for x in w)
+        ll = min(x["l"] for x in w)
+        rng = hh - ll
+        raws.append(50.0 if rng <= 0
+                    else (candles[j]["c"] - ll) / rng * 100.0)
+    ks = []
+    for j in range(STOCH_SMOOTH_K - 1, len(raws)):
+        seg = raws[j - STOCH_SMOOTH_K + 1:j + 1]
+        ks.append(sum(seg) / len(seg))
+    if len(ks) < STOCH_D:
+        return None, None
+    return ks[-1], sum(ks[-STOCH_D:]) / STOCH_D
+
+
+def stoch_crossed(candles, i, want_long):
+    """Did %K cross THROUGH the band edge within STOCH_CROSS_LOOKBACK bars
+    ending at i? Long wants a cross DOWN through STOCH_LOW."""
+    line = STOCH_LOW if want_long else STOCH_HIGH
+    for j in range(max(1, i - STOCH_CROSS_LOOKBACK + 1), i + 1):
+        k_now, _ = stoch_kd(candles, j)
+        k_prev, _ = stoch_kd(candles, j - 1)
+        if k_now is None or k_prev is None:
+            continue
+        if want_long and k_prev >= line and k_now < line:
+            return True, k_now
+        if not want_long and k_prev <= line and k_now > line:
+            return True, k_now
+    k_now, _ = stoch_kd(candles, i)
+    return False, k_now
+
+
+def ha_prior_run(ha, i):
+    """(side, bars, first_index) of the HA run ending at bar i."""
+    if i < 1:
+        return None, 0, i
+    side = ha_green(ha[i])
+    k = i
+    while k > 0 and ha_green(ha[k - 1]) == side:
+        k -= 1
+    return side, i - k + 1, k
+
+
+def sd_momentum_weak(candles, ha, doji_i, want_long):
+    """(weak, reason). His definition: weak = the run INTO the doji was short
+    AND shallow. A long deep fall is STRONG momentum and we stay out."""
+    side, bars, start = ha_prior_run(ha, doji_i - 1)
+    if side is None:
+        return False, "no prior run"
+    if side == want_long:
+        return False, "prior run is not the opposite direction"
+    p0, p1 = candles[start]["c"], candles[doji_i - 1]["c"]
+    pct = ((p1 - p0) / p0 * 100.0) if p0 else 0.0
+    moved = abs(pct)
+    if bars > SD_WEAK_MAX_BARS:
+        return False, (f"prior run {bars} bars > {SD_WEAK_MAX_BARS} - strong "
+                       f"momentum")
+    if moved > SD_WEAK_MAX_PCT:
+        return False, (f"prior run moved {pct:+.2f}% > {SD_WEAK_MAX_PCT}% - "
+                       f"strong momentum")
+    return True, f"weak momentum - prior run {bars} bars, {pct:+.2f}%"
+
+
+def sd_is_doji(ha, i):
+    """A doji: body small relative to the biggest body of the run into it."""
+    _, bars, start = ha_prior_run(ha, i - 1)
+    if bars < 1:
+        return False
+    biggest = max(ha_body(ha[k]) for k in range(start, i))
+    if biggest <= 0:
+        return False
+    return ha_body(ha[i]) <= HA_DOJI_FRACTION * biggest
+
+
+def sd_signal(ast, candles, ha, i):
+    """Returns "LONG" / "SHORT" to ENTER, else None.
+
+    His 17 Aug spec, judged on CLOSED bars only (i-1 is the last closed):
+      1. a DOJI ends the run
+      2. then SD_CONFIRM_BARS candles the other way, each with a wick on ONE
+         side only - the side the trade runs WITH. Both-ended candles are
+         SKIPPED, not counted, not fatal. A wrong-coloured clean candle
+         RESETS the search.
+      3. the stochastic crossed the band edge within STOCH_CROSS_LOOKBACK
+      4. the run into the doji was SHORT and SHALLOW - weak momentum
+    """
+    last = i - 1
+    if last < STOCH_N + STOCH_D + SD_CONFIRM_WINDOW + 5:
+        return None
+    # find the most recent doji inside the confirmation window
+    for d in range(last - 1, last - 1 - SD_CONFIRM_WINDOW, -1):
+        if d < 1 or not sd_is_doji(ha, d):
+            continue
+        prior_side = ha_green(ha[d - 1])
+        want_long = not prior_side          # reversal: red run -> LONG
+        if not ALLOW_SHORTS and not want_long:
+            return None
+        count = 0
+        ok = True
+        for k in range(d + 1, last + 1):
+            c = ha[k]
+            up = ha_wick(c, upper=True)
+            dn = ha_wick(c, upper=False)
+            body = ha_body(c)
+            tol = (HA_NOWICK_TOL_PCT / 100.0) * body if body > 0 else 0.0
+            if body <= 0:
+                continue
+            if up > tol and dn > tol:
+                continue                    # wicked BOTH ends - skip it
+            if ha_green(c) != want_long:
+                ok = False
+                break                       # wrong way - the turn failed
+            if not no_wick(c, want_long):
+                continue                    # wick on the wrong side - skip
+            count += 1
+            if count >= SD_CONFIRM_BARS:
+                break
+        if not ok or count < SD_CONFIRM_BARS:
+            continue
+        crossed, kval = stoch_crossed(candles, last, want_long)
+        if not crossed:
+            if LOG_SKIPS:
+                log(f"{ast.get('sym','?')}: doji + {count} confirms but the "
+                    f"stochastic did not cross "
+                    f"{'below' if want_long else 'above'} "
+                    f"{STOCH_LOW if want_long else STOCH_HIGH} "
+                    f"(%K {kval if kval is None else round(kval, 1)})")
+            return None
+        weak, why = sd_momentum_weak(candles, ha, d, want_long)
+        if not weak:
+            if LOG_SKIPS:
+                log(f"{ast.get('sym','?')}: doji + confirms + stochastic but "
+                    f"{why} - no entry")
+            return None
+        ast["sd_why"] = (f"doji then {count} clean candle"
+                         f"{'s' if count != 1 else ''}, %K {kval:.1f} crossed "
+                         f"{'below' if want_long else 'above'} "
+                         f"{STOCH_LOW if want_long else STOCH_HIGH}, {why}")
+        return "LONG" if want_long else "SHORT"
+    return None
+
+
+def sha_prior_run(candles, i):
+    """(side, bars, pct) of the smoothed-HA run IMMEDIATELY BEFORE the run
+    that bar i belongs to. pct is the signed price change across it.
+
+    Used to ask "how strong was the move we are flipping out of".
+    """
+    if i < 2:
+        return None, 0, 0.0
+    sha = smoothed_ha(candles[:i + 1], SHA_IN, SHA_OUT)
+    if not sha or len(sha) < 3:
+        return None, 0, 0.0
+    cur = ha_green(sha[-1])
+    k = len(sha) - 2
+    while k >= 0 and ha_green(sha[k]) == cur:
+        k -= 1
+    if k < 1:
+        return None, 0, 0.0
+    prior_side, end = ha_green(sha[k]), k
+    while k >= 0 and ha_green(sha[k]) == prior_side:
+        k -= 1
+    start = k + 1
+    p0, p1 = candles[start]["c"], candles[end]["c"]
+    pct = ((p1 - p0) / p0 * 100) if p0 else 0.0
+    return prior_side, end - start + 1, pct
+
+
+def cross_reversal_ok(candles, i, want_long):
+    """(allowed, reason). A FRESH flip out of a STRONG opposite run."""
+    if not CROSS_REVERSAL_ON:
+        return False, "reversal allowance off"
+    side, bars = sha_run_len(candles, i - 1)
+    if side is None or side != want_long:
+        return False, "smoothed HA does not agree"
+    if bars > max(1, CROSS_MAX_TREND_AGE):
+        return False, f"flip is {bars} bars old"
+    pside, pbars, ppct = sha_prior_run(candles, i - 1)
+    if pside is None or pside == want_long:
+        return False, "no opposite run before this"
+    if pbars < CROSS_REVERSAL_MIN_BARS:
+        return False, (f"prior run only {pbars} bars, needs "
+                       f"{CROSS_REVERSAL_MIN_BARS}")
+    moved = -ppct if want_long else ppct
+    if moved < CROSS_REVERSAL_MIN_PCT:
+        return False, (f"prior {'downtrend' if want_long else 'uptrend'} only "
+                       f"{moved:+.2f}%, needs {CROSS_REVERSAL_MIN_PCT}%")
+    return True, (f"flip out of a {pbars}-bar "
+                  f"{'downtrend' if want_long else 'uptrend'} of "
+                  f"{ppct:+.2f}%")
+
+
 def cross_slope_pair(candles, i):
     """(slope_now, slope_prior) of the cross EMA as a % of itself, measured on
     CLOSED bars only.
@@ -1865,6 +2121,11 @@ def cross_trend_ok(candles, i, want_long):
     # CHOP GATE, before direction is considered at all. A flat EMA satisfies
     # both >= 0 and <= 0, so without this the deadest markets are the most
     # permissive ones.
+    # REVERSAL FIRST: a flip out of a strong opposite run is allowed even
+    # though the slope still points the other way. That is the whole point.
+    rok, rwhy = cross_reversal_ok(candles, i, want_long)
+    if rok:
+        return True, rwhy
     if CROSS_FLAT_PCT:
         turning = (prior is not None and abs(now - prior) >= CROSS_TURN_MIN)
         if abs(now) < CROSS_FLAT_PCT and not turning:
@@ -4155,6 +4416,43 @@ def process_candle(asset, ast, candles, ha, i):
     # Replaces the flip engine entirely when on. No run gates, no fade, no
     # BTC vote - the cross IS the trend read, so layering the old filters on
     # top would refuse the very setups it exists to take.
+    # ---------------- STOCH-DOJI ENGINE (his 17 Aug spec) ----------------
+    if SD_MODE:
+        ast["sym"] = sym
+        side = sd_signal(ast, candles, ha, i)
+        if not side:
+            return False
+        want_long = side == "LONG"
+        if not ALLOW_SHORTS and not want_long:
+            return False
+        entry = c["o"] if ENTRY_AT_OPEN else c["c"]
+        lo = max(0, i - stop_bars())
+        win = candles[lo:i]
+        if not win:
+            return False
+        stop = (min(x["l"] for x in win) if want_long
+                else max(x["h"] for x in win))
+        risk_t = abs(entry - stop)
+        if risk_t <= 0:
+            return False
+        if MIN_STOP_PCT and entry and risk_t / entry * 100 < MIN_STOP_PCT:
+            if LOG_SKIPS:
+                log(f"{sym}: stoch-doji {side} stop "
+                    f"{risk_t / entry * 100:.3f}% under the {MIN_STOP_PCT}% "
+                    f"floor - skipped")
+            return False
+        tp = ((entry + HA_RR * risk_t) if want_long
+              else (entry - HA_RR * risk_t))
+        log(f"{sym}: STOCH-DOJI ENTRY {side} at ${fmt_px(entry)} - "
+            f"{ast.get('sd_why','?')} - target ${fmt_px(tp)} ({HA_RR}R), "
+            f"stop ${fmt_px(stop)}")
+        return fire_entry(asset, ast, side, dict(c, c=entry), stop,
+                          c["h"], c["l"], "STOCHDOJI",
+                          f"{ast.get('sd_why','?')} - {HA_RR}R target or the "
+                          f"stop",
+                          live_px=candles[-1]["c"], engine="sd",
+                          candles=candles, idx=i, tp_override=tp)
+
     if CROSS_MODE:
         ast["sym"] = sym
         side = cross_signal(ast, candles, ha, i)
