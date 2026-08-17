@@ -452,7 +452,14 @@ REGIME_SLOPE_PCT = 0.0             # how far it must have moved, as a % of the
                                    # NOTHING, as before
 _REGIME = {}                       # per-symbol cache, TTL below
 REGIME_TTL_S = 300                 # one higher-TF fetch per symbol per scan
-ALLOW_SHORTS = False               # take the short side at all. FALSE again
+ALLOW_SHORTS = True                # 17 Aug, LATER: back ON for the stoch-doji
+                                   # engine, which mirrors the setup - a doji
+                                   # ending a GREEN run with two clean red
+                                   # candles and %K crossing ABOVE 80 is the
+                                   # short. The long-only window earlier today
+                                   # lasted about an hour and was never
+                                   # deployed.
+                                   # take the short side at all. FALSE earlier
                                    # as of 17 Aug, at his call, on the 580
                                    # legs of his own ledger spanning 19 Jul -
                                    # 9 Aug: LONGS made +82.61% at a 39% win
@@ -828,7 +835,12 @@ STOP_TF = "1h"                     # TIMEFRAME the stop extreme is measured
                                    # groups are ALIGNED so the last one ends
                                    # at the flip. Set to TF for the old
                                    # behaviour
-STOP_LOOKBACK = 12                 # FLOOR on the stop window, COUNTED IN
+STOP_LOOKBACK = 6                  # 17 Aug: 12 -> 6. A SIX-HOUR swing stop,
+                                   # his call, for the 15m stoch-doji engine.
+                                   # At 12 on 15m bars this sliced 48 candles
+                                   # back, so R was a half-day range and 1.5R
+                                   # sat a long way from a 15m reversal entry.
+                                   # FLOOR on the stop window, COUNTED IN
                                    # STOP_TF BARS - so 1 means one hour, not
                                    # one 15m candle. It was 5 when the window
                                    # was measured on TF; left at 5 after the
@@ -3265,6 +3277,9 @@ def process_open_trade(asset, trade, candles, ha, last_closed_t):
             # AFTER the target test on purpose: a bar that reaches 1.5R on the
             # deadline books TP. Counted in TF bars from the ENTRY bar
             # inclusive - fire_entry sets opened_t to the entry candle's t.
+            # NOT "sd". The bar-count expiry is a CROSS-ENGINE filter and the
+            # 17 Aug spec says nothing from the old engine carries over. A
+            # stoch-doji trade exits on its target or its stop, nothing else.
             if CROSS_MAX_BARS and trade.get("engine") == "cross":
                 span = MS.get(TF, 0)
                 opened = trade.get("opened_t") or 0
