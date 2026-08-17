@@ -293,6 +293,18 @@ CROSS_TREND_GATE = True            # 16 Aug: LONGS need the 20 EMA's slope to
 CROSS_SLOPE_BARS = 5               # bars per slope window. 5 on 30m = 2.5h.
                                    # Two adjacent windows are compared, so
                                    # this needs 2x this many bars of history.
+CROSS_MAX_TREND_AGE = 6            # 17 Aug: NO ENTRIES INTO A TREND ALREADY
+                                   # UNDERWAY. The smoothed HA is the trend
+                                   # read: if it has ALREADY been the trade's
+                                   # colour for more than this many bars, the
+                                   # move started without us and the entry is
+                                   # buying the end of it. His SOXL crossed
+                                   # Sunday 19:00 and was still "entering" 40
+                                   # bars later at the top; HEMI fired ~15
+                                   # bars into its run. 0 disables the gate.
+                                   # Measured at SHA_IN/SHA_OUT - see the note
+                                   # there, the agent is on 5,5 and his charts
+                                   # are on 10,10, which give DIFFERENT ages.
 CROSS_FLAT_PCT = 0.20              # 17 Aug: DEAD ZONE. If the EMA's slope is
                                    # inside +/- this and is not materially
                                    # moving, the market is CHOP and NOTHING
@@ -473,8 +485,15 @@ SHA_ON_ENTRY = True                # does the smoothed series have to agree
                                    # through noise candles and step aside at
                                    # the real turn - an exit filter, not an
                                    # entry one
-SHA_IN = 5                         # the smoothing, his 5,5
-SHA_OUT = 5
+SHA_IN = 10                        # 17 Aug: was 5,5. Moved to 10,10 to match
+SHA_OUT = 10                       # the TradingView charts he actually reads
+                                   # ("Smoothed Ha Candles 10 10"). This is a
+                                   # SLOWER series: it turns later and holds a
+                                   # colour longer, so CROSS_MAX_TREND_AGE
+                                   # counts differently than it did at 5,5.
+                                   # Also feeds sha_side, so the flip engine's
+                                   # SHA_ON_ENTRY and flip exit change with it
+                                   # - both currently off under CROSS_MODE.
 FLIP_MODE = False                  # THE 4h FLIP ENGINE, his spec 12 Aug.
                                    # ALWAYS IN THE MARKET: an HA colour flip
                                    # ARMS a side, the first no-wick candle in
@@ -1744,6 +1763,43 @@ def ema_cross_side(candles, i):
     return 1 if px > e else -1
 
 
+def sha_run_len(candles, i, max_look=300):
+    """(side, bars): the SMOOTHED HA colour at bar i and how many consecutive
+    bars it has held that colour. side True green / False red / None unknown.
+    """
+    if i < 1:
+        return None, 0
+    sha = smoothed_ha(candles[:i + 1], SHA_IN, SHA_OUT)
+    if not sha:
+        return None, 0
+    side = ha_green(sha[-1])
+    n = 1
+    for k in range(len(sha) - 2, max(-1, len(sha) - 2 - max_look), -1):
+        if ha_green(sha[k]) != side:
+            break
+        n += 1
+    return side, n
+
+
+def cross_age_ok(candles, i, want_long):
+    """(allowed, reason). Refuse a cross into a trend that is already running.
+
+    Judged on the LAST CLOSED bar, like the slope, because the forming bar's
+    smoothed HA repaints.
+    """
+    if not CROSS_MAX_TREND_AGE:
+        return True, "age gate off"
+    side, bars = sha_run_len(candles, i - 1)
+    if side is None:
+        return True, "no smoothed HA read"
+    colour = "green" if side else "red"
+    if side == want_long and bars > CROSS_MAX_TREND_AGE:
+        return False, (f"trend already underway - smoothed HA {colour} for "
+                       f"{bars} bars, limit is {CROSS_MAX_TREND_AGE}")
+    return True, (f"smoothed HA {colour} {bars} bar"
+                  + ("s" if bars != 1 else ""))
+
+
 def cross_slope_pair(candles, i):
     """(slope_now, slope_prior) of the cross EMA as a % of itself, measured on
     CLOSED bars only.
@@ -1877,7 +1933,13 @@ def cross_signal(ast, candles, ha, i):
                     log(f"{ast.get('sym','?')}: EMA cross "
                         f"{'up' if side > 0 else 'down'} refused - {why}")
                 return None
-            ast["cross_why"] = why
+            aok, awhy = cross_age_ok(candles, i, side > 0)
+            if not aok:
+                if LOG_SKIPS:
+                    log(f"{ast.get('sym','?')}: EMA cross "
+                        f"{'up' if side > 0 else 'down'} refused - {awhy}")
+                return None
+            ast["cross_why"] = f"{why}, {awhy}"
             return want
         arm = {"side": want, "t": candles[i]["t"]}
         ast["cross_arm"] = arm
