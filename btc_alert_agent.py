@@ -293,6 +293,20 @@ CROSS_TREND_GATE = True            # 16 Aug: LONGS need the 20 EMA's slope to
 CROSS_SLOPE_BARS = 5               # bars per slope window. 5 on 30m = 2.5h.
                                    # Two adjacent windows are compared, so
                                    # this needs 2x this many bars of history.
+CROSS_FLAT_PCT = 0.20              # 17 Aug: DEAD ZONE. If the EMA's slope is
+                                   # inside +/- this and is not materially
+                                   # moving, the market is CHOP and NOTHING
+                                   # enters. Without it a flat EMA satisfies
+                                   # slope >= 0 AND slope <= 0, so sideways
+                                   # markets permitted entries in BOTH
+                                   # directions - ENA, his 17 Aug example.
+                                   # A slope near zero that is CHANGING by at
+                                   # least CROSS_TURN_MIN still counts as a
+                                   # turn and is allowed through, otherwise
+                                   # this would also kill every "beginning a
+                                   # trend" entry, which by definition has a
+                                   # slope near zero. 0 disables the zone.
+                                   # CALIBRATE IT - run slopes.py on the box.
 CROSS_TURN_MIN = 0.25              # how much the slope must actually MOVE, in
                                    # percentage POINTS, to count as turning. A
                                    # bare now-vs-prior test has a hole: slope
@@ -1762,6 +1776,14 @@ def cross_trend_ok(candles, i, want_long):
     now, prior = cross_slope_pair(candles, i)
     if now is None:
         return True, "not enough history to judge the slope"
+    # CHOP GATE, before direction is considered at all. A flat EMA satisfies
+    # both >= 0 and <= 0, so without this the deadest markets are the most
+    # permissive ones.
+    if CROSS_FLAT_PCT:
+        turning = (prior is not None and abs(now - prior) >= CROSS_TURN_MIN)
+        if abs(now) < CROSS_FLAT_PCT and not turning:
+            return False, (f"EMA is flat - slope {now:+.3f}% inside the "
+                           f"+/-{CROSS_FLAT_PCT}% dead zone and not turning")
     if want_long:
         if now >= 0:
             return True, f"uptrend, slope {now:+.3f}%"
