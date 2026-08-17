@@ -615,6 +615,10 @@ let TVINT='15';   // replaced from _meta.tf on the first poll
 let TZ='America/Chicago';   // replaced from _meta.tz on the first poll
 const TVLAYOUT=__TV_LAYOUT__;
 // a saved layout carries its indicators; a bare /chart/ does not
+// ONE reference for both the card bar and the graph. They were hardcoded
+// to 3 separately, which is where the scale came from when the flip engine
+// had no target at all.
+const RREF=1.5;
 const TVBASE='https://www.tradingview.com/chart/'+(TVLAYOUT?TVLAYOUT+'/':'')+'?symbol=';
 // inline onclick handlers run in GLOBAL scope, so these must live at the top
 // level - defined inside a render function they are invisible to the cards.
@@ -747,7 +751,7 @@ function render(d){
     // uses. Without this LIT sat at 0% while its card read 0.05R in profit.
     const prog=t=>{
       const parked=t.tp!=null&&t.entry&&(t.tp/t.entry>2||t.tp/t.entry<0.5);
-      if(parked) return Math.min(100,Math.abs(t.r||0)/3*100);
+      if(parked) return Math.min(100,Math.abs(t.r||0)/RREF*100);
       const rrt=(t.tp!=null&&t.risk)?Math.abs((t.tp-t.entry)/t.risk):(t.rr||1.5);
       return t.r>=0?Math.min(100,t.r/rrt*100):Math.min(100,-t.r*100);
     };
@@ -846,7 +850,7 @@ function render(d){
    // meaningless. The bar instead shows how far the move has run in R
    // against a 3R reference - a full bar means a 3R move, not an exit.
    const rp=showR==null?0
-     :NOTGT?Math.max(0,Math.min(100,Math.abs(showR)/3*100))
+     :NOTGT?Math.max(0,Math.min(100,Math.abs(showR)/RREF*100))
      :showR>=0?Math.max(0,Math.min(100,showR/RRT*100))
      :Math.max(0,Math.min(100,-showR*100));
    const rc=showR==null?'#8b949e':showR>=0?'#3fb950':'#f85149';
