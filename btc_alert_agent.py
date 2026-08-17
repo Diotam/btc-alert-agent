@@ -258,7 +258,50 @@ CROSS_INTRABAR = True              # do NOT wait for the 30m close. Compare
                                    # EMA repaints intrabar, since the forming
                                    # bar's live close is inside its own EMA.
 CROSS_NEEDS_VOL = True             # no volume on the bar, no entry.
-CROSS_MIN_VOL = 0.0                # v must be STRICTLY greater than this.
+CROSS_MIN_VOL = 0.0                # absolute floor. v must be STRICTLY
+                                   # greater than this. Kept at 0 - an
+                                   # absolute volume number is not comparable
+                                   # across BTC and kPEPE, so the real gate is
+                                   # the multiple below.
+CROSS_VOL_MULT = 1.0               # volume must reach this multiple of the
+                                   # symbol's OWN recent average. 1.0 = at
+                                   # least average, 2.0 = twice average. This
+                                   # scales across all 48 markets where an
+                                   # absolute floor cannot. 0 disables it and
+                                   # leaves only CROSS_MIN_VOL.
+CROSS_VOL_LEN = 20                 # bars in that average.
+CROSS_TREND_GATE = True            # 16 Aug: LONGS need the 20 EMA's slope to
+                                   # be >= 0 (an uptrend) or negative and
+                                   # RISING (beginning one). SHORTS mirror it.
+                                   # A cross into a trend that is still
+                                   # steepening the OTHER way is refused - the
+                                   # counter-trend pop, which is what a failed
+                                   # breakout looks like even with volume.
+CROSS_SLOPE_BARS = 5               # bars per slope window. 5 on 30m = 2.5h.
+                                   # Two adjacent windows are compared, so
+                                   # this needs 2x this many bars of history.
+CROSS_TURN_MIN = 0.25              # how much the slope must actually MOVE, in
+                                   # percentage POINTS, to count as turning. A
+                                   # bare now-vs-prior test has a hole: slope
+                                   # is a % of the EMA, so a steady LINEAR
+                                   # uptrend shows a slowly DECAYING % slope
+                                   # (+2.516 -> +2.471) and read as "beginning
+                                   # a downtrend", permitting shorts in a
+                                   # healthy uptrend. This deadband kills that.
+CROSS_ALLOW_TURN = True            # the "or beginning one" half. False makes
+                                   # it slope-sign only and refuses every
+                                   # reversal entry. NOTE: a slope requirement
+                                   # has been measured before on the flip
+                                   # engine and the data went AGAINST it -
+                                   # this wants a replay before it is trusted.
+CROSS_VOL_PRORATE = True           # the FORMING bar's volume accumulates from
+                                   # zero across the 30m, so judging it against
+                                   # a full-bar average would refuse every
+                                   # early entry and only admit trades near the
+                                   # close - silently undoing CROSS_INTRABAR.
+                                   # Scale the requirement by the fraction of
+                                   # the bar elapsed. Closed bars are judged
+                                   # against the full average.
 CROSS_STOP_SWING = True            # swing stop over stop_bars(), as the flip
                                    # engine uses, so 1.5R here means what it
                                    # means there. False falls back to the
@@ -1674,16 +1717,92 @@ def ema_cross_side(candles, i):
     return 1 if px > e else -1
 
 
-def cross_vol_ok(candles, i):
+def cross_slope_pair(candles, i):
+    """(slope_now, slope_prior) of the cross EMA as a % of itself, measured on
+    CLOSED bars only.
+
+    The forming bar repaints - its own live close is inside its EMA - so a
+    slope that included it would flip on every tick. Two ADJACENT windows are
+    compared so "turning" means the slope itself is improving, not merely that
+    price moved.
+    """
+    if not EMA_FILTER_LEN or i < 2:
+        return None, None
+    base = candles[:max(0, i - 1) + 1]
+    factor = max(1, MS.get(EMA_FILTER_TF, MS[TF]) // MS[TF])
+    higher = resample(base, factor)
+    n = max(1, CROSS_SLOPE_BARS)
+    if len(higher) < EMA_FILTER_LEN + 2 * n + 1:
+        return None, None
+    s = ema([c["c"] for c in higher], EMA_FILTER_LEN)
+    a, b, cc = s[-1], s[-1 - n], s[-1 - 2 * n]
+    now = ((a - b) / b * 100) if b else None
+    prior = ((b - cc) / cc * 100) if cc else None
+    return now, prior
+
+
+def cross_trend_ok(candles, i, want_long):
+    """(allowed, reason). Longs need slope >= 0, or negative and TURNING UP.
+    Shorts mirror it."""
+    if not CROSS_TREND_GATE:
+        return True, "trend gate off"
+    now, prior = cross_slope_pair(candles, i)
+    if now is None:
+        return True, "not enough history to judge the slope"
+    if want_long:
+        if now >= 0:
+            return True, f"uptrend, slope {now:+.3f}%"
+        if (CROSS_ALLOW_TURN and prior is not None
+                and now > prior + CROSS_TURN_MIN):
+            return True, (f"beginning an uptrend, slope {now:+.3f}% rising "
+                          f"from {prior:+.3f}%")
+        return False, (f"downtrend still steepening, slope {now:+.3f}%"
+                       + (f" from {prior:+.3f}%" if prior is not None else ""))
+    if now <= 0:
+        return True, f"downtrend, slope {now:+.3f}%"
+    if (CROSS_ALLOW_TURN and prior is not None
+            and now < prior - CROSS_TURN_MIN):
+        return True, (f"beginning a downtrend, slope {now:+.3f}% falling "
+                      f"from {prior:+.3f}%")
+    return False, (f"uptrend still steepening, slope {now:+.3f}%"
+                   + (f" from {prior:+.3f}%" if prior is not None else ""))
+
+
+def cross_vol_need(candles, i, now_ms=None):
+    """(volume_on_bar, volume_required) for the bar at i, or (v, None) when
+    there is not enough history to judge."""
+    try:
+        v = float(candles[i].get("v") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0, None
+    if not CROSS_VOL_MULT:
+        return v, None
+    lo = max(0, i - CROSS_VOL_LEN)
+    prior = [float(x.get("v") or 0.0) for x in candles[lo:i]]
+    prior = [x for x in prior if x > 0]
+    if len(prior) < 3:
+        return v, None                 # too little history - do not refuse
+    need = (sum(prior) / len(prior)) * CROSS_VOL_MULT
+    if CROSS_VOL_PRORATE and i == len(candles) - 1:
+        span = MS.get(TF, 0)
+        if span:
+            elapsed = (now_ms if now_ms is not None
+                       else int(time.time() * 1000)) - candles[i]["t"]
+            need *= min(1.0, max(0.05, elapsed / span))
+    return v, need
+
+
+def cross_vol_ok(candles, i, now_ms=None):
     """Volume gate. "No volume, no entry" - the bar being judged has to have
-    actually traded. Matters most for the xyz: synthetics, whose underlying
-    market shuts overnight and prints empty 30m bars."""
+    actually traded, and to have traded enough. Matters most for the xyz:
+    synthetics, whose underlying market shuts overnight and prints empty 30m
+    bars."""
     if not CROSS_NEEDS_VOL:
         return True
-    try:
-        return float(candles[i].get("v") or 0.0) > CROSS_MIN_VOL
-    except (TypeError, ValueError):
+    v, need = cross_vol_need(candles, i, now_ms)
+    if v <= CROSS_MIN_VOL:
         return False
+    return True if need is None else v >= need
 
 
 def cross_signal(ast, candles, ha, i):
@@ -1710,10 +1829,20 @@ def cross_signal(ast, candles, ha, i):
         if not CROSS_NEEDS_NOWICK:
             if not cross_vol_ok(candles, i):
                 if LOG_SKIPS:
+                    v, need = cross_vol_need(candles, i)
                     log(f"{ast.get('sym','?')}: EMA cross "
-                        f"{'up' if side > 0 else 'down'} but the bar has no "
-                        f"volume - no entry")
+                        f"{'up' if side > 0 else 'down'} but volume {v:g} is "
+                        f"under the "
+                        f"{('%g' % need) if need is not None else '0'} "
+                        f"required - no entry")
                 return None
+            ok, why = cross_trend_ok(candles, i, side > 0)
+            if not ok:
+                if LOG_SKIPS:
+                    log(f"{ast.get('sym','?')}: EMA cross "
+                        f"{'up' if side > 0 else 'down'} refused - {why}")
+                return None
+            ast["cross_why"] = why
             return want
         arm = {"side": want, "t": candles[i]["t"]}
         ast["cross_arm"] = arm
@@ -1734,6 +1863,12 @@ def cross_signal(ast, candles, ha, i):
         return None
     if not cross_vol_ok(candles, i - 1):
         return None
+    ok, why = cross_trend_ok(candles, i, want_long)
+    if not ok:
+        if LOG_SKIPS:
+            log(f"{ast.get('sym','?')}: no-wick trigger refused - {why}")
+        return None
+    ast["cross_why"] = why
     return arm["side"]
 
 
@@ -3867,13 +4002,15 @@ def process_candle(asset, ast, candles, ha, i):
               else (entry - HA_RR * risk_t))
         log(f"{sym}: CROSS ENTRY {side} at ${fmt_px(entry)} - price crossed "
             f"{'above' if want_long else 'below'} the {EMA_FILTER_LEN} EMA "
-            f"on the {EMA_FILTER_TF}, vol {c.get('v', 0)} - target "
+            f"on the {EMA_FILTER_TF} ({ast.get('cross_why','?')}), "
+            f"vol {c.get('v', 0)} - target "
             f"${fmt_px(tp)} ({HA_RR}R), stop ${fmt_px(stop)}")
         return fire_entry(asset, ast, side, dict(c, c=entry), stop,
                           c["h"], c["l"], "CROSS",
                           f"price crossed {'above' if want_long else 'below'} "
                           f"the {EMA_FILTER_LEN} EMA on the {EMA_FILTER_TF} "
-                          f"with volume - {HA_RR}R target or the stop",
+                          f"with volume, {ast.get('cross_why','?')} - "
+                          f"{HA_RR}R target or the stop",
                           live_px=candles[-1]["c"], engine="cross",
                           candles=candles, idx=i, tp_override=tp)
 
