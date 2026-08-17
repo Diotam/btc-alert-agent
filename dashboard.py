@@ -240,6 +240,7 @@ def journal_events(n=400, keep=25):
                                    "stop moved to entry", "too tight",
                                    "HA flipped against", "setup cleared",
                                    "TP_HALF", "RUNNER", "BE", "STOPPED OUT",
+                                   "window expired",
                                    "skipped", "SUMMARY")):
             events.append(line.strip())
     return events[-keep:][::-1]
@@ -914,7 +915,8 @@ function render(d){
   const KINDS={TP_RUNNER:'target + runner', TP_BE:'target, runner to BE',
                GONE:'position gone',
                TP_HALF:'target hit', RUNNER:'runner', BE:'breakeven',
-               TRAIL:'trailed out', FLIP:'colour flip', STOP:'stopped'};
+               TRAIL:'trailed out', FLIP:'colour flip', STOP:'stopped',
+               EXPIRED:'window expired'};
   // outcome, not event type: anything closed in profit gets a checkmark.
   // BE keeps its own mark because breakeven is neither.
   const iconFor=c=>c.kind==='BE'?'➡️':(c.pnl_pct>=0?'✅':'❌');
