@@ -1530,6 +1530,29 @@ def sha_side(candles, i):
     return ha_green(sha[-1])
 
 
+def update_flip_arm(ast, ha, i):
+    """Record an HA colour flip even while a trade is open. Bookkeeping only
+    - this never enters.
+
+    process_candle is unreachable while ast["trade"] is set: the scan returns
+    at the IN_TRADE branch. A flip is only detectable on the ONE bar after it
+    (ha[i-1] vs ha[i-2]), so a flip that happened DURING a trade was never
+    armed. The exit lags the flip whenever the smoothed series has to agree,
+    so by the time the trade closes the flip is two bars back, both bars read
+    the same colour, and the reversal is lost outright. XMR 16 Aug: flipped
+    green 20:00, short exited 21:00, no long. Same on BRENTOIL.
+    """
+    if i < 2:
+        return
+    now_green = ha_green(ha[i - 1])
+    if now_green == ha_green(ha[i - 2]):
+        return
+    if (ast.get("flip_arm") or {}).get("t") == ha[i - 1]["t"]:
+        return                                  # already armed on this bar
+    ast["flip_arm"] = {"side": "LONG" if now_green else "SHORT",
+                       "t": ha[i - 1]["t"]}
+
+
 def flip_signal(ast, candles, ha, i):
     """The 4h flip engine. Returns "LONG" / "SHORT" to ENTER, else None.
 
@@ -1552,6 +1575,13 @@ def flip_signal(ast, candles, ha, i):
             if SHA_ON_ENTRY:
                 sh = sha_side(candles, i - 1)
                 if sh is not None and sh != now_green:
+                    # this used to return silently, which is why BRENTOIL and
+                    # XMR both took an hour to explain
+                    log(f"{ast.get('sym', '?')}: HA flipped "
+                        f"{'green' if now_green else 'red'} but the smoothed "
+                        f"{SHA_IN},{SHA_OUT} is still "
+                        f"{'red' if now_green else 'green'} - armed "
+                        f"{arm['side']}, entry held until it agrees")
                     return None
             log(f"{ast.get('sym', '?')}: HA flipped "
                 f"{'green' if now_green else 'red'} - entering "
@@ -4272,6 +4302,10 @@ def check_asset(asset, state):
             changed = changed or ch
             if trade is None:
                 ast["phase"] = "SCAN"
+        # ARM FLIPS THAT HAPPEN MID-TRADE. Must run BEFORE the return below,
+        # which is what locked the entry path out for the whole trade.
+        if (FLIP_MODE or FLIP_EXIT) and cs and len(cs) >= 3:
+            update_flip_arm(ast, smoothed_ha(cs), len(cs) - 1)
         # exits win over overrides (the watch ran first). Fall through to the
         # candle walk when the trade just closed, or when overrides are on.
         if ast["trade"]:
