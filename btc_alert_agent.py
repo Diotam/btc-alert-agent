@@ -270,6 +270,19 @@ CROSS_VOL_MULT = 1.0               # volume must reach this multiple of the
                                    # absolute floor cannot. 0 disables it and
                                    # leaves only CROSS_MIN_VOL.
 CROSS_VOL_LEN = 20                 # bars in that average.
+CROSS_MAX_BARS = 3                 # 16 Aug: 1.5R gets THIS MANY bars from the
+                                   # entry bar (inclusive) to fill. If it has
+                                   # not, the trade is closed at market. On
+                                   # 30m that is 90 minutes. Checked AFTER the
+                                   # target test, so a bar that reaches 1.5R
+                                   # on the deadline books a WIN, not an
+                                   # expiry. 0 disables the expiry entirely.
+                                   # Why a window at all: his CRV/MON pair -
+                                   # MON filled 1.5R inside the entry bar,
+                                   # CRV needed the NEXT bar. Same setup, same
+                                   # volume; the difference was how far the
+                                   # 12h swing low sat. A 1-bar rule would
+                                   # have thrown CRV away for being 0.29% shy.
 CROSS_TREND_GATE = True            # 16 Aug: LONGS need the 20 EMA's slope to
                                    # be >= 0 (an uptrend) or negative and
                                    # RISING (beginning one). SHORTS mirror it.
@@ -2826,6 +2839,24 @@ def process_open_trade(asset, trade, candles, ha, last_closed_t):
                         # than writing to a global that does not exist
                         return rolled, True
                     return done
+            # ---- BAR-COUNT EXPIRY (cross engine) -------------------------
+            # AFTER the target test on purpose: a bar that reaches 1.5R on the
+            # deadline books TP. Counted in TF bars from the ENTRY bar
+            # inclusive - fire_entry sets opened_t to the entry candle's t.
+            if CROSS_MAX_BARS and trade.get("engine") == "cross":
+                span = MS.get(TF, 0)
+                opened = trade.get("opened_t") or 0
+                if span and opened:
+                    held = int((c["t"] - opened) // span) + 1
+                    if held > CROSS_MAX_BARS:
+                        log(f"{asset['symbol']}: {CROSS_MAX_BARS}-bar window "
+                            f"expired without {HA_RR}R - closing the "
+                            f"{trade['verdict']} at ${fmt_px(c['c'])} "
+                            f"after {held} bars")
+                        return _close_trade(
+                            asset, trade, c["c"], "EXPIRED", event_t,
+                            f"{HA_RR}R did not fill inside "
+                            f"{CROSS_MAX_BARS} bars")
             continue
         h = by_t.get(c["t"])
         if h and ha_green(h) != long:
