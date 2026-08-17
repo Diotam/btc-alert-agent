@@ -335,6 +335,14 @@ FLIP_NEEDS_NOWICK = False          # must a no-wick candle follow the flip
                                    # refusing turns outright when the flip
                                    # candle happened to carry a tail. True
                                    # restores the arm-then-trigger sequence
+FLIP_TARGET = True                 # book a WIN at HA_RR when the flip engine
+                                   # reaches it, instead of parking the target
+                                   # and riding to the colour flip. His call
+                                   # 16 Aug. A trade that touches 1.5R and
+                                   # then gives it all back was booking as a
+                                   # LOSS; now it closes there. The flip is
+                                   # still the exit for anything that does not
+                                   # get that far. False parks the target again
 FLIP_EXIT_ON_REGIME = False        # what the flip exit WATCHES. TRUE as of
                                    # 15 Aug, his call: close when price
                                    # crosses the REGIME_TF EMA against the
@@ -3710,10 +3718,13 @@ def process_candle(asset, ast, candles, ha, i):
                 else max(x["h"] for x in win))
         log(f"{sym}: FLIP ENTRY {side} at ${fmt_px(entry)} - HA flipped "
             f"{'green' if want_long else 'red'}, exits when it flips back")
-        # NO TARGET. The colour flip is the exit, so a 1.5R take-profit would
-        # cut the trade short of the design - it would book before the flip
-        # ever came. Parked out of reach, as cross mode does.
-        tp_far = (entry * 100) if want_long else (entry * 0.01)
+        # THE TARGET IS REAL when FLIP_TARGET is on: 1.5R books a win and
+        # closes. Parked out of reach otherwise, and the flip is the only way
+        # out - which meant a trade could touch 1.5R and still book a loss.
+        risk_t = abs(entry - stop)
+        tp_far = (((entry + HA_RR * risk_t) if want_long
+                   else (entry - HA_RR * risk_t)) if FLIP_TARGET
+                  else ((entry * 100) if want_long else (entry * 0.01)))
         return fire_entry(asset, ast, side, dict(c, c=entry), stop,
                           c["h"], c["l"], "FLIP",
                           # the wick step is gone under FLIP_NEEDS_NOWICK -
