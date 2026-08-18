@@ -315,6 +315,15 @@ SD_STOP_ON_CLOSE = True            # the stop fires only when a bar CLOSES
                                    # fix. THE COST: on a real move you exit at
                                    # the close, not the level, so genuine
                                    # losses run slightly past 1R.
+SD_MAX_STOP_PCT = 2.0              # 17 Aug: CAP ON R. ATR is inflated by gaps
+                                   # and spread on thin books, so the same 2x
+                                   # ATR gave 0.47% on BTC but 3.60% on
+                                   # xyz:CXMT, 3.76% on xyz:SKHX and 2.47% on
+                                   # CASHCAT - and those were the two biggest
+                                   # losses of 17 Aug. A stop wider than this
+                                   # % of price is CLAMPED to it, which also
+                                   # pulls the 1.5R target back in range.
+                                   # 0 disables the cap.
 SD_DISASTER_R = 1.5                # ...unless price runs THIS many stop
                                    # distances past entry, which exits
                                    # IMMEDIATELY, no close needed. Close
@@ -730,9 +739,16 @@ HA_NOWICK_TOL_PCT = 5.0            # a candle counts as NO-WICK when the wick
                                    # the trade runs AGAINST: upper wick for a
                                    # short, lower wick for a long - that is
                                    # the classic HA conviction candle
-ENTRY_AT_OPEN = True               # enter at the OPEN of the candle AFTER
-                                   # the no-wick bar, not at a close. Every
-                                   # engine before 4 Aug entered on a close
+ENTRY_AT_OPEN = False              # 17 Aug: FALSE. Was True, which recorded
+                                   # the entry at the OPEN of the CURRENT 15m
+                                   # bar. This engine scans every 5 min and
+                                   # fires mid-bar, so that open could be ten
+                                   # minutes and a large move stale - CXMT was
+                                   # booked at 8.7939 with the market at
+                                   # 8.6366, and its stop/target/R were all
+                                   # computed off a price you could not get.
+                                   # False uses the forming bar's close, i.e.
+                                   # the live price.
 HA_MIN_RUN_PCT = 0                 # MINIMUM MOVE across the run, start to
                                    # flip, as a % of price. HA_MIN_RUN counts
                                    # CANDLES, so eight bars drifting sideways
@@ -780,7 +796,10 @@ TP_MIN_RR = 1.0                    # refuse the setup when the swing sits
                                    # closer than the stop - paying 1 to make
                                    # less than 1 is a losing shape however
                                    # often it wins
-RETARGET_ON = True                 # ROLL THE TRADE AT THE TARGET. His spec
+RETARGET_ON = False                # 17 Aug: OFF at his call - not part of the
+                                   # stoch-doji spec. The target now simply
+                                   # closes the trade at 1.5R.
+                                   # ROLL THE TRADE AT THE TARGET. His spec
                                    # 13 Aug: when the 1.5R target is reached,
                                    # book it and IMMEDIATELY reopen at that
                                    # same price with a fresh 1.5R target. The
@@ -828,7 +847,11 @@ REVERSE_ALERTS = True              # when the smoothed HA flips against an
                                    # because a reverse skips the doji, the
                                    # confirmation bars and the run-length
                                    # floor that every other entry must clear
-STOP_EXIT = False                  # does the stop LEVEL close the trade?
+STOP_EXIT = True                   # 17 Aug: back ON. Off since 11 Aug, which
+                                   # meant NO losing exit at all - and made
+                                   # every ATR stop, close-confirm and
+                                   # disaster-stop path dead code.
+                                   # does the stop LEVEL close the trade?
                                    # FALSE as of 11 Aug, his call. The level
                                    # is still COMPUTED - sizing needs the risk
                                    # distance and the target is HA_RR x it -
@@ -4567,6 +4590,15 @@ def process_candle(asset, ast, candles, ha, i):
         risk_t = abs(entry - stop)
         if risk_t <= 0:
             return False
+        # CLAMP a runaway ATR stop. Thin synthetics produce an ATR several
+        # times BTC's, so R - and every loss taken at it - scales with the
+        # book's spread rather than with the setup.
+        if SD_MAX_STOP_PCT and entry and risk_t / entry * 100 > SD_MAX_STOP_PCT:
+            was = risk_t / entry * 100
+            risk_t = entry * SD_MAX_STOP_PCT / 100.0
+            stop = (entry - risk_t) if want_long else (entry + risk_t)
+            log(f"{sym}: stop was {was:.2f}% of price - clamped to "
+                f"{SD_MAX_STOP_PCT}% at ${fmt_px(stop)}")
         if MIN_STOP_PCT and entry and risk_t / entry * 100 < MIN_STOP_PCT:
             if LOG_SKIPS:
                 log(f"{sym}: stoch-doji {side} stop "
