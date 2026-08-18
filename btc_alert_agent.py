@@ -300,6 +300,27 @@ CROSS_SLOPE_BARS = 5               # bars per slope window. 5 on 30m = 2.5h.
 # filters (volume pace, EMA slope, flat zone, trend age). CROSS_MODE = False
 # switches all of that off.
 SD_MODE = True                     # the stoch-doji engine owns entries
+# ---- 17 Aug: ATR STOP, CLOSE-CONFIRMED. Replaces the time-window swing stop
+# FOR THE STOCH-DOJI ENGINE ONLY. A window stop produced a distance unrelated
+# to the setup: BTC 0.20% because six hours happened to be quiet, SKR 5.386%
+# because the window caught an unrelated low. R was noise, so 1.5R was noise,
+# so MIN_TARGET_PCT kept rejecting perfectly good setups.
+SD_ATR_STOP = True                 # False falls back to the swing stop
+SD_ATR_LEN = 14                    # ATR lookback, in TF bars
+SD_ATR_MULT = 2.0                  # stop sits this many ATR from entry.
+                                   # 1.5 stops more often, 3.0 rarely.
+SD_STOP_ON_CLOSE = True            # the stop fires only when a bar CLOSES
+                                   # past it. A wick through and back leaves
+                                   # the trade alone - that is the stop-hunt
+                                   # fix. THE COST: on a real move you exit at
+                                   # the close, not the level, so genuine
+                                   # losses run slightly past 1R.
+SD_DISASTER_R = 1.5                # ...unless price runs THIS many stop
+                                   # distances past entry, which exits
+                                   # IMMEDIATELY, no close needed. Close
+                                   # confirmation is safe against wicks but
+                                   # exposed on a runaway bar; this caps that
+                                   # tail. 0 disables it.
 STOCH_N = 14                       # %K lookback
 STOCH_SMOOTH_K = 1                 # 14,1,3 - the FAST stochastic, his pick
 STOCH_D = 3                        # %D = SMA of %K over this
@@ -860,7 +881,17 @@ STOP_LOOKBACK = 6                  # 17 Aug: 12 -> 6. A SIX-HOUR swing stop,
                                    # wider stops (median 0.537% vs the
                                    # losers' 0.471%) and every max-width cap
                                    # tested made the book worse
-MIN_TARGET_PCT = 1.5               # the TARGET must sit at least this far
+MIN_TARGET_PCT = 0.5               # 17 Aug: 1.5 -> 0.5. MEASURED, not guessed:
+                                   # on 15m BTC a 2x ATR stop gives R = 0.474%
+                                   # of price, so 1.5R lands 0.711% away. Even
+                                   # 4x ATR only reaches 1.42%. A 1.5% floor
+                                   # is simply incompatible with 15m trading -
+                                   # it was set when the engine ran 1h/30m
+                                   # bars and a 12h swing stop, and it was
+                                   # rejecting BTC, LINK and NEAR on 17 Aug.
+                                   # 0.5% keeps a real fee backstop without
+                                   # vetoing the whole timeframe.
+                                   # the TARGET must sit at least this far
                                    # from entry, as a % of price. 2.0 as of
                                    # 4 Aug, his call: "each setup needs to be
                                    # at least a 2% move". Expressed on the
@@ -1892,6 +1923,20 @@ def cross_age_ok(candles, i, want_long):
                        f"{bars} bars, limit is {CROSS_MAX_TREND_AGE}")
     return True, (f"smoothed HA {colour} {bars} bar"
                   + ("s" if bars != 1 else ""))
+
+
+def atr(candles, i, n=None):
+    """Average True Range at bar i, in price units, over CLOSED bars."""
+    n = SD_ATR_LEN if n is None else n
+    if i < n or i >= len(candles):
+        return None
+    trs = []
+    for j in range(i - n + 1, i + 1):
+        pc = candles[j - 1]["c"]
+        trs.append(max(candles[j]["h"] - candles[j]["l"],
+                       abs(candles[j]["h"] - pc),
+                       abs(candles[j]["l"] - pc)))
+    return (sum(trs) / len(trs)) if trs else None
 
 
 def stoch_kd(candles, i):
@@ -3180,6 +3225,36 @@ def process_open_trade(asset, trade, candles, ha, last_closed_t):
         if STOP_EXIT and ((c["l"] <= trade["stop"]) if long
                           else (c["h"] >= trade["stop"])):
             kind = _stop_kind(trade)
+            # CLOSE-CONFIRMED STOP (stoch-doji only). A wick THROUGH the level
+            # that closes back inside does NOT stop us out - that wick is the
+            # stop hunt. Two escapes: a bar that CLOSES past the level, and
+            # the disaster level, which needs no close at all.
+            if (SD_STOP_ON_CLOSE and trade.get("engine") == "sd"
+                    and STOP_EXIT):
+                r0 = abs(trade["entry"] - trade["stop"]) or None
+                dis = None
+                if r0 and SD_DISASTER_R:
+                    dis = ((trade["entry"] - SD_DISASTER_R * r0) if long
+                           else (trade["entry"] + SD_DISASTER_R * r0))
+                blown = dis is not None and ((c["l"] <= dis) if long
+                                             else (c["h"] >= dis))
+                closed_past = ((c["c"] <= trade["stop"]) if long
+                               else (c["c"] >= trade["stop"]))
+                if blown:
+                    log(f"{asset['symbol']}: DISASTER STOP - price ran "
+                        f"{SD_DISASTER_R}x the stop distance past entry, "
+                        f"out at ${fmt_px(dis)} without waiting for a close")
+                    return _close_trade(asset, trade, dis, kind, event_t)
+                if not closed_past:
+                    log(f"{asset['symbol']}: wick to ${fmt_px(c['l'] if long else c['h'])} "
+                        f"pierced the ${fmt_px(trade['stop'])} stop but the "
+                        f"bar closed at ${fmt_px(c['c'])} - holding")
+                    trade["wicked"] = int(trade.get("wicked", 0)) + 1
+                    continue
+                # closed past: we exit at the CLOSE, not the level
+                log(f"{asset['symbol']}: bar CLOSED past the stop at "
+                    f"${fmt_px(c['c'])} (level ${fmt_px(trade['stop'])})")
+                return _close_trade(asset, trade, c["c"], kind, event_t)
             return _close_trade(asset, trade, trade["stop"], kind, event_t)
         # THE HA FLIP EXIT. Under FLIP_MODE it is the ONLY exit; with
         # FLIP_EXIT it runs ALONGSIDE the target, closing the trades that
@@ -4441,12 +4516,19 @@ def process_candle(asset, ast, candles, ha, i):
         if not ALLOW_SHORTS and not want_long:
             return False
         entry = c["o"] if ENTRY_AT_OPEN else c["c"]
-        lo = max(0, i - stop_bars())
-        win = candles[lo:i]
-        if not win:
-            return False
-        stop = (min(x["l"] for x in win) if want_long
-                else max(x["h"] for x in win))
+        stop = None
+        if SD_ATR_STOP:
+            a = atr(candles, i - 1)          # CLOSED bars only
+            if a and a > 0:
+                stop = ((entry - SD_ATR_MULT * a) if want_long
+                        else (entry + SD_ATR_MULT * a))
+        if stop is None:                     # fallback: the old swing window
+            lo = max(0, i - stop_bars())
+            win = candles[lo:i]
+            if not win:
+                return False
+            stop = (min(x["l"] for x in win) if want_long
+                    else max(x["h"] for x in win))
         risk_t = abs(entry - stop)
         if risk_t <= 0:
             return False
