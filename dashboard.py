@@ -831,9 +831,17 @@ function render(d){
    // level then closes nothing, so latching left seven cards stuck reading
    // "stop hit - closing" against a confirmation that never comes.
    const SLEXIT=!(d._meta&&d._meta.stop_exit===false);
-   if(!SLEXIT) delete window.__froz[fkey];
-   if(SLEXIT && t.r!=null && t.r<=-1) window.__froz[fkey]='sl';
+   // CLOSE-CONFIRMED STOPS: touching the level closes NOTHING. A wick
+   // through that closes back inside leaves the trade running, so latching
+   // on a touch strands the card at "stop hit - closing" against a
+   // confirmation that never comes - which is exactly what happened to
+   // CASHCAT and xyz:SKHX. Show the pierce, keep the card LIVE.
+   const SLCLOSE=!!(d._meta&&d._meta.stop_on_close);
+   if(!SLEXIT||SLCLOSE) delete window.__froz[fkey];
+   if(SLEXIT && !SLCLOSE && t.r!=null && t.r<=-1) window.__froz[fkey]='sl';
    const slDone=window.__froz[fkey]==='sl';
+   // pierced = price is past the stop RIGHT NOW but no bar has closed there
+   const pierced=SLCLOSE&&!slDone&&t.r!=null&&t.r<=-1;
    const showR=slDone?-1:t.r;
    const showPnl=slDone?sgn*(t.stop-t.entry)/t.entry*100:t.pnl;
    // "target reached" is now computed LIVE, never latched
@@ -847,7 +855,8 @@ function render(d){
    const rung=(t.rung||0)>0?`<span class="badge ok">rung ${t.rung} \u00b7 rolled</span>`:'';
    const badge=t.half?`<span class="badge ok">${running}% running</span>`
      :atTarget?`<span class="badge ok">target reached \u00b7 ${PARTIAL>=1?'closing':'booking '+Math.round(PARTIAL*100)+'%'}</span>`
-     :slDone?'<span class="badge warn">stop hit · closing</span>':rung;
+     :slDone?'<span class="badge warn">stop hit · closing</span>'
+     :pierced?'<span class="badge warn">wick through stop · needs a close</span>':rung;
    // THE BAR NOW MEASURES WHAT THE LABEL SAYS. It used to run one scale
    // from stop (0%) through entry to TP (100%), so a trade 61% of the way
    // to its stop drew a 16% bar - the number and the picture disagreed.
@@ -862,6 +871,7 @@ function render(d){
    const rc=showR==null?'#8b949e':showR>=0?'#3fb950':'#f85149';
    const rlbl=showR==null?''
      :slDone?'Stop traded - waiting for the close confirmation'
+     :pierced?`${showR.toFixed(2)}R \u00b7 price is past the stop but no bar has CLOSED there - still open`
      :NOTGT?`${showR.toFixed(2)}R \u00b7 ${showR>=0?'in profit':'underwater'} \u00b7 holds until the HA flips`
      :atTarget?`${showR.toFixed(2)}R \u00b7 target reached, ${PARTIAL>=1?'closing the position':'booking '+Math.round(PARTIAL*100)+'%'}`
      :t.half?`${showR.toFixed(2)}R from entry \u00b7 runs until the HA flips`
