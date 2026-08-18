@@ -357,7 +357,7 @@ SD_CONFIRM_WINDOW = 8              # give up if two clean candles have not
 # test was a pair of CEILINGS (run <= 8 bars AND <= 2%), which a 1-bar 0.00%
 # run passed trivially: BTC entered on exactly that. Deceleration cannot be
 # measured without several bars, so the floor comes for free.
-SD_WEAK_MIN_BARS = 4               # need at least this many bars in the run
+SD_WEAK_MIN_BARS = 3               # need at least this many bars in the run
                                    # before deceleration means anything
 SD_WEAK_TAIL = 3                   # the last N bars are the "leading up to
                                    # the flip" part
@@ -2047,20 +2047,22 @@ def sd_momentum_weak(candles, ha, doji_i, want_long):
                        f" - too short to show deceleration, need "
                        f"{SD_WEAK_MIN_BARS}")
     bodies = [ha_body(ha[k]) for k in range(start, doji_i)]
-    tail_n = min(max(1, SD_WEAK_TAIL), len(bodies) - 1)
-    head, tail = bodies[:-tail_n], bodies[-tail_n:]
-    if not head or not tail:
-        return False, "not enough bodies to compare"
-    h = sum(head) / len(head)
-    t = sum(tail) / len(tail)
-    if h <= 0:
+    tail_n = min(max(1, SD_WEAK_TAIL), len(bodies))
+    tail = bodies[-tail_n:]
+    peak = max(bodies)
+    if peak <= 0:
         return False, "prior run has no body"
-    ratio = t / h
+    # Measure the tail against the run's PEAK body, not its opening bars.
+    # The first HA candles after a colour flip are always tiny, so a
+    # head-vs-tail split on a short run compared the end of the move against
+    # its smallest bars and returned nonsense - 499%, 1014%, 1491% on 18 Aug.
+    # Against the peak the ratio is bounded at 100% and actually means
+    # "how far off its strongest bar has this move faded".
+    ratio = (sum(tail) / len(tail)) / peak
     if ratio > SD_WEAK_DECAY:
         return False, (f"bodies not shrinking - last {tail_n} average "
-                       f"{ratio * 100:.0f}% of the earlier {len(head)}, "
-                       f"need under {SD_WEAK_DECAY * 100:.0f}% - strong "
-                       f"momentum")
+                       f"{ratio * 100:.0f}% of the run's peak body, need "
+                       f"under {SD_WEAK_DECAY * 100:.0f}% - strong momentum")
     # optional legacy ceilings, off by default
     p0, p1 = candles[start]["c"], candles[doji_i - 1]["c"]
     pct = ((p1 - p0) / p0 * 100.0) if p0 else 0.0
