@@ -343,8 +343,20 @@ SD_CONFIRM_WINDOW = 8              # give up if two clean candles have not
 # NOTE THE REVERSAL: on 17 Aug morning the rule was "enter after a STRONG
 # downtrend flip" and CROSS_REVERSAL_MIN_BARS/PCT were MINIMUMS. These are
 # MAXIMUMS. The two specs are opposites; this one is live.
-SD_WEAK_MAX_BARS = 8               # prior opposite run at most this long
-SD_WEAK_MAX_PCT = 2.0              # ...and moved at most this far, in %
+# His 17 Aug definition: WEAK momentum is SMALLER HA BARS leading into the
+# flip - the move running out of steam, not the absence of a move. The old
+# test was a pair of CEILINGS (run <= 8 bars AND <= 2%), which a 1-bar 0.00%
+# run passed trivially: BTC entered on exactly that. Deceleration cannot be
+# measured without several bars, so the floor comes for free.
+SD_WEAK_MIN_BARS = 4               # need at least this many bars in the run
+                                   # before deceleration means anything
+SD_WEAK_TAIL = 3                   # the last N bars are the "leading up to
+                                   # the flip" part
+SD_WEAK_DECAY = 0.70               # tail bodies must average at most this
+                                   # fraction of the earlier bodies. 0.70 =
+                                   # 30% smaller. Lower is stricter.
+SD_WEAK_MAX_BARS = 0               # SUPERSEDED by the decay test. Non-zero
+SD_WEAK_MAX_PCT = 0.0              # re-enables them as extra ceilings.
 # =============================================================================
 
 CROSS_REVERSAL_ON = True           # 17 Aug: ENTER AFTER A STRONG DOWNTREND
@@ -1995,23 +2007,46 @@ def ha_prior_run(ha, i):
 
 
 def sd_momentum_weak(candles, ha, doji_i, want_long):
-    """(weak, reason). His definition: weak = the run INTO the doji was short
-    AND shallow. A long deep fall is STRONG momentum and we stay out."""
+    """(weak, reason). WEAK = the HA bodies SHRANK into the flip.
+
+    Compares the mean body of the last SD_WEAK_TAIL bars of the run against
+    the mean body of the bars before them. Shrinking bodies mean the move is
+    running out of steam; steady or growing bodies mean it is still driving,
+    and we stay out.
+    """
     side, bars, start = ha_prior_run(ha, doji_i - 1)
     if side is None:
         return False, "no prior run"
     if side == want_long:
         return False, "prior run is not the opposite direction"
+    if bars < max(2, SD_WEAK_MIN_BARS):
+        return False, (f"prior run only {bars} bar{'s' if bars != 1 else ''}"
+                       f" - too short to show deceleration, need "
+                       f"{SD_WEAK_MIN_BARS}")
+    bodies = [ha_body(ha[k]) for k in range(start, doji_i)]
+    tail_n = min(max(1, SD_WEAK_TAIL), len(bodies) - 1)
+    head, tail = bodies[:-tail_n], bodies[-tail_n:]
+    if not head or not tail:
+        return False, "not enough bodies to compare"
+    h = sum(head) / len(head)
+    t = sum(tail) / len(tail)
+    if h <= 0:
+        return False, "prior run has no body"
+    ratio = t / h
+    if ratio > SD_WEAK_DECAY:
+        return False, (f"bodies not shrinking - last {tail_n} average "
+                       f"{ratio * 100:.0f}% of the earlier {len(head)}, "
+                       f"need under {SD_WEAK_DECAY * 100:.0f}% - strong "
+                       f"momentum")
+    # optional legacy ceilings, off by default
     p0, p1 = candles[start]["c"], candles[doji_i - 1]["c"]
     pct = ((p1 - p0) / p0 * 100.0) if p0 else 0.0
-    moved = abs(pct)
-    if bars > SD_WEAK_MAX_BARS:
-        return False, (f"prior run {bars} bars > {SD_WEAK_MAX_BARS} - strong "
-                       f"momentum")
-    if moved > SD_WEAK_MAX_PCT:
-        return False, (f"prior run moved {pct:+.2f}% > {SD_WEAK_MAX_PCT}% - "
-                       f"strong momentum")
-    return True, f"weak momentum - prior run {bars} bars, {pct:+.2f}%"
+    if SD_WEAK_MAX_BARS and bars > SD_WEAK_MAX_BARS:
+        return False, f"prior run {bars} bars > {SD_WEAK_MAX_BARS}"
+    if SD_WEAK_MAX_PCT and abs(pct) > SD_WEAK_MAX_PCT:
+        return False, f"prior run moved {pct:+.2f}% > {SD_WEAK_MAX_PCT}%"
+    return True, (f"weak momentum - bodies decayed to {ratio * 100:.0f}% over "
+                  f"the last {tail_n} of a {bars}-bar run ({pct:+.2f}%)")
 
 
 def sd_is_doji(ha, i):
@@ -5275,6 +5310,13 @@ def check_once():
                               # closing" and waited forever for a close the
                               # agent never makes when STOP_EXIT is off
                               stop_exit=bool(STOP_EXIT),
+                              # ...and the SAME failure returns when the stop
+                              # is CLOSE-CONFIRMED: touching the level closes
+                              # nothing, so the dashboard must not latch the
+                              # card on a touch. CASHCAT and xyz:SKHX sat at
+                              # "stop hit - closing" for hours on 17 Aug while
+                              # the agent was correctly still holding them.
+                              stop_on_close=bool(SD_STOP_ON_CLOSE and SD_MODE),
                               tz=TIMEZONE,
                               last_scan_utc=datetime.now(timezone.utc)
                               .isoformat(timespec="seconds"))
