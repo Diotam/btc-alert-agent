@@ -121,7 +121,7 @@ ASSETS = [                         # used when DISCOVER_ALL = False, or when
 ]
 
 # --- strategy dials -------------------------------------------------------
-TF = "15m"                         # execution timeframe. 15m -> 30m on
+TF = "30m"                         # execution timeframe. 15m -> 30m on
                                    # 9 Aug: a 50 EMA on 15m was too fast
                                    # for these markets, so price crossed
                                    # it constantly without going
@@ -299,7 +299,53 @@ CROSS_SLOPE_BARS = 5               # bars per slope window. 5 on 30m = 2.5h.
 # This engine is SELF-CONTAINED: it does not use any of the 16-17 Aug cross
 # filters (volume pace, EMA slope, flat zone, trend age). CROSS_MODE = False
 # switches all of that off.
-SD_MODE = True                     # the stoch-doji engine owns entries
+# ======================= REVERSAL 200SMA ENGINE, his spec 18 Aug ============
+# 30m. NOTHING from any previous engine feeds this: no doji, no stochastic,
+# no HA wicks, no ATR gate, no volume, no trend-age. SD_MODE / CROSS_MODE /
+# FLIP_MODE are all off.
+#
+#   UPTREND   (price above the 200SMA): close below the 20 ARMS a SHORT,
+#             then a close below the 50 ENTERS it.
+#   DOWNTREND (price below the 200SMA): close above the 20 ARMS a LONG,
+#             then a close above the 50 ENTERS it.
+#
+RS_MODE = True
+RS_TREND_LEN = 200                 # the regime MA
+RS_ARM_LEN = 20                    # arms the setup
+RS_TRIGGER_LEN = 50                # pulls the trigger
+RS_MA = "sma"                      # "sma" or "ema". His spec said 20SMA/50SMA
+                                   # on the SHORT leg and 20ema/50ema on the
+                                   # LONG leg - taken as SMA for both, since
+                                   # the strategy is named for the 200SMA.
+                                   # Set "ema" to mirror it the other way.
+RS_TREND_BY_SLOPE = False          # False: "uptrend" means price is ABOVE the
+                                   # 200SMA. True: it means the 200SMA is
+                                   # RISING. His wording fits the first.
+RS_SAME_BAR_OK = True              # may one bar both ARM and TRIGGER? A close
+                                   # under the 20 is usually also under the 50
+                                   # when the break is sharp. False forces the
+                                   # trigger onto a LATER bar.
+RS_ARM_EXPIRY = 0                  # bars an arm survives. 0 = forever, until
+                                   # cancelled or fired. NOT IN HIS SPEC.
+RS_ARM_CANCEL = True               # a close back on the far side of the 20
+                                   # clears the arm. NOT IN HIS SPEC either -
+                                   # without it a setup armed days ago can
+                                   # still fire.
+RS_RR = 1.5                        # target = this many R
+RS_STOP = "swing"                  # his 18 Aug call: the RECENT SWING high
+                                   # for a short, swing low for a long.
+RS_SWING_BARS = 20                 # how far back "recent" reaches, in TF
+                                   # bars. 20 on 30m is ten hours. NOT IN HIS
+                                   # SPEC - a fresh default, not inherited
+                                   # from any previous engine's stop window.
+RS_ONE_PER_SETUP = True            # his 18 Aug call: NO re-firing. After a
+                                   # trigger, price must close back across the
+                                   # 20 before the engine will arm again -
+                                   # otherwise a sustained break re-armed and
+                                   # re-triggered on every single bar.
+# =============================================================================
+
+SD_MODE = False                    # the stoch-doji engine owns entries
 # ---- 17 Aug: ATR STOP, CLOSE-CONFIRMED. Replaces the time-window swing stop
 # FOR THE STOCH-DOJI ENGINE ONLY. A window stop produced a distance unrelated
 # to the setup: BTC 0.20% because six hours happened to be quiet, SKR 5.386%
@@ -1958,6 +2004,112 @@ def cross_age_ok(candles, i, want_long):
                        f"{bars} bars, limit is {CROSS_MAX_TREND_AGE}")
     return True, (f"smoothed HA {colour} {bars} bar"
                   + ("s" if bars != 1 else ""))
+
+
+def sma(vals, n):
+    """Simple moving average of the last n values, or None."""
+    if n <= 0 or len(vals) < n:
+        return None
+    return sum(vals[-n:]) / float(n)
+
+
+def rs_ma(closes, n):
+    """The engine's moving average - SMA or EMA per RS_MA."""
+    if RS_MA == "ema":
+        e = ema(closes, n)
+        return e[-1] if e and len(closes) >= n else None
+    return sma(closes, n)
+
+
+def rs_signal(ast, candles, i):
+    """Reversal 200SMA. Returns "LONG" / "SHORT" to ENTER, else None.
+
+    Judged on the LAST CLOSED bar (i-1) - every rule in the spec is about a
+    CLOSE - so the entry price is the forming bar and nothing repaints.
+    """
+    last = i - 1
+    if last < RS_TREND_LEN + 2:
+        return None
+    closes = [c["c"] for c in candles[:last + 1]]
+    m200 = rs_ma(closes, RS_TREND_LEN)
+    m20 = rs_ma(closes, RS_ARM_LEN)
+    m50 = rs_ma(closes, RS_TRIGGER_LEN)
+    if m200 is None or m20 is None or m50 is None:
+        return None
+    px = closes[-1]
+    if RS_TREND_BY_SLOPE:
+        prev = rs_ma(closes[:-1], RS_TREND_LEN)
+        if prev is None:
+            return None
+        uptrend = m200 > prev
+    else:
+        uptrend = px > m200
+
+    arm = ast.get("rs_arm") or {}
+    t_now = candles[last]["t"]
+
+    # ---- one entry per setup: after a trigger, the 20 must be RECLAIMED
+    block = ast.get("rs_block")
+    if block and RS_ONE_PER_SETUP:
+        reclaimed = (px > m20) if block == "SHORT" else (px < m20)
+        if not reclaimed:
+            return None
+        ast["rs_block"] = None
+        log(f"{ast.get('sym','?')}: {RS_ARM_LEN} reclaimed at {fmt_px(px)} - "
+            f"the engine can arm again")
+
+    if arm and RS_ARM_EXPIRY:
+        span = MS.get(TF, 0)
+        if span and (t_now - arm.get("t", 0)) // span > RS_ARM_EXPIRY:
+            arm = {}
+            ast["rs_arm"] = None
+
+    # ---- cancel: price closed back on the far side of the 20
+    if arm and RS_ARM_CANCEL:
+        if (arm["side"] == "SHORT" and px > m20) or \
+           (arm["side"] == "LONG" and px < m20):
+            log(f"{ast.get('sym','?')}: {arm['side']} arm cancelled - close "
+                f"{fmt_px(px)} back across the {RS_ARM_LEN}")
+            arm = {}
+            ast["rs_arm"] = None
+
+    # ---- arm
+    if not arm:
+        if uptrend and px < m20:
+            arm = {"side": "SHORT", "t": t_now}
+        elif (not uptrend) and px > m20:
+            arm = {"side": "LONG", "t": t_now}
+        if arm:
+            ast["rs_arm"] = arm
+            log(f"{ast.get('sym','?')}: ARMED {arm['side']} - "
+                f"{'up' if uptrend else 'down'}trend on the {RS_TREND_LEN}, "
+                f"close {fmt_px(px)} "
+                f"{'below' if arm['side'] == 'SHORT' else 'above'} the "
+                f"{RS_ARM_LEN} at {fmt_px(m20)}")
+            if not RS_SAME_BAR_OK:
+                return None
+
+    if not arm:
+        return None
+
+    # ---- trigger
+    if arm["side"] == "SHORT" and px < m50:
+        ast["rs_why"] = (f"uptrend on the {RS_TREND_LEN} "
+                         f"({fmt_px(m200)}), close {fmt_px(px)} broke the "
+                         f"{RS_ARM_LEN} then the {RS_TRIGGER_LEN} "
+                         f"({fmt_px(m50)})")
+        ast["rs_arm"] = None
+        ast["rs_block"] = "SHORT"
+        return "SHORT"
+    if arm["side"] == "LONG" and px > m50:
+        ast["rs_why"] = (f"downtrend on the {RS_TREND_LEN} "
+                         f"({fmt_px(m200)}), close {fmt_px(px)} cleared the "
+                         f"{RS_ARM_LEN} then the {RS_TRIGGER_LEN} "
+                         f"({fmt_px(m50)})")
+        ast["rs_arm"] = None
+        ast["rs_block"] = "LONG"
+        return "LONG"
+    return None
 
 
 def atr(candles, i, n=None):
@@ -4566,6 +4718,39 @@ def process_candle(asset, ast, candles, ha, i):
     # Replaces the flip engine entirely when on. No run gates, no fade, no
     # BTC vote - the cross IS the trend read, so layering the old filters on
     # top would refuse the very setups it exists to take.
+    # ---------------- REVERSAL 200SMA ENGINE (his 18 Aug spec) ------------
+    if RS_MODE:
+        ast["sym"] = sym
+        side = rs_signal(ast, candles, i)
+        if not side:
+            return False
+        want_long = side == "LONG"
+        if not ALLOW_SHORTS and not want_long:
+            return False
+        entry = c["c"]
+        lo = max(0, i - RS_SWING_BARS)
+        win = candles[lo:i]
+        if not win:
+            return False
+        # the RECENT SWING - high for a short, low for a long
+        stop = (min(x["l"] for x in win) if want_long
+                else max(x["h"] for x in win))
+        risk_t = abs(entry - stop)
+        if risk_t <= 0:
+            return False
+        tp = ((entry + RS_RR * risk_t) if want_long
+              else (entry - RS_RR * risk_t))
+        log(f"{sym}: REVERSAL-200 ENTRY {side} at ${fmt_px(entry)} - "
+            f"{ast.get('rs_why','?')}; stop at the {RS_SWING_BARS}-bar swing "
+            f"${fmt_px(stop)} ({risk_t / entry * 100:.2f}%), target "
+            f"${fmt_px(tp)} ({RS_RR}R)")
+        return fire_entry(asset, ast, side, dict(c, c=entry), stop,
+                          c["h"], c["l"], "REV200",
+                          f"{ast.get('rs_why','?')} - {RS_RR}R target or the "
+                          f"{RS_SWING_BARS}-bar swing stop",
+                          live_px=candles[-1]["c"], engine="rs",
+                          candles=candles, idx=i, tp_override=tp)
+
     # ---------------- STOCH-DOJI ENGINE (his 17 Aug spec) ----------------
     if SD_MODE:
         ast["sym"] = sym
