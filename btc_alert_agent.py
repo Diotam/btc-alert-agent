@@ -327,6 +327,18 @@ RS_FLAT_PCT = 0.05                 # each line must move at least this much,
                                    # number is NOT from his spec - calibrate
                                    # it against how many symbols qualify.
 RS_SLOPE_BARS = 5                  # bars the slope is measured over
+RS_INTRABAR = True                 # 18 Aug: enter the MOMENT price crosses
+                                   # the 20, not on the bar close. Three
+                                   # things follow. The floor is the 5m scan
+                                   # pulse, so "the moment" means within five
+                                   # minutes. Every market is refetched every
+                                   # pulse, which is the L4283 HTTP 429
+                                   # pattern. And an intrabar cross can
+                                   # UN-cross before the bar closes, so this
+                                   # takes entries a close-based rule never
+                                   # would. The STACK is still judged on
+                                   # CLOSED bars, so the fan and the slopes
+                                   # never repaint - only the cross is live.
 RS_MA = "smma"                     # 18 Aug: SMA -> SMMA at his call, on all
                                    # three lengths. Wilder's smoothed MA:
                                    # seeded with the SMA, then
@@ -2140,6 +2152,8 @@ def rs_signal(ast, candles, i):
     last = i - 1
     if last < RS_TREND_LEN + RS_SLOPE_BARS + 2:
         return None
+    # CLOSED bars only: the stack and the 20 line are fixed for the whole of
+    # the forming bar, so nothing here repaints.
     closes = [c["c"] for c in candles[:last + 1]]
     ok, direction, why = rs_stack(closes)
     ast["rs_stack"] = why
@@ -2147,14 +2161,19 @@ def rs_signal(ast, candles, i):
         return None
     m20 = rs_ma(closes, RS_ARM_LEN)
     p20 = rs_ma(closes[:-1], RS_ARM_LEN)
-    px, prev = closes[-1], closes[-2]
     if p20 is None:
         return None
+    if RS_INTRABAR:
+        # the LIVE price of the forming bar against the CLOSED-bar 20
+        px, prev, live = candles[i]["c"], closes[-1], True
+    else:
+        px, prev, live = closes[-1], closes[-2], False
+    ref = m20 if live else p20
     side = None
     if RS_ARM_ON_CROSS:
-        if prev >= p20 and px < m20:
+        if prev >= ref and px < m20:
             side = "SHORT"
-        elif prev <= p20 and px > m20:
+        elif prev <= ref and px > m20:
             side = "LONG"
     else:
         side = "SHORT" if px < m20 else ("LONG" if px > m20 else None)
@@ -2163,7 +2182,8 @@ def rs_signal(ast, candles, i):
     ast["rs_why"] = (f"{'bullish' if direction > 0 else 'bearish'} fan "
                      f"({why}), close {fmt_px(px)} crossed "
                      f"{'below' if side == 'SHORT' else 'above'} the "
-                     f"{RS_ARM_LEN} at {fmt_px(m20)}")
+                     f"{RS_ARM_LEN} at {fmt_px(m20)}"
+                     + (" (intrabar)" if RS_INTRABAR else ""))
     return side
 
 
@@ -5433,8 +5453,9 @@ def check_asset(asset, state):
     # ---- skip the fetch entirely when no new candle can exist ------------
     # ~60 markets re-fetched every pulse is what triggers HTTP 429. A symbol
     # with no open trade has nothing new to say until its next candle closes.
-    if cs is None and not ast["trade"] and not (CROSS_MODE and CROSS_INTRABAR
-                                                and not CROSS_NEEDS_NOWICK):
+    if (cs is None and not ast["trade"]
+            and not (CROSS_MODE and CROSS_INTRABAR and not CROSS_NEEDS_NOWICK)
+            and not (RS_MODE and RS_INTRABAR)):
         boundary = (now_ms() // MS[TF]) * MS[TF] - MS[TF]
         if ast["last_candle_t"] >= boundary:
             RUN_STATUS.append(f"{sym} up to date")
@@ -5456,7 +5477,9 @@ def check_asset(asset, state):
     # entry price is cs[i]["o"], fixed the moment the bar prints. Waiting
     # for the bar to close would enter a full candle after the open the
     # rule names, which on 15m is 15 minutes of drift.
-    last_eval = (len(cs) - 1) if ENTRY_AT_OPEN else last_closed
+    last_eval = ((len(cs) - 1)
+                 if (ENTRY_AT_OPEN or (RS_MODE and RS_INTRABAR))
+                 else last_closed)
     # The cutoff must sit strictly BEHIND last_eval. With ENTRY_AT_OPEN off
     # last_eval IS last_closed, and a cutoff on that same bar made the loop
     # below unsatisfiable - it needs t > last_candle_t AND i <= last_eval, and
@@ -5470,7 +5493,8 @@ def check_asset(asset, state):
         # last_candle_t high-water mark cannot be allowed to skip it. Without
         # this the forming bar is evaluated exactly ONCE, on the first pulse
         # after it opens, and a cross twelve minutes into the bar is invisible.
-        recheck = (CROSS_MODE and CROSS_INTRABAR and not CROSS_NEEDS_NOWICK
+        recheck = (((CROSS_MODE and CROSS_INTRABAR and not CROSS_NEEDS_NOWICK)
+                    or (RS_MODE and RS_INTRABAR))
                    and i == len(cs) - 1 and not ast["trade"])
         if i > last_eval:
             continue
