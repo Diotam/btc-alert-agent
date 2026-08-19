@@ -5446,7 +5446,12 @@ def check_asset(asset, state):
     # for the bar to close would enter a full candle after the open the
     # rule names, which on 15m is 15 minutes of drift.
     last_eval = (len(cs) - 1) if ENTRY_AT_OPEN else last_closed
-    cutoff = cs[last_closed]["t"] - REPLAY_CANDLES * MS[TF]
+    # The cutoff must sit strictly BEHIND last_eval. With ENTRY_AT_OPEN off
+    # last_eval IS last_closed, and a cutoff on that same bar made the loop
+    # below unsatisfiable - it needs t > last_candle_t AND i <= last_eval, and
+    # no bar could be both. process_candle then never ran at all: no arms, no
+    # gates, no signals, and nothing in the log to say so. 18 Aug.
+    cutoff = cs[max(0, last_eval - 1)]["t"] - REPLAY_CANDLES * MS[TF]
     if ast["last_candle_t"] < cutoff:
         ast["last_candle_t"] = cutoff
     for i in range(len(cs)):
