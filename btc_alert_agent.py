@@ -325,6 +325,17 @@ RS_MA = "smma"                     # 18 Aug: SMA -> SMMA at his call, on all
 RS_TREND_BY_SLOPE = False          # False: "uptrend" means price is ABOVE the
                                    # 200SMA. True: it means the 200SMA is
                                    # RISING. His wording fits the first.
+RS_ARM_ON_CROSS = True             # 18 Aug: the arm needs a CROSSING, not a
+                                   # level. "Closes below the 20" means the
+                                   # PREVIOUS close was above it and this one
+                                   # is below. Without this it was a level
+                                   # test, so a symbol that broke down on
+                                   # MONDAY was still "below the 20" today,
+                                   # armed on the spot and - being below the
+                                   # 50 as well - triggered on the same bar.
+                                   # xyz:SNDK entered that way on a cross
+                                   # three days stale. False restores the
+                                   # level test.
 RS_SAME_BAR_OK = True              # may one bar both ARM and TRIGGER? A close
                                    # under the 20 is usually also under the 50
                                    # when the break is sharp. False forces the
@@ -2139,11 +2150,20 @@ def rs_signal(ast, candles, i):
             arm = {}
             ast["rs_arm"] = None
 
-    # ---- arm
+    # ---- arm. A CROSS, not a level: the previous close must have been on
+    # the other side of the 20, or a stale break re-arms every bar forever.
     if not arm:
-        if uptrend and px < m20:
+        prev_px = closes[-2] if len(closes) > 1 else None
+        prev20 = rs_ma(closes[:-1], RS_ARM_LEN)
+        crossed_dn = crossed_up = True
+        if RS_ARM_ON_CROSS:
+            if prev_px is None or prev20 is None:
+                return None
+            crossed_dn = prev_px >= prev20 and px < m20
+            crossed_up = prev_px <= prev20 and px > m20
+        if uptrend and px < m20 and crossed_dn:
             arm = {"side": "SHORT", "t": t_now}
-        elif (not uptrend) and px > m20:
+        elif (not uptrend) and px > m20 and crossed_up:
             arm = {"side": "LONG", "t": t_now}
         if arm:
             ast["rs_arm"] = arm
