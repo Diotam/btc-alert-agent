@@ -313,11 +313,15 @@ RS_MODE = True
 RS_TREND_LEN = 200                 # the regime MA
 RS_ARM_LEN = 20                    # arms the setup
 RS_TRIGGER_LEN = 50                # pulls the trigger
-RS_MA = "sma"                      # "sma" or "ema". His spec said 20SMA/50SMA
-                                   # on the SHORT leg and 20ema/50ema on the
-                                   # LONG leg - taken as SMA for both, since
-                                   # the strategy is named for the 200SMA.
-                                   # Set "ema" to mirror it the other way.
+RS_MA = "smma"                     # 18 Aug: SMA -> SMMA at his call, on all
+                                   # three lengths. Wilder's smoothed MA:
+                                   # seeded with the SMA, then
+                                   # (prev*(n-1) + close)/n. That is an EMA
+                                   # with alpha 1/n, so SMMA(20) tracks about
+                                   # like an EMA(39) - MUCH slower than the
+                                   # SMA(20) it replaces. Expect fewer arms,
+                                   # later triggers and a 200 line that turns
+                                   # slowly. "sma" and "ema" still work.
 RS_TREND_BY_SLOPE = False          # False: "uptrend" means price is ABOVE the
                                    # 200SMA. True: it means the 200SMA is
                                    # RISING. His wording fits the first.
@@ -2013,12 +2017,30 @@ def sma(vals, n):
     return sum(vals[-n:]) / float(n)
 
 
+def smma(vals, n):
+    """Smoothed / Wilder moving average.
+
+    Seeded with the SMA of the first n values, then
+        smma = (prev * (n - 1) + value) / n
+    which is an EMA with alpha = 1/n - roughly an EMA(2n-1), so an SMMA(20)
+    is far slower than an SMA(20). Fewer crossings, later arms.
+    """
+    if n <= 0 or len(vals) < n:
+        return None
+    s = sum(vals[:n]) / float(n)
+    for v in vals[n:]:
+        s = (s * (n - 1) + v) / float(n)
+    return s
+
+
 def rs_ma(closes, n):
-    """The engine's moving average - SMA or EMA per RS_MA."""
+    """The engine's moving average - SMMA, SMA or EMA per RS_MA."""
     if RS_MA == "ema":
         e = ema(closes, n)
         return e[-1] if e and len(closes) >= n else None
-    return sma(closes, n)
+    if RS_MA == "sma":
+        return sma(closes, n)
+    return smma(closes, n)
 
 
 def rs_gate_status(ast, candles, i, sym=None):
