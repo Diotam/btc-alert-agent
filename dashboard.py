@@ -627,12 +627,15 @@ const TVBASE='https://www.tradingview.com/chart/'+(TVLAYOUT?TVLAYOUT+'/':'')+'?s
 // (xyz:ARM, xyz:CL) are equities and commodities TradingView carries under
 // their own tickers, so the bare name resolves better.
 function tradeAge(openedT){
-  // how long the position has been on. opened_t IS the entry bar's open and
-  // the fill is at that open, so nothing is added. The old version added a
-  // whole candle, which on 4h left every card reading "just now" for four
-  // hours before the clock started.
+  // opened_t is always the entry bar's OPEN. Whether the FILL was at that
+  // open or at the bar's close depends on the agent's ENTRY_AT_OPEN, which
+  // it publishes as entry_on_close - so add one candle only when the fill
+  // was at the close. Adding it unconditionally left 4h cards reading
+  // "just now" for four hours; never adding it made a 30m trade that had
+  // only just filled show up as 30m old.
   if(!openedT) return '';
-  var ms = Date.now() - openedT;
+  var ms = Date.now() - openedT - (window.__ageAdd || 0);
+  if(ms < 0) ms = 0;
   if(ms < 60000) return 'just now';
   var m = Math.floor(ms/60000), h = Math.floor(m/60), dd = Math.floor(h/24);
   if(dd >= 1) return dd + 'd ' + (h%24) + 'h';
@@ -801,6 +804,7 @@ function render(d){
     }
   }
   step('r-hdr');
+  window.__ageAdd = (d._meta && d._meta.entry_on_close) ? (d.tf_ms || 0) : 0;
   document.getElementById('trades').innerHTML=d.trades.length?d.trades.map(t=>{
    const cls=t.dir==='LONG'?'long':'short';
    const sgn=t.dir==='LONG'?1:-1;
