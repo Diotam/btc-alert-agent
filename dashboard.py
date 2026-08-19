@@ -897,26 +897,30 @@ function render(d){
   // agent writes null for everything else, so this list is already short.
   const G=d.gates||[];
   // WATCHLIST, back on 18 Aug for the reversal-200 engine, which has a real
-  // approaching state: armed on the 20, not yet through the 50. It was
-  // hidden while the flip engine ran because that one entered ON the flip
-  // and had nothing to approach.
+  // WATCHLIST for the reversal-200 engine: symbols whose 20/50/200 stack is
+  // FANNED IN ORDER and trending, waiting on a close through the 20. The old
+  // "N candles / flip bar" fields belonged to the flip engine and are gone -
+  // this engine has no arm to count bars from.
   const _n=document.getElementById('n-gates'); if(_n) _n.textContent=G.length;
   const _g=document.getElementById('gsub');
-  if(_g) _g.textContent=G.length?G.filter(x=>x.stage==='ready').length
-    +' ready \u00b7 '+G.filter(x=>x.stage==='waiting').length+' waiting':'';
-  document.getElementById('gates').innerHTML=G.length?G.map(g=>{
+  if(_g){
+    const nb=G.filter(x=>(x.trend||'').indexOf('bullish')>=0).length;
+    _g.textContent=G.length?nb+' bullish \u00b7 '+(G.length-nb)+' bearish':'';
+  }
+  // closest to its 20 first - those are the ones about to trigger
+  const gd=g=>{const m=/([0-9.]+)%/.exec(g.detail||''); return m?parseFloat(m[1]):999;};
+  document.getElementById('gates').innerHTML=G.length?G.slice()
+    .sort((a,b)=>gd(a)-gd(b)).map(g=>{
     const cls=g.dir==='LONG'?'long':'short';
-    const live=g.stage==='ready'||g.stage==='flipped';
+    const near=gd(g)<0.5;
     return `<div class="card tv" onclick="tvOpen('${g.sym}')" `
       +`title="open ${g.sym} on TradingView"><div class=row>
-      <span class=sym>${g.stage==='ready'?'\u25cf':'\u25cb'} ${g.sym} `
+      <span class=sym>${near?'\u25cf':'\u25cb'} ${g.sym} `
       +`<span class=${cls}>${g.dir||''}</span></span>
-      <span class="muted"${live?' style="color:#c9d1d9"':''}>${g.stage}</span>
+      <span class="muted"${near?' style="color:#c9d1d9"':''}>${g.trend||''}</span>
       </div><div class=row>
-      <span class=muted>${g.run||0} candle${(g.run||0)===1?'':'s'} `
-      +`${g.trend||''} \u00b7 ${g.age===0?'flip bar':'+'+g.age+' bar'}</span>
       <span class=muted>${g.detail||''}</span></div></div>`;
-  }).join(''):'<div class="card muted">nothing armed</div>';
+  }).join(''):'<div class="card muted">no stack qualifies</div>';
   step('r-gates');
   const cut=Date.now()-DAYS[PERIOD]*86400000;
   // inPeriod is EVERY trade closed in the selected window - that is the
