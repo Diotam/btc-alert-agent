@@ -2021,6 +2021,50 @@ def rs_ma(closes, n):
     return sma(closes, n)
 
 
+def rs_gate_status(ast, candles, i, sym=None):
+    """Where a symbol sits in the REVERSAL-200 sequence, for the watchlist.
+
+    Report only - it never gates anything, rs_signal does. Returns None for
+    symbols with nothing pending, so the panel stays short.
+      waiting   armed, price has not reached the 50 yet
+      ready     armed AND already past the 50 - fires on this close
+      blocked   traded; waiting for the 20 to be reclaimed
+    """
+    arm = ast.get("rs_arm") or {}
+    block = ast.get("rs_block")
+    if not arm and not block:
+        return None
+    last = i - 1
+    if last < RS_TREND_LEN + 2:
+        return None
+    closes = [c["c"] for c in candles[:last + 1]]
+    m200 = rs_ma(closes, RS_TREND_LEN)
+    m20 = rs_ma(closes, RS_ARM_LEN)
+    m50 = rs_ma(closes, RS_TRIGGER_LEN)
+    if m200 is None or m20 is None or m50 is None:
+        return None
+    px = closes[-1]
+    span = MS.get(TF, 0) or 1
+    if not arm and block:
+        return {"sym": sym, "dir": "LONG" if block == "SHORT" else "SHORT",
+                "stage": "blocked", "run": 0,
+                "trend": f"traded {block}", "age": 0,
+                "detail": (f"needs a close "
+                           f"{'above' if block == 'SHORT' else 'below'} the "
+                           f"{RS_ARM_LEN} at {fmt_px(m20)}")}
+    long_side = arm["side"] == "LONG"
+    past50 = (px > m50) if long_side else (px < m50)
+    age = int((candles[last]["t"] - arm.get("t", 0)) // span)
+    dist = abs(px - m50) / px * 100
+    return {"sym": sym, "dir": arm["side"],
+            "stage": "ready" if past50 else "waiting",
+            "run": age + 1, "trend": ("downtrend" if long_side else "uptrend"),
+            "age": age,
+            "detail": (f"{RS_TRIGGER_LEN} at {fmt_px(m50)}, "
+                       f"{dist:.2f}% away" if not past50
+                       else f"past the {RS_TRIGGER_LEN} - triggers on close")}
+
+
 def rs_signal(ast, candles, i):
     """Reversal 200SMA. Returns "LONG" / "SHORT" to ENTER, else None.
 
@@ -4722,6 +4766,13 @@ def process_candle(asset, ast, candles, ha, i):
     if RS_MODE:
         ast["sym"] = sym
         side = rs_signal(ast, candles, i)
+        # watchlist row: written EVERY scan, after rs_signal has updated the
+        # arm, so the panel is never staler than the last close. None clears
+        # a stale row rather than leaving it up forever.
+        try:
+            ast["gate"] = rs_gate_status(ast, candles, i, sym)
+        except Exception as e:
+            log(f"{sym}: rs_gate_status failed: {type(e).__name__}: {e}")
         if not side:
             return False
         want_long = side == "LONG"
