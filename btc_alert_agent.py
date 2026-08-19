@@ -338,6 +338,20 @@ RS_FLAT_PCT = 0.05                 # each line must move at least this much,
                                    # number is NOT from his spec - calibrate
                                    # it against how many symbols qualify.
 RS_SLOPE_BARS = 5                  # bars the slope is measured over
+RS_STOP_ON_CLOSE = True            # 18 Aug: CLOSE-CONFIRMED STOP. A wick
+                                   # THROUGH the swing stop that closes back
+                                   # inside does NOT take the trade out - only
+                                   # a bar that CLOSES past the level does,
+                                   # and then the exit is at that close, not
+                                   # at the level. THE COST: a genuine loss
+                                   # runs slightly past 1R. The backstop is
+                                   # RS_DISASTER_R below.
+RS_DISASTER_R = 1.5                # ...unless price runs THIS many stop
+                                   # distances past entry, which exits at
+                                   # once, no close needed. Close confirmation
+                                   # is safe against wicks but exposed on a
+                                   # runaway bar; this caps that tail.
+                                   # 0 disables it.
 RS_INTRABAR = True                 # 18 Aug: enter the MOMENT price crosses
                                    # the 20, not on the bar close. Three
                                    # things follow. The floor is the 5m scan
@@ -3538,20 +3552,23 @@ def process_open_trade(asset, trade, candles, ha, last_closed_t):
             # that closes back inside does NOT stop us out - that wick is the
             # stop hunt. Two escapes: a bar that CLOSES past the level, and
             # the disaster level, which needs no close at all.
-            if (SD_STOP_ON_CLOSE and trade.get("engine") == "sd"
-                    and STOP_EXIT):
+            eng = trade.get("engine")
+            on_close = ((SD_STOP_ON_CLOSE and eng == "sd")
+                        or (RS_STOP_ON_CLOSE and eng == "rs"))
+            dis_r = SD_DISASTER_R if eng == "sd" else RS_DISASTER_R
+            if on_close and STOP_EXIT:
                 r0 = abs(trade["entry"] - trade["stop"]) or None
                 dis = None
-                if r0 and SD_DISASTER_R:
-                    dis = ((trade["entry"] - SD_DISASTER_R * r0) if long
-                           else (trade["entry"] + SD_DISASTER_R * r0))
+                if r0 and dis_r:
+                    dis = ((trade["entry"] - dis_r * r0) if long
+                           else (trade["entry"] + dis_r * r0))
                 blown = dis is not None and ((c["l"] <= dis) if long
                                              else (c["h"] >= dis))
                 closed_past = ((c["c"] <= trade["stop"]) if long
                                else (c["c"] >= trade["stop"]))
                 if blown:
                     log(f"{asset['symbol']}: DISASTER STOP - price ran "
-                        f"{SD_DISASTER_R}x the stop distance past entry, "
+                        f"{dis_r}x the stop distance past entry, "
                         f"out at ${fmt_px(dis)} without waiting for a close")
                     return _close_trade(asset, trade, dis, kind, event_t)
                 if not closed_past:
