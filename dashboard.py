@@ -607,7 +607,7 @@ h1{font-size:17px;margin:4px 0 12px}
   <div id=obars></div>
 </div>
 <div class="section shead" onclick="toggle('trades')"><span class=chev id=c-trades>\u25be</span>Open trades<span class=cnt id=n-trades>0</span></div><div id=trades></div>
-<div id=gates style="display:none"></div>
+<div class="section shead" onclick="toggle('gates')"><span class=chev id=c-gates>\u25be</span>Watchlist<span class=cnt id=n-gates>0</span> <span id=gsub class=muted style="float:right;text-transform:none;letter-spacing:0"></span></div><div id=gates></div>
 <div class="section shead" onclick="toggle('closed')"><span class=chev id=c-closed>\u25be</span>Closed trades<span class=cnt id=n-closed>0</span> <span id=csub class=muted style="float:right;text-transform:none;letter-spacing:0"></span></div><div id=closed></div>
 <div class="section shead" onclick="toggle('events')"><span class=chev id=c-events>\u25be</span>Recent events<span class=cnt id=n-events>0</span></div><div id=events></div>
 <script>
