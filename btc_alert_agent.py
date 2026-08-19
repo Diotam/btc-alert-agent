@@ -320,6 +320,17 @@ RS_TRIGGER_LEN = 50                # the MIDDLE line of the stack. 18 Aug: it
 #   above the 200:  20 > 50 > 200   |   below the 200:  20 < 50 < 200
 # Then a close CROSSING the 20 is the entry - down for a short, up for a
 # long - in either regime. The regime only certifies the stack is clean.
+RS_WITH_TREND = True               # 18 Aug: DIRECTION COMES FROM THE FAN.
+                                   #   bullish fan -> LONG only, on a cross
+                                   #                  UP through the 20
+                                   #   bearish fan -> SHORT only, on a cross
+                                   #                  DOWN through the 20
+                                   # The earlier spec allowed both sides in
+                                   # both regimes; this one does not. That
+                                   # makes the engine TREND-FOLLOWING - it
+                                   # buys a pullback that reclaims the 20 -
+                                   # despite "Reversal" in the name below.
+                                   # False restores both-sides behaviour.
 RS_STACK_ORDER = True              # require the fan. False = order ignored.
 RS_FLAT_PCT = 0.05                 # each line must move at least this much,
                                    # as a % of itself, over RS_SLOPE_BARS.
@@ -2091,16 +2102,22 @@ def rs_gate_status(ast, candles, i, sym=None):
     if not ok:
         return None
     m20 = rs_ma(closes, RS_ARM_LEN)
-    px = closes[-1]
+    px = candles[i]["c"] if RS_INTRABAR else closes[-1]
     dist = (px - m20) / px * 100.0
-    return {"sym": sym, "dir": "SHORT" if px > m20 else "LONG",
-            "stage": "waiting", "run": 0,
+    want = "LONG" if direction > 0 else "SHORT"
+    if RS_WITH_TREND:
+        # only pending setups: price must be on the FAR side of the 20 and
+        # waiting to cross back the fan's way. Price already onside has
+        # nothing to trigger.
+        if (want == "LONG" and px > m20) or (want == "SHORT" and px < m20):
+            return None
+    return {"sym": sym, "dir": want, "stage": "waiting", "run": 0,
             "trend": "bullish fan" if direction > 0 else "bearish fan",
             "age": 0,
             "detail": (f"{'above' if dist > 0 else 'below'} the "
                        f"{RS_ARM_LEN} by {abs(dist):.2f}% - "
-                       f"{'a close below' if dist > 0 else 'a close above'} "
-                       f"it enters")}
+                       f"{'a cross up' if want == 'LONG' else 'a cross down'}"
+                       f" through it enters")}
 
 
 def rs_stack(closes):
@@ -2179,6 +2196,11 @@ def rs_signal(ast, candles, i):
         side = "SHORT" if px < m20 else ("LONG" if px > m20 else None)
     if not side:
         return None
+    # the fan decides the direction: a bullish stack takes LONGS only
+    if RS_WITH_TREND:
+        want = "LONG" if direction > 0 else "SHORT"
+        if side != want:
+            return None
     ast["rs_why"] = (f"{'bullish' if direction > 0 else 'bearish'} fan "
                      f"({why}), close {fmt_px(px)} crossed "
                      f"{'below' if side == 'SHORT' else 'above'} the "
