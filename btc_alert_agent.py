@@ -5634,6 +5634,13 @@ def check_once():
                               # "stop hit - closing" for hours on 17 Aug while
                               # the agent was correctly still holding them.
                               stop_on_close=bool(SD_STOP_ON_CLOSE and SD_MODE),
+                              # the fill is at the entry bar's CLOSE when
+                              # ENTRY_AT_OPEN is off, so the card's age needs
+                              # one candle added - opened_t is the bar's OPEN.
+                              # Published rather than assumed, because adding
+                              # it unconditionally left 4h cards reading
+                              # "just now" for four hours.
+                              entry_on_close=not bool(ENTRY_AT_OPEN),
                               tz=TIMEZONE,
                               last_scan_utc=datetime.now(timezone.utc)
                               .isoformat(timespec="seconds"))
