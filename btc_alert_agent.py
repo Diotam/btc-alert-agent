@@ -312,7 +312,21 @@ CROSS_SLOPE_BARS = 5               # bars per slope window. 5 on 30m = 2.5h.
 RS_MODE = True
 RS_TREND_LEN = 200                 # the regime MA
 RS_ARM_LEN = 20                    # arms the setup
-RS_TRIGGER_LEN = 50                # pulls the trigger
+RS_TRIGGER_LEN = 50                # the MIDDLE line of the stack. 18 Aug: it
+                                   # no longer pulls the trigger - the 20
+                                   # cross does that on its own.
+# ---- 18 Aug restructure. The three lines must be FANNED IN ORDER and all
+# three must be TRENDING. Crossed or flat stacks take no trades at all.
+#   above the 200:  20 > 50 > 200   |   below the 200:  20 < 50 < 200
+# Then a close CROSSING the 20 is the entry - down for a short, up for a
+# long - in either regime. The regime only certifies the stack is clean.
+RS_STACK_ORDER = True              # require the fan. False = order ignored.
+RS_FLAT_PCT = 0.05                 # each line must move at least this much,
+                                   # as a % of itself, over RS_SLOPE_BARS.
+                                   # This is the "no flat lines" rule and the
+                                   # number is NOT from his spec - calibrate
+                                   # it against how many symbols qualify.
+RS_SLOPE_BARS = 5                  # bars the slope is measured over
 RS_MA = "smma"                     # 18 Aug: SMA -> SMMA at his call, on all
                                    # three lengths. Wilder's smoothed MA:
                                    # seeded with the SMA, then
@@ -2055,147 +2069,102 @@ def rs_ma(closes, n):
 
 
 def rs_gate_status(ast, candles, i, sym=None):
-    """Where a symbol sits in the REVERSAL-200 sequence, for the watchlist.
-
-    Report only - it never gates anything, rs_signal does. Returns None for
-    symbols with nothing pending, so the panel stays short.
-      waiting   armed, price has not reached the 50 yet
-      ready     armed AND already past the 50 - fires on this close
-      blocked   traded; waiting for the 20 to be reclaimed
-    """
-    arm = ast.get("rs_arm") or {}
-    block = ast.get("rs_block")
-    if not arm and not block:
-        return None
+    """Watchlist row: symbols whose stack QUALIFIES and are waiting for a 20
+    cross. Report only - it never gates anything."""
     last = i - 1
-    if last < RS_TREND_LEN + 2:
+    if last < RS_TREND_LEN + RS_SLOPE_BARS + 2:
         return None
     closes = [c["c"] for c in candles[:last + 1]]
-    m200 = rs_ma(closes, RS_TREND_LEN)
+    ok, direction, why = rs_stack(closes)
+    if not ok:
+        return None
+    m20 = rs_ma(closes, RS_ARM_LEN)
+    px = closes[-1]
+    dist = (px - m20) / px * 100.0
+    return {"sym": sym, "dir": "SHORT" if px > m20 else "LONG",
+            "stage": "waiting", "run": 0,
+            "trend": "bullish fan" if direction > 0 else "bearish fan",
+            "age": 0,
+            "detail": (f"{'above' if dist > 0 else 'below'} the "
+                       f"{RS_ARM_LEN} by {abs(dist):.2f}% - "
+                       f"{'a close below' if dist > 0 else 'a close above'} "
+                       f"it enters")}
+
+
+def rs_stack(closes):
+    """(ok, direction, reason) for the three-line stack.
+
+    direction is +1 for a bullish fan (20 > 50 > 200, all rising), -1 for a
+    bearish fan, 0 when it does not qualify. Crossed or flat stacks return 0.
+    """
     m20 = rs_ma(closes, RS_ARM_LEN)
     m50 = rs_ma(closes, RS_TRIGGER_LEN)
-    if m200 is None or m20 is None or m50 is None:
-        return None
-    px = closes[-1]
-    span = MS.get(TF, 0) or 1
-    if not arm and block:
-        return {"sym": sym, "dir": "LONG" if block == "SHORT" else "SHORT",
-                "stage": "blocked", "run": 0,
-                "trend": f"traded {block}", "age": 0,
-                "detail": (f"needs a close "
-                           f"{'above' if block == 'SHORT' else 'below'} the "
-                           f"{RS_ARM_LEN} at {fmt_px(m20)}")}
-    long_side = arm["side"] == "LONG"
-    past50 = (px > m50) if long_side else (px < m50)
-    age = int((candles[last]["t"] - arm.get("t", 0)) // span)
-    dist = abs(px - m50) / px * 100
-    return {"sym": sym, "dir": arm["side"],
-            "stage": "ready" if past50 else "waiting",
-            "run": age + 1, "trend": ("downtrend" if long_side else "uptrend"),
-            "age": age,
-            "detail": (f"{RS_TRIGGER_LEN} at {fmt_px(m50)}, "
-                       f"{dist:.2f}% away" if not past50
-                       else f"past the {RS_TRIGGER_LEN} - triggers on close")}
+    m200 = rs_ma(closes, RS_TREND_LEN)
+    if m20 is None or m50 is None or m200 is None:
+        return False, 0, "not enough history"
+    n = max(1, RS_SLOPE_BARS)
+    if len(closes) <= n:
+        return False, 0, "not enough history"
+    back = closes[:-n]
+    p20 = rs_ma(back, RS_ARM_LEN)
+    p50 = rs_ma(back, RS_TRIGGER_LEN)
+    p200 = rs_ma(back, RS_TREND_LEN)
+    if p20 is None or p50 is None or p200 is None:
+        return False, 0, "not enough history"
+    sl = [((a - b) / b * 100.0) if b else 0.0
+          for a, b in ((m20, p20), (m50, p50), (m200, p200))]
+
+    up = (m20 > m50 > m200) if RS_STACK_ORDER else True
+    dn = (m20 < m50 < m200) if RS_STACK_ORDER else True
+    if not up and not dn:
+        return False, 0, (f"lines crossed - 20 {fmt_px(m20)}, 50 "
+                          f"{fmt_px(m50)}, 200 {fmt_px(m200)}")
+    if up and all(x > RS_FLAT_PCT for x in sl):
+        return True, 1, (f"bullish fan, slopes "
+                         f"{sl[0]:+.2f}/{sl[1]:+.2f}/{sl[2]:+.2f}%")
+    if dn and all(x < -RS_FLAT_PCT for x in sl):
+        return True, -1, (f"bearish fan, slopes "
+                          f"{sl[0]:+.2f}/{sl[1]:+.2f}/{sl[2]:+.2f}%")
+    return False, 0, (f"flat or mixed - slopes "
+                      f"{sl[0]:+.2f}/{sl[1]:+.2f}/{sl[2]:+.2f}%, need "
+                      f"{RS_FLAT_PCT}%")
 
 
 def rs_signal(ast, candles, i):
-    """Reversal 200SMA. Returns "LONG" / "SHORT" to ENTER, else None.
+    """Reversal 200SMMA, 18 Aug spec. Returns "LONG" / "SHORT", else None.
 
-    Judged on the LAST CLOSED bar (i-1) - every rule in the spec is about a
-    CLOSE - so the entry price is the forming bar and nothing repaints.
+    The stack must be fanned in order AND all three lines trending. Then a
+    close that CROSSES the 20 enters: down is a SHORT, up is a LONG, in
+    either regime. Judged on the last CLOSED bar, so nothing repaints.
     """
     last = i - 1
-    if last < RS_TREND_LEN + 2:
+    if last < RS_TREND_LEN + RS_SLOPE_BARS + 2:
         return None
     closes = [c["c"] for c in candles[:last + 1]]
-    m200 = rs_ma(closes, RS_TREND_LEN)
+    ok, direction, why = rs_stack(closes)
+    ast["rs_stack"] = why
+    if not ok:
+        return None
     m20 = rs_ma(closes, RS_ARM_LEN)
-    m50 = rs_ma(closes, RS_TRIGGER_LEN)
-    if m200 is None or m20 is None or m50 is None:
+    p20 = rs_ma(closes[:-1], RS_ARM_LEN)
+    px, prev = closes[-1], closes[-2]
+    if p20 is None:
         return None
-    px = closes[-1]
-    if RS_TREND_BY_SLOPE:
-        prev = rs_ma(closes[:-1], RS_TREND_LEN)
-        if prev is None:
-            return None
-        uptrend = m200 > prev
+    side = None
+    if RS_ARM_ON_CROSS:
+        if prev >= p20 and px < m20:
+            side = "SHORT"
+        elif prev <= p20 and px > m20:
+            side = "LONG"
     else:
-        uptrend = px > m200
-
-    arm = ast.get("rs_arm") or {}
-    t_now = candles[last]["t"]
-
-    # ---- one entry per setup: after a trigger, the 20 must be RECLAIMED
-    block = ast.get("rs_block")
-    if block and RS_ONE_PER_SETUP:
-        reclaimed = (px > m20) if block == "SHORT" else (px < m20)
-        if not reclaimed:
-            return None
-        ast["rs_block"] = None
-        log(f"{ast.get('sym','?')}: {RS_ARM_LEN} reclaimed at {fmt_px(px)} - "
-            f"the engine can arm again")
-
-    if arm and RS_ARM_EXPIRY:
-        span = MS.get(TF, 0)
-        if span and (t_now - arm.get("t", 0)) // span > RS_ARM_EXPIRY:
-            arm = {}
-            ast["rs_arm"] = None
-
-    # ---- cancel: price closed back on the far side of the 20
-    if arm and RS_ARM_CANCEL:
-        if (arm["side"] == "SHORT" and px > m20) or \
-           (arm["side"] == "LONG" and px < m20):
-            log(f"{ast.get('sym','?')}: {arm['side']} arm cancelled - close "
-                f"{fmt_px(px)} back across the {RS_ARM_LEN}")
-            arm = {}
-            ast["rs_arm"] = None
-
-    # ---- arm. A CROSS, not a level: the previous close must have been on
-    # the other side of the 20, or a stale break re-arms every bar forever.
-    if not arm:
-        prev_px = closes[-2] if len(closes) > 1 else None
-        prev20 = rs_ma(closes[:-1], RS_ARM_LEN)
-        crossed_dn = crossed_up = True
-        if RS_ARM_ON_CROSS:
-            if prev_px is None or prev20 is None:
-                return None
-            crossed_dn = prev_px >= prev20 and px < m20
-            crossed_up = prev_px <= prev20 and px > m20
-        if uptrend and px < m20 and crossed_dn:
-            arm = {"side": "SHORT", "t": t_now}
-        elif (not uptrend) and px > m20 and crossed_up:
-            arm = {"side": "LONG", "t": t_now}
-        if arm:
-            ast["rs_arm"] = arm
-            log(f"{ast.get('sym','?')}: ARMED {arm['side']} - "
-                f"{'up' if uptrend else 'down'}trend on the {RS_TREND_LEN}, "
-                f"close {fmt_px(px)} "
-                f"{'below' if arm['side'] == 'SHORT' else 'above'} the "
-                f"{RS_ARM_LEN} at {fmt_px(m20)}")
-            if not RS_SAME_BAR_OK:
-                return None
-
-    if not arm:
+        side = "SHORT" if px < m20 else ("LONG" if px > m20 else None)
+    if not side:
         return None
-
-    # ---- trigger
-    if arm["side"] == "SHORT" and px < m50:
-        ast["rs_why"] = (f"uptrend on the {RS_TREND_LEN} "
-                         f"({fmt_px(m200)}), close {fmt_px(px)} broke the "
-                         f"{RS_ARM_LEN} then the {RS_TRIGGER_LEN} "
-                         f"({fmt_px(m50)})")
-        ast["rs_arm"] = None
-        ast["rs_block"] = "SHORT"
-        return "SHORT"
-    if arm["side"] == "LONG" and px > m50:
-        ast["rs_why"] = (f"downtrend on the {RS_TREND_LEN} "
-                         f"({fmt_px(m200)}), close {fmt_px(px)} cleared the "
-                         f"{RS_ARM_LEN} then the {RS_TRIGGER_LEN} "
-                         f"({fmt_px(m50)})")
-        ast["rs_arm"] = None
-        ast["rs_block"] = "LONG"
-        return "LONG"
-    return None
+    ast["rs_why"] = (f"{'bullish' if direction > 0 else 'bearish'} fan "
+                     f"({why}), close {fmt_px(px)} crossed "
+                     f"{'below' if side == 'SHORT' else 'above'} the "
+                     f"{RS_ARM_LEN} at {fmt_px(m20)}")
+    return side
 
 
 def atr(candles, i, n=None):
