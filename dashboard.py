@@ -892,11 +892,14 @@ function render(d){
   // SETUP PIPELINE - only symbols that have reached a colour flip. The
   // agent writes null for everything else, so this list is already short.
   const G=d.gates||[];
-  // the pipeline section is gone - the flip engine enters ON the flip, so
-  // there is no approaching state to display. The container is kept hidden
-  // so this block stays harmless rather than being ripped out.
+  // WATCHLIST, back on 18 Aug for the reversal-200 engine, which has a real
+  // approaching state: armed on the 20, not yet through the 50. It was
+  // hidden while the flip engine ran because that one entered ON the flip
+  // and had nothing to approach.
   const _n=document.getElementById('n-gates'); if(_n) _n.textContent=G.length;
-  const _g=document.getElementById('gsub'); if(_g) _g.textContent='';
+  const _g=document.getElementById('gsub');
+  if(_g) _g.textContent=G.length?G.filter(x=>x.stage==='ready').length
+    +' ready \u00b7 '+G.filter(x=>x.stage==='waiting').length+' waiting':'';
   document.getElementById('gates').innerHTML=G.length?G.map(g=>{
     const cls=g.dir==='LONG'?'long':'short';
     const live=g.stage==='ready'||g.stage==='flipped';
@@ -909,7 +912,7 @@ function render(d){
       <span class=muted>${g.run||0} candle${(g.run||0)===1?'':'s'} `
       +`${g.trend||''} \u00b7 ${g.age===0?'flip bar':'+'+g.age+' bar'}</span>
       <span class=muted>${g.detail||''}</span></div></div>`;
-  }).join(''):'<div class="card muted">nothing has flipped</div>';
+  }).join(''):'<div class="card muted">nothing armed</div>';
   step('r-gates');
   const cut=Date.now()-DAYS[PERIOD]*86400000;
   // inPeriod is EVERY trade closed in the selected window - that is the
