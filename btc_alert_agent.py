@@ -437,6 +437,17 @@ RS_ARM_CANCEL = True               # a close back on the far side of the 20
 RS_RR = 1.5                        # target = this many R
 RS_STOP = "swing"                  # his 18 Aug call: the RECENT SWING high
                                    # for a short, swing low for a long.
+RS_STOP_CONT = "200smma"           # 18 Aug: the CONTINUATION path (pathway 1,
+                                   # diverging fan, cross of the 20) now stops
+                                   # at the 200 SMMA instead of the swing.
+                                   # NOTE THE SIZE: in a fanned trend the 200
+                                   # sits a long way from price, so R becomes
+                                   # several percent and the 1.5R target
+                                   # several more. "swing" restores the
+                                   # 20-bar stop. The REVERSAL path (pathway
+                                   # 2) is unaffected and still uses the
+                                   # swing - its entry IS the 200 cross, so a
+                                   # 200 stop would be zero distance.
 RS_SWING_BARS = 20                 # how far back "recent" reaches, in TF
                                    # bars. 20 on 30m is ten hours. NOT IN HIS
                                    # SPEC - a fresh default, not inherited
@@ -2298,6 +2309,7 @@ def rs_signal(ast, candles, i):
         if not crossed200:
             return None
         ast["rs_rev_arm"] = None
+        ast["rs_path"] = "reversal"
         ast["rs_why"] = (f"{why}, crossed the {RS_TRIGGER_LEN} then the "
                          f"{RS_TREND_LEN} at {fmt_px(m200)} - reversal"
                          + (" (intrabar)" if RS_INTRABAR else ""))
@@ -2330,6 +2342,7 @@ def rs_signal(ast, candles, i):
         want = "LONG" if direction > 0 else "SHORT"
         if side != want:
             return None
+    ast["rs_path"] = "continuation"
     ast["rs_why"] = (f"{'bullish' if direction > 0 else 'bearish'} fan "
                      f"({why}), close {fmt_px(px)} crossed "
                      f"{'below' if side == 'SHORT' else 'above'} the "
@@ -4964,26 +4977,40 @@ def process_candle(asset, ast, candles, ha, i):
         if not ALLOW_SHORTS and not want_long:
             return False
         entry = c["c"]
-        lo = max(0, i - RS_SWING_BARS)
-        win = candles[lo:i]
-        if not win:
-            return False
-        # the RECENT SWING - high for a short, low for a long
-        stop = (min(x["l"] for x in win) if want_long
-                else max(x["h"] for x in win))
+        stop = None
+        stop_src = f"{RS_SWING_BARS}-bar swing"
+        # PATHWAY 1 (continuation) can stop at the 200 SMMA instead
+        if RS_STOP_CONT == "200smma" and ast.get("rs_path") == "continuation":
+            m200 = rs_ma([x["c"] for x in candles[:i]], RS_TREND_LEN)
+            if m200 is not None:
+                onside = (m200 < entry) if want_long else (m200 > entry)
+                if onside:
+                    stop, stop_src = m200, f"{RS_TREND_LEN} SMMA"
+                else:
+                    log(f"{sym}: 200 SMMA is on the WRONG side of entry "
+                        f"({fmt_px(m200)} vs {fmt_px(entry)}) - falling back "
+                        f"to the {RS_SWING_BARS}-bar swing")
+        if stop is None:
+            lo = max(0, i - RS_SWING_BARS)
+            win = candles[lo:i]
+            if not win:
+                return False
+            # the RECENT SWING - high for a short, low for a long
+            stop = (min(x["l"] for x in win) if want_long
+                    else max(x["h"] for x in win))
         risk_t = abs(entry - stop)
         if risk_t <= 0:
             return False
         tp = ((entry + RS_RR * risk_t) if want_long
               else (entry - RS_RR * risk_t))
         log(f"{sym}: REVERSAL-200 ENTRY {side} at ${fmt_px(entry)} - "
-            f"{ast.get('rs_why','?')}; stop at the {RS_SWING_BARS}-bar swing "
+            f"{ast.get('rs_why','?')}; stop at the {stop_src} "
             f"${fmt_px(stop)} ({risk_t / entry * 100:.2f}%), target "
             f"${fmt_px(tp)} ({RS_RR}R)")
         return fire_entry(asset, ast, side, dict(c, c=entry), stop,
                           c["h"], c["l"], "REV200",
                           f"{ast.get('rs_why','?')} - {RS_RR}R target or the "
-                          f"{RS_SWING_BARS}-bar swing stop",
+                          f"{stop_src} stop",
                           live_px=candles[-1]["c"], engine="rs",
                           candles=candles, idx=i, tp_override=tp)
 
