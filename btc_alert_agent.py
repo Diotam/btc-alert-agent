@@ -360,6 +360,17 @@ RS_REVERSAL_ON = True              # 18 Aug: CONVERGENCE IS NOW A SETUP, not
                                    # is dropped if price falls back through
                                    # the 50.
 RS_REV_ARM_CANCEL = True           # a close back across the 50 clears the arm
+RS_DIVERGE_GAPS = "50_200"         # WHICH gap decides diverging vs
+                                   # converging. "50_200" uses only the
+                                   # structural gap. "both" also requires the
+                                   # 20-50 gap to widen - which CONTRADICTS
+                                   # the continuation setup, because a
+                                   # pullback to the 20 necessarily closes
+                                   # that gap, so every continuation entry was
+                                   # reclassified as a reversal and none could
+                                   # fire. The 20 is the TRIGGER line and is
+                                   # meant to oscillate; only the 50 and 200
+                                   # describe the trend's structure.
 RS_DIVERGE_MIN = 0.0               # how much they must widen, in percentage
                                    # POINTS. 0 = any widening counts. Raise it
                                    # to demand the fan actually open out
@@ -2213,7 +2224,8 @@ def rs_stack(closes):
     g_now = (abs(m20 - m50) / px * 100.0, abs(m50 - m200) / px * 100.0)
     g_was = (abs(p20 - p50) / px * 100.0, abs(p50 - p200) / px * 100.0)
     dg = (g_now[0] - g_was[0], g_now[1] - g_was[1])
-    diverging = (dg[0] > RS_DIVERGE_MIN and dg[1] > RS_DIVERGE_MIN)
+    diverging = (dg[1] > RS_DIVERGE_MIN if RS_DIVERGE_GAPS == "50_200"
+                 else (dg[0] > RS_DIVERGE_MIN and dg[1] > RS_DIVERGE_MIN))
     gtxt = (f"gaps {g_now[0]:.2f}/{g_now[1]:.2f}% "
             f"({dg[0]:+.2f}/{dg[1]:+.2f})")
 
