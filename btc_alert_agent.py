@@ -338,6 +338,32 @@ RS_FLAT_PCT = 0.05                 # each line must move at least this much,
                                    # number is NOT from his spec - calibrate
                                    # it against how many symbols qualify.
 RS_SLOPE_BARS = 5                  # bars the slope is measured over
+RS_REQUIRE_DIVERGING = True        # 18 Aug: the lines must be SPREADING, not
+                                   # closing up. Slope alone does not catch
+                                   # this - all three can rise while the gaps
+                                   # between them shrink, which is the 20
+                                   # decelerating and the 200 catching up: a
+                                   # trend on its last legs, about to tangle.
+                                   # Both gaps (20-50 and 50-200) are measured
+                                   # as a % of price and compared with
+                                   # RS_SLOPE_BARS ago. BOTH must widen.
+RS_REVERSAL_ON = True              # 18 Aug: CONVERGENCE IS NOW A SETUP, not
+                                   # just a veto. A fan that is closing up is
+                                   # a trend ending, so we watch for the turn:
+                                   #   bearish fan converging -> a cross UP
+                                   #     through the 50 ARMS a LONG, and a
+                                   #     cross UP through the 200 ENTERS it
+                                   #   bullish fan converging -> mirrored,
+                                   #     down through the 50 then the 200
+                                   # The fan ORDER must still hold - this is a
+                                   # tightening trend, not a tangle. The arm
+                                   # is dropped if price falls back through
+                                   # the 50.
+RS_REV_ARM_CANCEL = True           # a close back across the 50 clears the arm
+RS_DIVERGE_MIN = 0.0               # how much they must widen, in percentage
+                                   # POINTS. 0 = any widening counts. Raise it
+                                   # to demand the fan actually open out
+                                   # rather than merely not close.
 RS_STOP_ON_CLOSE = True            # 18 Aug: CLOSE-CONFIRMED STOP. A wick
                                    # THROUGH the swing stop that closes back
                                    # inside does NOT take the trade out - only
@@ -2112,17 +2138,34 @@ def rs_gate_status(ast, candles, i, sym=None):
     if last < RS_TREND_LEN + RS_SLOPE_BARS + 2:
         return None
     closes = [c["c"] for c in candles[:last + 1]]
-    ok, direction, why = rs_stack(closes)
-    if not ok:
+    state, direction, why = rs_stack(closes)
+    if state is None:
         return None
     m20 = rs_ma(closes, RS_ARM_LEN)
+    m50 = rs_ma(closes, RS_TRIGGER_LEN)
+    m200 = rs_ma(closes, RS_TREND_LEN)
     px = candles[i]["c"] if RS_INTRABAR else closes[-1]
+
+    if state == "converge":
+        if not RS_REVERSAL_ON:
+            return None
+        want = "LONG" if direction < 0 else "SHORT"
+        armed = bool(ast.get("rs_rev_arm"))
+        line, lbl = ((m200, RS_TREND_LEN) if armed else (m50, RS_TRIGGER_LEN))
+        dist = abs(px - line) / px * 100.0
+        return {"sym": sym, "dir": want,
+                "stage": "ready" if armed else "waiting", "run": 0,
+                "trend": ("bearish fan closing" if direction < 0
+                          else "bullish fan closing"),
+                "age": 0,
+                "detail": (f"{'armed - ' if armed else ''}{dist:.2f}% from "
+                           f"the {lbl} - a cross "
+                           f"{'up' if want == 'LONG' else 'down'} through it "
+                           f"{'ENTERS' if armed else 'arms'}")}
+
     dist = (px - m20) / px * 100.0
     want = "LONG" if direction > 0 else "SHORT"
     if RS_WITH_TREND:
-        # only pending setups: price must be on the FAR side of the 20 and
-        # waiting to cross back the fan's way. Price already onside has
-        # nothing to trigger.
         if (want == "LONG" and px > m20) or (want == "SHORT" and px < m20):
             return None
     return {"sym": sym, "dir": want, "stage": "waiting", "run": 0,
@@ -2135,40 +2178,56 @@ def rs_gate_status(ast, candles, i, sym=None):
 
 
 def rs_stack(closes):
-    """(ok, direction, reason) for the three-line stack.
+    """(state, direction, reason) for the three-line stack.
 
-    direction is +1 for a bullish fan (20 > 50 > 200, all rising), -1 for a
-    bearish fan, 0 when it does not qualify. Crossed or flat stacks return 0.
+    state is "diverge" (fanned and opening out), "converge" (fanned but
+    closing up - a trend ending, which is the REVERSAL setup) or None
+    (crossed, flat, or not enough history).
+    direction is +1 bullish, -1 bearish, 0 when it does not qualify.
     """
     m20 = rs_ma(closes, RS_ARM_LEN)
     m50 = rs_ma(closes, RS_TRIGGER_LEN)
     m200 = rs_ma(closes, RS_TREND_LEN)
     if m20 is None or m50 is None or m200 is None:
-        return False, 0, "not enough history"
+        return None, 0, "not enough history"
     n = max(1, RS_SLOPE_BARS)
     if len(closes) <= n:
-        return False, 0, "not enough history"
+        return None, 0, "not enough history"
     back = closes[:-n]
     p20 = rs_ma(back, RS_ARM_LEN)
     p50 = rs_ma(back, RS_TRIGGER_LEN)
     p200 = rs_ma(back, RS_TREND_LEN)
     if p20 is None or p50 is None or p200 is None:
-        return False, 0, "not enough history"
+        return None, 0, "not enough history"
     sl = [((a - b) / b * 100.0) if b else 0.0
           for a, b in ((m20, p20), (m50, p50), (m200, p200))]
 
     up = (m20 > m50 > m200) if RS_STACK_ORDER else True
     dn = (m20 < m50 < m200) if RS_STACK_ORDER else True
     if not up and not dn:
-        return False, 0, (f"lines crossed - 20 {fmt_px(m20)}, 50 "
+        return None, 0, (f"lines crossed - 20 {fmt_px(m20)}, 50 "
                           f"{fmt_px(m50)}, 200 {fmt_px(m200)}")
+    # DIVERGING vs CONVERGING: the two gaps, as a % of price, now against
+    # RS_SLOPE_BARS ago. A fan that is closing up is a trend ending.
+    px = closes[-1] or 1.0
+    g_now = (abs(m20 - m50) / px * 100.0, abs(m50 - m200) / px * 100.0)
+    g_was = (abs(p20 - p50) / px * 100.0, abs(p50 - p200) / px * 100.0)
+    dg = (g_now[0] - g_was[0], g_now[1] - g_was[1])
+    diverging = (dg[0] > RS_DIVERGE_MIN and dg[1] > RS_DIVERGE_MIN)
+    gtxt = (f"gaps {g_now[0]:.2f}/{g_now[1]:.2f}% "
+            f"({dg[0]:+.2f}/{dg[1]:+.2f})")
+
     if up and all(x > RS_FLAT_PCT for x in sl):
-        return True, 1, (f"bullish fan, slopes "
-                         f"{sl[0]:+.2f}/{sl[1]:+.2f}/{sl[2]:+.2f}%")
+        if RS_REQUIRE_DIVERGING and not diverging:
+            return "converge", 1, f"bullish fan CONVERGING - {gtxt}"
+        return "diverge", 1, (f"bullish fan, slopes "
+                         f"{sl[0]:+.2f}/{sl[1]:+.2f}/{sl[2]:+.2f}%, {gtxt}")
     if dn and all(x < -RS_FLAT_PCT for x in sl):
-        return True, -1, (f"bearish fan, slopes "
-                          f"{sl[0]:+.2f}/{sl[1]:+.2f}/{sl[2]:+.2f}%")
-    return False, 0, (f"flat or mixed - slopes "
+        if RS_REQUIRE_DIVERGING and not diverging:
+            return "converge", -1, f"bearish fan CONVERGING - {gtxt}"
+        return "diverge", -1, (f"bearish fan, slopes "
+                          f"{sl[0]:+.2f}/{sl[1]:+.2f}/{sl[2]:+.2f}%, {gtxt}")
+    return None, 0, (f"flat or mixed - slopes "
                       f"{sl[0]:+.2f}/{sl[1]:+.2f}/{sl[2]:+.2f}%, need "
                       f"{RS_FLAT_PCT}%")
 
@@ -2186,10 +2245,54 @@ def rs_signal(ast, candles, i):
     # CLOSED bars only: the stack and the 20 line are fixed for the whole of
     # the forming bar, so nothing here repaints.
     closes = [c["c"] for c in candles[:last + 1]]
-    ok, direction, why = rs_stack(closes)
+    state, direction, why = rs_stack(closes)
     ast["rs_stack"] = why
-    if not ok:
+    if state is None:
+        ast["rs_rev_arm"] = None
         return None
+
+    # ---------------- REVERSAL PATH: the fan is CLOSING UP ----------------
+    # A tightening trend is a trend ending. Cross the 50 to ARM, cross the
+    # 200 to ENTER, in the direction OPPOSITE the fan.
+    if state == "converge":
+        if not RS_REVERSAL_ON:
+            return None
+        want = "LONG" if direction < 0 else "SHORT"
+        long_r = want == "LONG"
+        m50 = rs_ma(closes, RS_TRIGGER_LEN)
+        m200 = rs_ma(closes, RS_TREND_LEN)
+        px = candles[i]["c"] if RS_INTRABAR else closes[-1]
+        prev = closes[-1] if RS_INTRABAR else closes[-2]
+        arm = ast.get("rs_rev_arm") or {}
+        # drop the arm if price falls back through the 50
+        if arm and RS_REV_ARM_CANCEL:
+            if (long_r and px < m50) or ((not long_r) and px > m50):
+                log(f"{ast.get('sym','?')}: reversal arm dropped - back "
+                    f"through the {RS_TRIGGER_LEN} at {fmt_px(m50)}")
+                arm = {}
+                ast["rs_rev_arm"] = None
+        if not arm:
+            crossed50 = ((prev <= m50 and px > m50) if long_r
+                         else (prev >= m50 and px < m50))
+            if crossed50:
+                arm = {"side": want, "t": candles[last]["t"]}
+                ast["rs_rev_arm"] = arm
+                log(f"{ast.get('sym','?')}: REVERSAL ARMED {want} - {why}, "
+                    f"crossed the {RS_TRIGGER_LEN} at {fmt_px(m50)}")
+        if not arm:
+            return None
+        crossed200 = ((prev <= m200 and px > m200) if long_r
+                      else (prev >= m200 and px < m200))
+        if not crossed200:
+            return None
+        ast["rs_rev_arm"] = None
+        ast["rs_why"] = (f"{why}, crossed the {RS_TRIGGER_LEN} then the "
+                         f"{RS_TREND_LEN} at {fmt_px(m200)} - reversal"
+                         + (" (intrabar)" if RS_INTRABAR else ""))
+        return want
+
+    # ---------------- CONTINUATION PATH: the fan is OPENING OUT -----------
+    ast["rs_rev_arm"] = None
     m20 = rs_ma(closes, RS_ARM_LEN)
     p20 = rs_ma(closes[:-1], RS_ARM_LEN)
     if p20 is None:
