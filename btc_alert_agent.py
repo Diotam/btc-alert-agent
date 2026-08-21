@@ -351,9 +351,33 @@ IM_BAND_MODE = "percentile"        # how the overbought line is set.
                                    # "abs" - IM_BAND literally
 IM_BAND_PCTILE = 70                # with "percentile": the cut. 70 means the
                                    # top 30% of |md| readings count as MAJOR.
-IM_BAND_LOOKBACK = 300             # bars of history the percentile is taken
-                                   # over
+IM_BAND_DAYS = 30                  # 20 Aug: the percentile is taken over a
+                                   # THIRTY DAY window, converted to bars from
+                                   # TF - 1440 bars on 30m. LOOKBACK below had
+                                   # to rise to match, or the window silently
+                                   # clamped to the 400 bars actually fetched
+                                   # and the "30 day" band was really 8 days.
+IM_BAND_LOOKBACK = 0               # bars; 0 means derive it from IM_BAND_DAYS
 IM_BAND = 0.5                      # used by the other two modes
+IM_REQUIRE_TURN = True             # 20 Aug: the md LINE must itself be
+                                   # heading the trade's way at the cross.
+                                   # A crossover only says md moved above sb -
+                                   # md can still be FALLING while sb falls
+                                   # faster, which is a "bullish" cross with
+                                   # momentum still deteriorating. This
+                                   # requires md rising for a long, falling
+                                   # for a short.
+                                   # MEASURED over 1500 bars: it binds on
+                                   # about 2% of crossovers. sb is a 9-bar SMA
+                                   # OF md, so md has nearly always turned
+                                   # already by the time it crosses its own
+                                   # average - the condition is mostly
+                                   # implied. Kept because the 2% it catches
+                                   # are real, but do not expect it to change
+                                   # the signal count.
+IM_TURN_BARS = 1                   # bars of that direction required. 1 is
+                                   # just the cross bar; 2 demands it was
+                                   # already turning the bar before.
 IM_P1_RR = 1.5                     # target, in R
 IM_SWING_BARS = 20                 # the nearest swing high/low for the stop
 
@@ -1323,7 +1347,11 @@ for _n, _v in (("TF", TF), ("SCAN_EVERY", SCAN_EVERY)):
 
 # the fetcher ignores the caller's count and uses this map - a value that is
 # too small silently starves whatever depends on that interval
-LOOKBACK = {"5m": 300, "10m": 300, "15m": 400, "30m": 400, "1h": 500,
+# 20 Aug: 30m raised 400 -> 1500 so a 30-day band has data to work with.
+# That is ~3.7x the candles per market. Fetches are per NEW BAR here, not
+# per pulse, so the rate-limit exposure is unchanged - but memory is not:
+# the agent held a 25MB peak at 400 bars.
+LOOKBACK = {"5m": 300, "10m": 300, "15m": 400, "30m": 1500, "1h": 500,
             "4h": 300}
 
 REQUEST_TIMEOUT_S = 8              # fail fast: a throttled API must not burn 20s
@@ -2323,7 +2351,10 @@ def rs_ma(closes, n):
         return abs(IM_BAND)
     if IM_BAND_MODE == "pct_of_price":
         return None                       # resolved by the caller, needs price
-    lo = max(0, i - IM_BAND_LOOKBACK)
+    span = MS.get(TF, 0)
+    bars = (IM_BAND_LOOKBACK if IM_BAND_LOOKBACK
+            else (int(IM_BAND_DAYS * 86_400_000 / span) if span else 300))
+    lo = max(0, i - bars)
     hist = sorted(abs(x) for x in md[lo:i + 1] if x)
     if len(hist) < 20:
         return None
@@ -2391,7 +2422,10 @@ def im_band(md, i):
         return abs(IM_BAND)
     if IM_BAND_MODE == "pct_of_price":
         return None                       # caller resolves it, needs price
-    lo = max(0, i - IM_BAND_LOOKBACK)
+    span = MS.get(TF, 0)
+    bars = (IM_BAND_LOOKBACK if IM_BAND_LOOKBACK
+            else (int(IM_BAND_DAYS * 86_400_000 / span) if span else 300))
+    lo = max(0, i - bars)
     hist = sorted(abs(x) for x in md[lo:i + 1] if x)
     if len(hist) < 20:
         return None
@@ -2422,6 +2456,21 @@ def im_signal(ast, candles, i):
         if band:
             up = md[j - 1] <= sb[j - 1] and md[j] > sb[j]
             dn = md[j - 1] >= sb[j - 1] and md[j] < sb[j]
+            # the md LINE must be heading the trade's way, not just crossing
+            if IM_REQUIRE_TURN:
+                n = max(1, IM_TURN_BARS)
+                if j - n < 0:
+                    return None
+                rising = all(md[j - k] > md[j - k - 1] for k in range(n))
+                falling = all(md[j - k] < md[j - k - 1] for k in range(n))
+                if up and not rising:
+                    ast["im_note"] = (f"cross up at {md[j]:.6g} but md is not "
+                                      f"rising - skipped")
+                    up = False
+                if dn and not falling:
+                    ast["im_note"] = (f"cross down at {md[j]:.6g} but md is "
+                                      f"not falling - skipped")
+                    dn = False
             if up and md[j] < -band:
                 ast["im_path"] = "extension"
                 ast["im_why"] = (f"impulse MACD crossed UP at {md[j]:.6g}, "
