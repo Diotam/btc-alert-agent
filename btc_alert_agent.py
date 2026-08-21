@@ -4302,8 +4302,34 @@ def process_open_trade(asset, trade, candles, ha, last_closed_t):
         if STOP_EXIT and ((live["l"] <= trade["stop"]) if long
                           else (live["h"] >= trade["stop"])):
             kind = _stop_kind(trade)
-            return _close_trade(asset, trade, trade["stop"], kind, t_now,
-                                "Intrabar - stop traded before the close.")
+            # CLOSE-CONFIRMED ENGINES MUST NOT EXIT HERE. This block fires on
+            # the FORMING candle the moment the stop is touched - which is
+            # exactly the wick the close test exists to ignore, and it beat
+            # the close test every time because a bar touches a level before
+            # it can close past it. xyz:AMD 21 Aug stopped at $472.5702
+            # "(intrabar)" on a wick while IM_STOP_ON_CLOSE was on.
+            # The DISASTER level still exits from here, since that is the
+            # runaway case close confirmation is not meant to sit through.
+            eng_l = trade.get("engine")
+            on_close_l = ((SD_STOP_ON_CLOSE and eng_l == "sd")
+                          or (RS_STOP_ON_CLOSE and eng_l == "rs")
+                          or (IM_STOP_ON_CLOSE and eng_l == "im"))
+            if on_close_l:
+                dr = {"sd": SD_DISASTER_R, "im": IM_DISASTER_R}.get(
+                    eng_l, RS_DISASTER_R)
+                r0 = abs(trade["entry"] - trade["stop"]) or None
+                dis = (((trade["entry"] - dr * r0) if long
+                        else (trade["entry"] + dr * r0))
+                       if (r0 and dr) else None)
+                if dis is not None and ((live["l"] <= dis) if long
+                                        else (live["h"] >= dis)):
+                    log(f"{sym}: DISASTER STOP intrabar - price ran {dr}x the "
+                        f"stop distance past entry")
+                    return _close_trade(asset, trade, dis, kind, t_now,
+                                        "Intrabar - disaster level.")
+            else:
+                return _close_trade(asset, trade, trade["stop"], kind, t_now,
+                                    "Intrabar - stop traded before the close.")
         if not trade.get("half"):
             if (live["h"] >= trade["tp"]) if long else (live["l"] <= trade["tp"]):
                 done = _book_partial(asset, trade, trade["tp"], t_now)
