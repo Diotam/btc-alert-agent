@@ -376,6 +376,29 @@ IM_REQUIRE_TURN = True             # 20 Aug: the md LINE must itself be
                                    # are real, but do not expect it to change
                                    # the signal count.
 IM_TURN_BARS = 3                   # bars the turn is measured over.
+IM_TURN_REF = "md"                 # 21 Aug: WHAT the turn is measured
+                                   # AGAINST. "band" scaled it by the
+                                   # overbought level - but the band is a
+                                   # percentile of a 30-day |md| sample that
+                                   # is mostly ZEROS, so in any sustained
+                                   # trend md sits far above it and the band
+                                   # becomes a tiny yardstick. PENGU 21 Aug:
+                                   # band 8.1e-05, md 4.4e-04 - five times
+                                   # above it, permanently "overbought", and
+                                   # a 2.5% wobble in md measured 0.134 of the
+                                   # band and passed. "md" measures the turn
+                                   # against |md| itself, so what counts is
+                                   # how much the impulse line moved RELATIVE
+                                   # TO HOW EXTENDED IT ALREADY IS.
+IM_TURN_MIN = 0.10                 # with "md": the turn must be this fraction
+                                   # of |md|. On the PENGU sideways stretch
+                                   # the LARGEST turn was 0.064 and the two
+                                   # tangled crossovers were 0.025 and 0.045,
+                                   # so 0.10 rejects the lot. Needs
+                                   # recalibrating on real trending data - it
+                                   # was set to reject a known-bad case, which
+                                   # is not the same as knowing it keeps the
+                                   # good ones.
 IM_TURN_MIN_BAND = 0.045           # 20 Aug: HOW HARD md must be turning, as a
                                    # fraction of the band. The sign test alone
                                    # was useless - any sideways wiggle has a
@@ -2425,6 +2448,11 @@ def im_gate_status(ast, candles, i, sym=None):
     return None
 
 
+IM_LEVELS = {}                     # sym -> (md, sb, band) at the signal bar,
+                                   # so the alert can print where the impulse
+                                   # line sat against its own bands
+
+
 def im_band(md, i):
     """The overbought level; the oversold line is its negative.
 
@@ -2462,6 +2490,10 @@ def im_signal(ast, candles, i):
         return None
     j = len(md) - 1
     px = candles[last]["c"]
+    _b = im_band(md, j)
+    if _b is None and IM_BAND_MODE == "pct_of_price":
+        _b = abs(px) * IM_BAND / 100.0
+    IM_LEVELS[ast.get("sym", "?")] = (md[j], sb[j], _b, sh[j])
 
     # ---------------- PATHWAY 1: extension ----------------
     if IM_P1_ON:
@@ -2477,16 +2509,24 @@ def im_signal(ast, candles, i):
                 if j - n < 0:
                     return None
                 move = md[j] - md[j - n]
-                need = IM_TURN_MIN_BAND * band
+                if IM_TURN_REF == "md":
+                    ref = abs(md[j]) or abs(band)
+                    need = IM_TURN_MIN * ref
+                else:
+                    need = IM_TURN_MIN_BAND * band
                 if up and move <= need:
                     ast["im_note"] = (f"cross up but md only moved "
-                                      f"{move:+.6g} over {n} bars, needs "
-                                      f"{need:+.6g} - sideways, skipped")
+                                      f"{move:+.3e} over {n} bars "
+                                      f"({abs(move) / (abs(md[j]) or 1):.3f} "
+                                      f"of |md|), needs {need:+.3e} - "
+                                      f"sideways, skipped")
                     up = False
                 if dn and move >= -need:
                     ast["im_note"] = (f"cross down but md only moved "
-                                      f"{move:+.6g} over {n} bars, needs "
-                                      f"{-need:+.6g} - sideways, skipped")
+                                      f"{move:+.3e} over {n} bars "
+                                      f"({abs(move) / (abs(md[j]) or 1):.3f} "
+                                      f"of |md|), needs {-need:+.3e} - "
+                                      f"sideways, skipped")
                     dn = False
             if up and md[j] < -band:
                 ast["im_path"] = "extension"
@@ -3654,6 +3694,24 @@ def entry_message(asset, direction, plan, zhi, zlo, source, t, trigger):
         "",
         f"\U0001F4CA <b>Setup</b>: {esc(trigger)}",
         "",
+    ]
+    lv = IM_LEVELS.get(asset["symbol"]) if IM_MODE else None
+    if lv and lv[2]:
+        mdv, sbv, band, shv = lv
+        where = ("above the overbought line" if mdv > band else
+                 "below the oversold line" if mdv < -band else
+                 "between the lines")
+        lines += [
+            "\U0001F4C8 <b>Impulse MACD</b>",
+            f"md:    <code>{mdv:+.3e}</code>   signal: <code>{sbv:+.3e}</code>"
+            f"   hist: <code>{shv:+.3e}</code>",
+            f"Bands: <code>+{band:.3e}</code> overbought / "
+            f"<code>-{band:.3e}</code> oversold",
+            f"<i>{esc(where)} \u00b7 {IM_BAND_PCTILE}th pct of |md| over "
+            f"{IM_BAND_DAYS}d</i>",
+            "",
+        ]
+    lines += [
         "\U0001F4CB <b>Plan</b>",
         f"Entry: <code>${fmt_px(ent)}</code>",
     ]
