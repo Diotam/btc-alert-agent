@@ -375,9 +375,24 @@ IM_REQUIRE_TURN = True             # 20 Aug: the md LINE must itself be
                                    # implied. Kept because the 2% it catches
                                    # are real, but do not expect it to change
                                    # the signal count.
-IM_TURN_BARS = 1                   # bars of that direction required. 1 is
-                                   # just the cross bar; 2 demands it was
-                                   # already turning the bar before.
+IM_TURN_BARS = 3                   # bars the turn is measured over.
+IM_TURN_MIN_BAND = 0.045           # 20 Aug: HOW HARD md must be turning, as a
+                                   # fraction of the band. The sign test alone
+                                   # was useless - any sideways wiggle has a
+                                   # sign, which is why it only bound on 2% of
+                                   # crosses. FARTCOIN 20 Aug: md and sb drifted
+                                   # along together near 0.004 and tangled, and
+                                   # that crossover was taken. md must now move
+                                   # at least this fraction of the band across
+                                   # IM_TURN_BARS. The band is the per-symbol
+                                   # yardstick, so this scales like everything
+                                   # else. 0 disables the magnitude test.
+                                   # CALIBRATED, not guessed: across 82
+                                   # crossovers the turn size ranged 0.000 to
+                                   # 0.161 of the band, median 0.044. 0.15
+                                   # rejected EVERY signal; 0.045 sits at the
+                                   # median and drops the flatter half.
+                                   # Raise toward 0.08 to be stricter.
 IM_P1_RR = 1.5                     # target, in R
 IM_SWING_BARS = 20                 # the nearest swing high/low for the stop
 
@@ -2461,15 +2476,17 @@ def im_signal(ast, candles, i):
                 n = max(1, IM_TURN_BARS)
                 if j - n < 0:
                     return None
-                rising = all(md[j - k] > md[j - k - 1] for k in range(n))
-                falling = all(md[j - k] < md[j - k - 1] for k in range(n))
-                if up and not rising:
-                    ast["im_note"] = (f"cross up at {md[j]:.6g} but md is not "
-                                      f"rising - skipped")
+                move = md[j] - md[j - n]
+                need = IM_TURN_MIN_BAND * band
+                if up and move <= need:
+                    ast["im_note"] = (f"cross up but md only moved "
+                                      f"{move:+.6g} over {n} bars, needs "
+                                      f"{need:+.6g} - sideways, skipped")
                     up = False
-                if dn and not falling:
-                    ast["im_note"] = (f"cross down at {md[j]:.6g} but md is "
-                                      f"not falling - skipped")
+                if dn and move >= -need:
+                    ast["im_note"] = (f"cross down but md only moved "
+                                      f"{move:+.6g} over {n} bars, needs "
+                                      f"{-need:+.6g} - sideways, skipped")
                     dn = False
             if up and md[j] < -band:
                 ast["im_path"] = "extension"
