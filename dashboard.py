@@ -897,22 +897,24 @@ function render(d){
   // agent writes null for everything else, so this list is already short.
   const G=d.gates||[];
   // WATCHLIST, back on 18 Aug for the reversal-200 engine, which has a real
-  // WATCHLIST for the reversal-200 engine: symbols whose 20/50/200 stack is
-  // FANNED IN ORDER and trending, waiting on a close through the 20. The old
-  // "N candles / flip bar" fields belonged to the flip engine and are gone -
-  // this engine has no arm to count bars from.
+  // WATCHLIST for the impulse-MACD engine. Two pending states:
+  //   coiled     md flat for N bars - pathway 2 waiting on the first push
+  //   overbought/oversold  md past the band - pathway 1 would take a
+  //              crossover here, since it counts as MAJOR
+  // "coiled" rows carry no direction: the push decides it.
   const _n=document.getElementById('n-gates'); if(_n) _n.textContent=G.length;
   const _g=document.getElementById('gsub');
   if(_g){
-    const nb=G.filter(x=>(x.trend||'').indexOf('bullish')>=0).length;
-    _g.textContent=G.length?nb+' bullish \u00b7 '+(G.length-nb)+' bearish':'';
+    const nc=G.filter(x=>x.trend==='coiled').length;
+    _g.textContent=G.length?nc+' coiled \u00b7 '+(G.length-nc)+' stretched':'';
   }
   // closest to its 20 first - those are the ones about to trigger
-  const gd=g=>{const m=/([0-9.]+)%/.exec(g.detail||''); return m?parseFloat(m[1]):999;};
+  // coiled first, then the longest-standing; both are the ripest setups
+  const gr=g=>(g.trend==='coiled'? -1000-(g.run||0) : 0);
   document.getElementById('gates').innerHTML=G.length?G.slice()
-    .sort((a,b)=>gd(a)-gd(b)).map(g=>{
-    const cls=g.dir==='LONG'?'long':'short';
-    const near=gd(g)<0.5;
+    .sort((a,b)=>gr(a)-gr(b)).map(g=>{
+    const cls=g.dir==='LONG'?'long':(g.dir==='SHORT'?'short':'muted');
+    const near=g.stage==='ready';
     return `<div class="card tv" onclick="tvOpen('${g.sym}')" `
       +`title="open ${g.sym} on TradingView"><div class=row>
       <span class=sym>${near?'\u25cf':'\u25cb'} ${g.sym} `
@@ -920,7 +922,7 @@ function render(d){
       <span class="muted"${near?' style="color:#c9d1d9"':''}>${g.trend||''}</span>
       </div><div class=row>
       <span class=muted>${g.detail||''}</span></div></div>`;
-  }).join(''):'<div class="card muted">no stack qualifies</div>';
+  }).join(''):'<div class="card muted">nothing coiled or stretched</div>';
   step('r-gates');
   const cut=Date.now()-DAYS[PERIOD]*86400000;
   // inPeriod is EVERY trade closed in the selected window - that is the
