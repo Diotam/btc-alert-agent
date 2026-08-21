@@ -433,8 +433,14 @@ IM_FLAT_BARS = 6                   # how long md must have been flat. "A long
                                    # still selective, but alive on both.
                                    # Raise it to demand longer ranges.
 IM_P2_RR = 2.5                     # target, in R
-IM_P2_STOP_PCT = 0.35              # "slightly below entry", as a % of price.
-                                   # Also not in his spec.
+IM_P2_STOP = "swing"               # 21 Aug: pathway 2 stops at the NEAREST
+                                   # SWING high/low, same as pathway 1, rather
+                                   # than a fixed % below entry. His spec said
+                                   # "slightly below entry", which needed a
+                                   # number I had to invent; the swing is a
+                                   # level the market actually made.
+                                   # "pct" restores the fixed distance.
+IM_P2_STOP_PCT = 0.35              # used only when IM_P2_STOP = "pct".
 IM_STOP_ON_CLOSE = True            # close-confirmed stops: a wick through the
                                    # level that closes back inside does not
                                    # take the trade out. Carried across from
@@ -5423,11 +5429,11 @@ def process_candle(asset, ast, candles, ha, i):
         entry = c["c"]
         path = ast.get("im_path", "extension")
         IM_PATH[sym] = path
-        if path == "breakout":
-            # "slightly below entry" - a fixed fraction of price
+        rr = IM_P2_RR if path == "breakout" else IM_P1_RR
+        if path == "breakout" and IM_P2_STOP == "pct":
             risk_t = entry * IM_P2_STOP_PCT / 100.0
             stop = (entry - risk_t) if want_long else (entry + risk_t)
-            rr, stop_src = IM_P2_RR, f"{IM_P2_STOP_PCT}% of price"
+            stop_src = f"{IM_P2_STOP_PCT}% of price"
         else:
             lo = max(0, i - IM_SWING_BARS)
             win = candles[lo:i]
@@ -5436,7 +5442,7 @@ def process_candle(asset, ast, candles, ha, i):
             stop = (min(x["l"] for x in win) if want_long
                     else max(x["h"] for x in win))
             risk_t = abs(entry - stop)
-            rr, stop_src = IM_P1_RR, f"{IM_SWING_BARS}-bar swing"
+            stop_src = f"{IM_SWING_BARS}-bar swing"
         if risk_t <= 0:
             return False
         tp = ((entry + rr * risk_t) if want_long
