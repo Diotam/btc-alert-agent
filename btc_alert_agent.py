@@ -423,15 +423,22 @@ IM_SWING_BARS = 20                 # the nearest swing high/low for the stop
 # indicator's own "inside the band" state) for a long stretch, then take the
 # first histogram push, with price agreeing.
 IM_P2_ON = True
-IM_FLAT_BARS = 6                   # how long md must have been flat. "A long
-                                   # period" is not a number in his spec.
-                                   # MEASURED over 2000 synthetic bars: at 12
-                                   # bars a quiet market gives ~20 setups but
-                                   # a volatile one gives ONE, so the engine
-                                   # would only ever fire on the calmest
-                                   # symbols. At 6 the counts are 25 and 5 -
-                                   # still selective, but alive on both.
-                                   # Raise it to demand longer ranges.
+IM_FLAT_BARS = 20                  # 21 Aug: 6 -> 20 at his call. md must sit
+                                   # at exactly 0 for this many bars - ten
+                                   # hours on 30m - before a push counts as a
+                                   # range breakout.
+                                   # MEASURED over 3000 bars (~62 days):
+                                   #   vol/bar   >=6   >=10   >=20
+                                   #     0.2%     39     35     16
+                                   #     0.4%     32     19      9
+                                   #     0.7%     22     11      2
+                                   #     1.2%     11      6      0
+                                   # So 20 is selective on quiet markets and
+                                   # near-silent on volatile ones - a fast
+                                   # symbol may never produce a qualifying
+                                   # range at all. That is the trade: fewer,
+                                   # cleaner setups, concentrated in the
+                                   # calmer half of the book.
 IM_P2_RR = 2.5                     # target, in R
 IM_P2_STOP = "swing"               # 21 Aug: pathway 2 stops at the NEAREST
                                    # SWING high/low, same as pathway 1, rather
