@@ -309,7 +309,54 @@ CROSS_SLOPE_BARS = 5               # bars per slope window. 5 on 30m = 2.5h.
 #   DOWNTREND (price below the 200SMA): close above the 20 ARMS a LONG,
 #             then a close above the 50 ENTERS it.
 #
-RS_MODE = True
+# ===================== IMPULSE MACD (LazyBear), his spec 20 Aug ============
+# md = mi>hi ? mi-hi : (mi<lo ? mi-lo : 0), sb = SMA(md,9), sh = md-sb
+# NOTHING from the reversal-200 engine feeds this. RS_MODE is off.
+IM_MODE = True
+IM_LEN = 34                        # LazyBear's default
+IM_SIG = 9                         # signal line
+
+# ---- PATHWAY 1: EXTENSION. Only crossovers OUTSIDE the bands are taken -
+# a cross UP while md is BELOW the oversold line is a LONG, a cross DOWN
+# while ABOVE the overbought line is a SHORT. Crossovers between the lines
+# are ignored: those are his "minor" crossovers, too close to the middle.
+IM_P1_ON = True
+IM_BAND_MODE = "percentile"        # how the overbought line is set.
+                                   # "percentile" - a percentile of THIS
+                                   #   symbol's own recent |md|, so the split
+                                   #   between major and minor scales per
+                                   #   market. md is in PRICE UNITS, so a
+                                   #   fixed number would mean something
+                                   #   different on BTC than on kPEPE.
+                                   # "pct_of_price" - IM_BAND as a % of price
+                                   # "abs" - IM_BAND literally
+IM_BAND_PCTILE = 70                # with "percentile": the cut. 70 means the
+                                   # top 30% of |md| readings count as MAJOR.
+IM_BAND_LOOKBACK = 300             # bars of history the percentile is taken
+                                   # over
+IM_BAND = 0.5                      # used by the other two modes
+IM_P1_RR = 1.5                     # target, in R
+IM_SWING_BARS = 20                 # the nearest swing high/low for the stop
+
+# ---- PATHWAY 2: BREAKOUT. Wait for md to sit FLAT (exactly 0 - the
+# indicator's own "inside the band" state) for a long stretch, then take the
+# first histogram push, with price agreeing.
+IM_P2_ON = True
+IM_FLAT_BARS = 6                   # how long md must have been flat. "A long
+                                   # period" is not a number in his spec.
+                                   # MEASURED over 2000 synthetic bars: at 12
+                                   # bars a quiet market gives ~20 setups but
+                                   # a volatile one gives ONE, so the engine
+                                   # would only ever fire on the calmest
+                                   # symbols. At 6 the counts are 25 and 5 -
+                                   # still selective, but alive on both.
+                                   # Raise it to demand longer ranges.
+IM_P2_RR = 2.5                     # target, in R
+IM_P2_STOP_PCT = 0.35              # "slightly below entry", as a % of price.
+                                   # Also not in his spec.
+# =============================================================================
+
+RS_MODE = False
 RS_TREND_LEN = 200                 # the regime MA
 RS_ARM_LEN = 20                    # arms the setup
 RS_TRIGGER_LEN = 50                # the MIDDLE line of the stack. 18 Aug: it
@@ -434,7 +481,15 @@ RS_ARM_CANCEL = True               # a close back on the far side of the 20
                                    # clears the arm. NOT IN HIS SPEC either -
                                    # without it a setup armed days ago can
                                    # still fire.
-RS_RR = 1.5                        # target = this many R
+RS_RR = 1.0                        # 18 Aug: 1.5 -> 1.0 at his call. The
+                                   # target now sits the SAME distance from
+                                   # entry as the stop. Break-even therefore
+                                   # needs a win rate above 50% before costs,
+                                   # where 1.5R only needed 40%. It should
+                                   # fill more often - the question is whether
+                                   # enough more often to cover the smaller
+                                   # win. Nothing in the ledger can answer
+                                   # that yet: it stores no R.
 RS_STOP = "swing"                  # his 18 Aug call: the RECENT SWING high
                                    # for a short, swing low for a long.
 RS_STOP_CONT = "200smma"           # 18 Aug: the CONTINUATION path (pathway 1,
@@ -2120,6 +2175,72 @@ def cross_age_ok(candles, i, want_long):
                   + ("s" if bars != 1 else ""))
 
 
+def zlema(vals, n):
+    """Zero-lag EMA, LazyBear's form: ema1 + (ema1 - ema2)."""
+    if not vals or n <= 0:
+        return []
+    e1 = ema(vals, n)
+    e2 = ema(e1, n)
+    return [a + (a - b) for a, b in zip(e1, e2)]
+
+
+def smma_series(vals, n):
+    """SMMA as a SERIES - seeded on the SMA of the first n, then Wilder."""
+    if n <= 0 or len(vals) < n:
+        return []
+    out = [None] * (n - 1)
+    s = sum(vals[:n]) / float(n)
+    out.append(s)
+    for v in vals[n:]:
+        s = (s * (n - 1) + v) / float(n)
+        out.append(s)
+    return out
+
+
+def impulse_macd(candles, n=None, sig=None):
+    """LazyBear's Impulse MACD. Returns (md, sb, sh) as full series.
+
+        hi = SMMA(high, n)        lo = SMMA(low, n)
+        mi = ZLEMA(hlc3, n)
+        md = mi>hi ? mi-hi : (mi<lo ? mi-lo : 0)     <- ZERO inside the band
+        sb = SMA(md, sig)                            <- signal line
+        sh = md - sb                                 <- histogram
+
+    md is exactly 0 whenever the zero-lag average sits INSIDE the high/low
+    band, which is the indicator's own definition of a flat market - that is
+    what pathway 2 waits for.
+    """
+    n = IM_LEN if n is None else n
+    sig = IM_SIG if sig is None else sig
+    if len(candles) < n + sig + 2:
+        return [], [], []
+    hi = smma_series([c["h"] for c in candles], n)
+    lo = smma_series([c["l"] for c in candles], n)
+    mi = zlema([(c["h"] + c["l"] + c["c"]) / 3.0 for c in candles], n)
+    md = []
+    for k in range(len(candles)):
+        h, l, m = hi[k], lo[k], mi[k]
+        if h is None or l is None or m is None:
+            md.append(0.0)
+        elif m > h:
+            md.append(m - h)
+        elif m < l:
+            md.append(m - l)
+        else:
+            md.append(0.0)
+    sb = []
+    for k in range(len(md)):
+        if k + 1 < sig:
+            sb.append(0.0)
+        else:
+            sb.append(sum(md[k - sig + 1:k + 1]) / float(sig))
+    return md, sb, [a - b for a, b in zip(md, sb)]
+
+
+def zlema_unused(vals, n):
+    return zlema(vals, n)
+
+
 def sma(vals, n):
     """Simple moving average of the last n values, or None."""
     if n <= 0 or len(vals) < n:
@@ -2151,6 +2272,148 @@ def rs_ma(closes, n):
     if RS_MA == "sma":
         return sma(closes, n)
     return smma(closes, n)
+
+
+
+    """The overbought level. The oversold line is its negative."""
+    if IM_BAND_MODE == "abs":
+        return abs(IM_BAND)
+    if IM_BAND_MODE == "pct_of_price":
+        return None                       # resolved by the caller, needs price
+    lo = max(0, i - IM_BAND_LOOKBACK)
+    hist = sorted(abs(x) for x in md[lo:i + 1] if x)
+    if len(hist) < 20:
+        return None
+    k = min(len(hist) - 1, int(len(hist) * IM_BAND_PCTILE / 100.0))
+    return hist[k]
+
+
+def im_gate_status(ast, candles, i, sym=None):
+    """Watchlist row for the impulse engine. Report only.
+
+      coiled   md has been FLAT long enough - pathway 2 is armed and waiting
+               for the first push
+      stretched  md is past the band - a crossover here would be MAJOR, so
+               pathway 1 would take it
+    Symbols in neither state return None, so the panel stays short.
+    """
+    last = i - 1
+    if last < IM_LEN + IM_SIG + IM_FLAT_BARS + 5:
+        return None
+    md, sb, sh = impulse_macd(candles[:last + 1])
+    if not md or len(md) < IM_FLAT_BARS + 3:
+        return None
+    j = len(md) - 1
+    px = candles[last]["c"]
+
+    if IM_P2_ON:
+        run = 0
+        for k in range(j, -1, -1):
+            if md[k] != 0.0:
+                break
+            run += 1
+        if run >= IM_FLAT_BARS:
+            return {"sym": sym, "dir": "", "stage": "ready", "run": run,
+                    "trend": "coiled", "age": 0,
+                    "detail": (f"impulse MACD flat {run} bars - the first "
+                               f"push with the candle agreeing enters")}
+
+    if IM_P1_ON:
+        band = im_band(md, j)
+        if band is None and IM_BAND_MODE == "pct_of_price":
+            band = abs(px) * IM_BAND / 100.0
+        if band and abs(md[j]) > band:
+            over = md[j] > 0
+            gap = abs(md[j] - sb[j])
+            return {"sym": sym, "dir": "SHORT" if over else "LONG",
+                    "stage": "waiting", "run": 0,
+                    "trend": "overbought" if over else "oversold",
+                    "age": 0,
+                    "detail": (f"md {md[j]:.4g} past the "
+                               f"{'+' if over else '-'}{band:.4g} line - a "
+                               f"cross {'down' if over else 'up'} through the "
+                               f"signal enters ({gap:.4g} away)")}
+    return None
+
+
+def im_band(md, i):
+    """The overbought level; the oversold line is its negative.
+
+    Under "percentile" this is a cut through THIS symbol's own recent |md|,
+    which is his major/minor split: readings past the line are the crossovers
+    far from the middle. md is in price units, so a fixed number could not
+    serve BTC and kPEPE at once.
+    """
+    if IM_BAND_MODE == "abs":
+        return abs(IM_BAND)
+    if IM_BAND_MODE == "pct_of_price":
+        return None                       # caller resolves it, needs price
+    lo = max(0, i - IM_BAND_LOOKBACK)
+    hist = sorted(abs(x) for x in md[lo:i + 1] if x)
+    if len(hist) < 20:
+        return None
+    k = min(len(hist) - 1, int(len(hist) * IM_BAND_PCTILE / 100.0))
+    return hist[k]
+
+
+def im_signal(ast, candles, i):
+    """Impulse MACD, both pathways. Returns "LONG"/"SHORT" to ENTER, else None.
+
+    Judged on the LAST CLOSED bar (i-1) - every rule is about a crossover of
+    closed values, so nothing repaints.
+    """
+    last = i - 1
+    if last < IM_LEN + IM_SIG + IM_FLAT_BARS + 5:
+        return None
+    md, sb, sh = impulse_macd(candles[:last + 1])
+    if not md or len(md) < IM_FLAT_BARS + 3:
+        return None
+    j = len(md) - 1
+    px = candles[last]["c"]
+
+    # ---------------- PATHWAY 1: extension ----------------
+    if IM_P1_ON:
+        band = im_band(md, j)
+        if band is None and IM_BAND_MODE == "pct_of_price":
+            band = abs(px) * IM_BAND / 100.0
+        if band:
+            up = md[j - 1] <= sb[j - 1] and md[j] > sb[j]
+            dn = md[j - 1] >= sb[j - 1] and md[j] < sb[j]
+            if up and md[j] < -band:
+                ast["im_path"] = "extension"
+                ast["im_why"] = (f"impulse MACD crossed UP at {md[j]:.6g}, "
+                                 f"below the oversold line {-band:.6g} "
+                                 f"(major crossover)")
+                return "LONG"
+            if dn and md[j] > band:
+                ast["im_path"] = "extension"
+                ast["im_why"] = (f"impulse MACD crossed DOWN at {md[j]:.6g}, "
+                                 f"above the overbought line {band:.6g} "
+                                 f"(major crossover)")
+                return "SHORT"
+            if up or dn:
+                ast["im_note"] = (f"minor crossover at {md[j]:.6g}, inside "
+                                  f"+/-{band:.6g} - ignored")
+
+    # ---------------- PATHWAY 2: breakout out of a flat ----------------
+    if IM_P2_ON:
+        flat = md[j - IM_FLAT_BARS:j]
+        if flat and all(x == 0.0 for x in flat) and md[j] != 0.0:
+            rising = sh[j] > sh[j - 1]
+            up_px = candles[last]["c"] > candles[last]["o"]
+            if md[j] > 0 and rising and up_px:
+                ast["im_path"] = "breakout"
+                ast["im_why"] = (f"impulse MACD flat {IM_FLAT_BARS} bars then "
+                                 f"pushed to {md[j]:.6g}, histogram rising, "
+                                 f"candle up")
+                return "LONG"
+            if md[j] < 0 and (not rising) and (not up_px):
+                ast["im_path"] = "breakout"
+                ast["im_why"] = (f"impulse MACD flat {IM_FLAT_BARS} bars then "
+                                 f"pushed to {md[j]:.6g}, histogram falling, "
+                                 f"candle down")
+                return "SHORT"
+    return None
 
 
 def rs_gate_status(ast, candles, i, sym=None):
@@ -4960,6 +5223,50 @@ def process_candle(asset, ast, candles, ha, i):
     # Replaces the flip engine entirely when on. No run gates, no fade, no
     # BTC vote - the cross IS the trend read, so layering the old filters on
     # top would refuse the very setups it exists to take.
+    # ---------------- IMPULSE MACD ENGINE (LazyBear, his 20 Aug spec) ------
+    if IM_MODE:
+        ast["sym"] = sym
+        side = im_signal(ast, candles, i)
+        try:
+            ast["gate"] = im_gate_status(ast, candles, i, sym)
+        except Exception as e:
+            log(f"{sym}: im_gate_status failed: {type(e).__name__}: {e}")
+        if not side:
+            return False
+        want_long = side == "LONG"
+        if not ALLOW_SHORTS and not want_long:
+            return False
+        entry = c["c"]
+        path = ast.get("im_path", "extension")
+        if path == "breakout":
+            # "slightly below entry" - a fixed fraction of price
+            risk_t = entry * IM_P2_STOP_PCT / 100.0
+            stop = (entry - risk_t) if want_long else (entry + risk_t)
+            rr, stop_src = IM_P2_RR, f"{IM_P2_STOP_PCT}% of price"
+        else:
+            lo = max(0, i - IM_SWING_BARS)
+            win = candles[lo:i]
+            if not win:
+                return False
+            stop = (min(x["l"] for x in win) if want_long
+                    else max(x["h"] for x in win))
+            risk_t = abs(entry - stop)
+            rr, stop_src = IM_P1_RR, f"{IM_SWING_BARS}-bar swing"
+        if risk_t <= 0:
+            return False
+        tp = ((entry + rr * risk_t) if want_long
+              else (entry - rr * risk_t))
+        log(f"{sym}: IMPULSE-MACD {path.upper()} {side} at ${fmt_px(entry)} - "
+            f"{ast.get('im_why','?')}; stop at the {stop_src} "
+            f"${fmt_px(stop)} ({risk_t / entry * 100:.2f}%), target "
+            f"${fmt_px(tp)} ({rr}R)")
+        return fire_entry(asset, ast, side, dict(c, c=entry), stop,
+                          c["h"], c["l"], "IMPULSE",
+                          f"{ast.get('im_why','?')} - {rr}R target or the "
+                          f"{stop_src} stop",
+                          live_px=candles[-1]["c"], engine="im",
+                          candles=candles, idx=i, tp_override=tp)
+
     # ---------------- REVERSAL 200SMA ENGINE (his 18 Aug spec) ------------
     if RS_MODE:
         ast["sym"] = sym
