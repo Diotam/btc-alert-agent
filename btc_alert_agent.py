@@ -349,8 +349,18 @@ IM_BAND_MODE = "percentile"        # how the overbought line is set.
                                    #   different on BTC than on kPEPE.
                                    # "pct_of_price" - IM_BAND as a % of price
                                    # "abs" - IM_BAND literally
-IM_BAND_PCTILE = 70                # with "percentile": the cut. 70 means the
-                                   # top 30% of |md| readings count as MAJOR.
+IM_BAND_PCTILE = 85                # 21 Aug: 70 -> 85 at his call, after ETHFI
+                                   # took a crossover that cleared the line
+                                   # only marginally. MEASURED over 1500 bars
+                                   # and 80 crossovers: at 70 the band was
+                                   # 1.71 and 17 crossovers counted as major;
+                                   # at 85 the band is 2.55 and 7 do. The
+                                   # number of crossovers is unchanged - the
+                                   # percentile only decides which are MAJOR.
+                                   # Pathway 2 is untouched; it never uses the
+                                   # bands.
+                                   # with "percentile": the cut. 85 means the
+                                   # top 15% of |md| readings count as MAJOR.
 IM_BAND_DAYS = 30                  # 20 Aug: the percentile is taken over a
                                    # THIRTY DAY window, converted to bars from
                                    # TF - 1440 bars on 30m. LOOKBACK below had
@@ -375,7 +385,17 @@ IM_REQUIRE_TURN = True             # 20 Aug: the md LINE must itself be
                                    # implied. Kept because the 2% it catches
                                    # are real, but do not expect it to change
                                    # the signal count.
-IM_TURN_BARS = 3                   # bars the turn is measured over.
+IM_TURN_BOTH = False               # 21 Aug: "the crossing LINES sloping up or
+                                   # down" is plural. False tests only md.
+                                   # True requires BOTH md and the signal line
+                                   # to slope the trade's way - md up AND sb
+                                   # up for a long. They can disagree: md
+                                   # ticking up while sb still falls is the
+                                   # tangle, and md alone cannot see it.
+IM_TURN_BARS = 1                   # 21 Aug: 3 -> 1 at his call. The window
+                                   # the turn is measured over. At 1 it is
+                                   # simply "is md higher/lower than the bar
+                                   # before" - pure DIRECTION, no window.
 IM_TURN_REF = "md"                 # 21 Aug: WHAT the turn is measured
                                    # AGAINST. "band" scaled it by the
                                    # overbought level - but the band is a
@@ -390,7 +410,18 @@ IM_TURN_REF = "md"                 # 21 Aug: WHAT the turn is measured
                                    # against |md| itself, so what counts is
                                    # how much the impulse line moved RELATIVE
                                    # TO HOW EXTENDED IT ALREADY IS.
-IM_TURN_MIN = 0.10                 # with "md": the turn must be this fraction
+IM_TURN_MIN = 0.0                  # 21 Aug: 0.10 -> 0 at his call. Zero means
+                                   # NO magnitude requirement - only the sign
+                                   # of the move matters.
+                                   # WHAT THIS GIVES BACK: the sign test binds
+                                   # on ~2% of crossovers, because sb is a
+                                   # 9-bar SMA of md and md has nearly always
+                                   # already turned by the time it crosses its
+                                   # own average. It will NOT reject the
+                                   # PENGU-style case - md drifting sideways
+                                   # at five times the band, wobbling 2.5%,
+                                   # still has a sign.
+                                   # with "md": the turn must be this fraction
                                    # of |md|. On the PENGU sideways stretch
                                    # the LARGEST turn was 0.064 and the two
                                    # tangled crossovers were 0.025 and 0.045,
@@ -2526,6 +2557,16 @@ def im_signal(ast, candles, i):
                 if j - n < 0:
                     return None
                 move = md[j] - md[j - n]
+                if IM_TURN_BOTH:
+                    smove = sb[j] - sb[j - n]
+                    if up and smove <= 0:
+                        ast["im_note"] = ("cross up but the signal line is "
+                                          "still falling - skipped")
+                        up = False
+                    if dn and smove >= 0:
+                        ast["im_note"] = ("cross down but the signal line is "
+                                          "still rising - skipped")
+                        dn = False
                 if IM_TURN_REF == "md":
                     ref = abs(md[j]) or abs(band)
                     need = IM_TURN_MIN * ref
