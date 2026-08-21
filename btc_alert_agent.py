@@ -5308,10 +5308,13 @@ def process_candle(asset, ast, candles, ha, i):
             f"{ast.get('im_why','?')}; stop at the {stop_src} "
             f"${fmt_px(stop)} ({risk_t / entry * 100:.2f}%), target "
             f"${fmt_px(tp)} ({rr}R)")
+        # the trigger text is the SETUP only. The alert's Plan section
+        # already prints the stop, its % of price, the target and the R
+        # multiple - repeating them here said it twice, and said it less
+        # precisely the second time.
         return fire_entry(asset, ast, side, dict(c, c=entry), stop,
                           c["h"], c["l"], "IMPULSE",
-                          f"{ast.get('im_why','?')} - {rr}R target or the "
-                          f"{stop_src} stop",
+                          ast.get("im_why", "?"),
                           live_px=candles[-1]["c"], engine="im",
                           candles=candles, idx=i, tp_override=tp)
 
