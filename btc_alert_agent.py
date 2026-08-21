@@ -2334,8 +2334,9 @@ def impulse_macd(candles, n=None, sig=None):
     """
     n = IM_LEN if n is None else n
     sig = IM_SIG if sig is None else sig
-    if len(candles) < n + sig + 2:
-        return [], [], []
+    if not candles or len(candles) < n + sig + 2:
+        return [], [], []          # a FAILED FETCH hands us None - three
+                                   # diagnostics died on len(None) on 21 Aug
     hi = smma_series([c["h"] for c in candles], n)
     lo = smma_series([c["l"] for c in candles], n)
     mi = zlema([(c["h"] + c["l"] + c["c"]) / 3.0 for c in candles], n)
