@@ -1,14 +1,33 @@
 #!/usr/bin/env python3
 """
-SMOOTHED HEIKIN ASHI DOJI AGENT
---------------------------------
-One strategy, long side described; shorts mirror it exactly.
+IMPULSE MACD AGENT (LazyBear)
+-----------------------------
+Two pathways off one indicator. Long side described; shorts mirror it.
 
-  1. TREND - a run of red HA candles, any length, whose biggest body is at
-     least HA_MIN_BODY_PCT of price so a flat series cannot qualify. There
-     is no minimum run length and no requirement that the bodies expanded:
-     both were removed 3 Aug.
-  2. DOJI - an HA body no more than HA_DOJI_FRACTION of the biggest body in
+  md = mi>hi ? mi-hi : (mi<lo ? mi-lo : 0)   hi/lo = SMMA(high/low, 34)
+  sb = SMA(md, 9)                            mi    = ZLEMA(hlc3, 34)
+  sh = md - sb                               md is EXACTLY 0 inside the band
+
+  PATHWAY 1 - EXTENSION. md crossing UP through the signal is upward
+     momentum, crossing DOWN is downward. Only MAJOR crossovers count:
+     the cross must happen BEYOND the band, below the oversold line for a
+     long or above the overbought line for a short. Crossovers between the
+     lines are minor and ignored. Stop at the nearest swing, target 1.5R.
+
+  PATHWAY 2 - BREAKOUT. Wait for md to sit flat - exactly 0, the
+     indicator's own "inside the band" state - for a long stretch, which
+     is a range. Then take the first histogram push with the candle
+     agreeing. Stop slightly below entry, target 2.5R.
+
+  The overbought line is a PERCENTILE of the symbol's own recent |md|,
+  not a fixed number: md is in price units, so one constant cannot serve
+  BTC and kPEPE at once.
+
+OLDER ENGINES still in the file, all switched off: reversal-200 (RS_MODE),
+impulse-free doji (SD_MODE), EMA crossover (CROSS_MODE), 4h flip
+(FLIP_MODE). Their notes follow.
+
+  2. DOJI - an HA body no more  2. DOJI - an HA body no more than HA_DOJI_FRACTION of the biggest body in
      that run. The smoothed HA has stalled, and that stall IS the turn.
   3. ENTER on the doji, in the direction opposite the trend that led into
      it. Price does NOT have to come back and retest anything.
@@ -354,6 +373,15 @@ IM_FLAT_BARS = 6                   # how long md must have been flat. "A long
 IM_P2_RR = 2.5                     # target, in R
 IM_P2_STOP_PCT = 0.35              # "slightly below entry", as a % of price.
                                    # Also not in his spec.
+IM_STOP_ON_CLOSE = True            # close-confirmed stops: a wick through the
+                                   # level that closes back inside does not
+                                   # take the trade out. Carried across from
+                                   # the reversal engine at his 20 Aug ask -
+                                   # it was the stop-hunt fix and applies the
+                                   # same way here.
+IM_DISASTER_R = 1.5                # ...unless price runs this many stop
+                                   # distances past entry, which exits at
+                                   # once. 0 disables it.
 # =============================================================================
 
 RS_MODE = False
@@ -1413,6 +1441,21 @@ def fetch_hyperliquid(coin, interval, lookback):
     return [{"t": c["t"], "o": float(c["o"]), "h": float(c["h"]),
              "l": float(c["l"]), "c": float(c["c"]), "v": float(c["v"])}
             for c in data]
+
+
+def engine_label():
+    """What the alerts should call the running engine."""
+    if IM_MODE:
+        return f"Impulse MACD {IM_LEN},{IM_SIG}"
+    if RS_MODE:
+        return f"Reversal {RS_TREND_LEN} {RS_MA.upper()}"
+    if SD_MODE:
+        return "Stoch-doji"
+    if CROSS_MODE:
+        return f"EMA{EMA_FILTER_LEN} cross"
+    if FLIP_MODE:
+        return "HA flip"
+    return ha_label()
 
 
 def ha_label():
@@ -3531,37 +3574,40 @@ def send_telegram(text):
 # --------------------------- messages --------------------------------------
 def entry_message(asset, direction, plan, zhi, zlo, source, t, trigger):
     e = "\U0001F7E2" if direction == "LONG" else "\U0001F534"
-    return "\n".join([
+    # DERIVE the R multiple from the actual levels. Printing a constant was
+    # wrong the moment two pathways with different targets existed.
+    ent, stp, tp = plan.get("entry"), plan.get("stop"), plan.get("tp")
+    risk = abs(ent - stp) if (ent is not None and stp is not None) else None
+    rr = (abs(tp - ent) / risk) if (risk and tp is not None) else None
+    rpct = (risk / ent * 100.0) if (risk and ent) else None
+    tpct = (abs(tp - ent) / ent * 100.0) if (tp and ent) else None
+    lines = [
         f"{e} <b>{direction} ENTRY \u00b7 {esc(asset['symbol'])}</b>",
-        f"<i>{esc(asset['label'])} \u00b7 {TF} \u00b7 {ha_label()} \u00b7 "
+        f"<i>{esc(asset['label'])} \u00b7 {TF} \u00b7 {engine_label()} \u00b7 "
         f"{esc(fmt_ts(t))}</i>",
         "",
-        "\U0001F4CA <b>Setup</b>: "
-        + (f"HA zone ${fmt_px(zlo)} - ${fmt_px(zhi)}; " if zhi else "")
-        + f"{esc(trigger)}",
+        f"\U0001F4CA <b>Setup</b>: {esc(trigger)}",
         "",
         "\U0001F4CB <b>Plan</b>",
-        f"Entry: <code>${fmt_px(plan['entry'])}</code>",
-        # a SHORT's stop is the zone HIGH; "low" was hardcoded and read
-        # backwards on every short the engine has ever sent
-        (f"Stop:  <code>${fmt_px(plan['stop'])}</code>  "
-         f"(sizing reference only - not placed)"
-         if not STOP_EXIT else
-         f"Stop:  <code>${fmt_px(plan['stop'])}</code>  "
-         f"({'HA zone low' if direction == 'LONG' else 'HA zone high'})"),
-        # a PARKED target means there is no take-profit at all - saying
-        # "1.5x the stop" on a flip trade promised an exit that will never
-        # fire. The flip is the exit.
-        # a parked target is 100x entry for a LONG and 0.01x for a SHORT -
-        # the ratio catches both; a difference test only caught the long.
-        (f"Exit:  <b>when the HA colour flips back</b>"
-         if (plan.get('tp') and plan.get('entry')
-             and (plan['tp'] / plan['entry'] > 2
-                  or plan['tp'] / plan['entry'] < 0.5))
-         else f"TP:    <code>${fmt_px(plan['tp'])}</code>  "
-              f"({HA_RR}x the stop \u00b7 {HA_PARTIAL:.0%} booked there)"),
-        f"<i>data: {esc(source)}</i>",
-    ])
+        f"Entry: <code>${fmt_px(ent)}</code>",
+    ]
+    if not STOP_EXIT:
+        lines.append(f"Stop:  <code>${fmt_px(stp)}</code>  "
+                     f"(sizing reference only - not placed)")
+    else:
+        lines.append(
+            f"Stop:  <code>${fmt_px(stp)}</code>"
+            + (f"  ({rpct:.2f}% of price)" if rpct else "")
+            + (f" \u00b7 confirmed on the close"
+               if (IM_MODE and IM_STOP_ON_CLOSE) else ""))
+    lines.append(
+        f"TP:    <code>${fmt_px(tp)}</code>"
+        + (f"  ({rr:.1f}R" if rr else "")
+        + (f" \u00b7 {tpct:.2f}% away)" if tpct else ")" if rr else ""))
+    if HA_PARTIAL < 1.0:
+        lines.append(f"<i>{HA_PARTIAL:.0%} booked at the target</i>")
+    lines.append(f"<i>data: {esc(source)}</i>")
+    return "\n".join(lines)
 
 
 def lifecycle_message(asset, kind, trade, exit_px, event_t, note):
@@ -3945,8 +3991,10 @@ def process_open_trade(asset, trade, candles, ha, last_closed_t):
             # the disaster level, which needs no close at all.
             eng = trade.get("engine")
             on_close = ((SD_STOP_ON_CLOSE and eng == "sd")
-                        or (RS_STOP_ON_CLOSE and eng == "rs"))
-            dis_r = SD_DISASTER_R if eng == "sd" else RS_DISASTER_R
+                        or (RS_STOP_ON_CLOSE and eng == "rs")
+                        or (IM_STOP_ON_CLOSE and eng == "im"))
+            dis_r = {"sd": SD_DISASTER_R, "im": IM_DISASTER_R}.get(
+                eng, RS_DISASTER_R)
             if on_close and STOP_EXIT:
                 r0 = abs(trade["entry"] - trade["stop"]) or None
                 dis = None
@@ -6138,7 +6186,7 @@ def seconds_to_next_close(buffer_s=15):
 
 
 def run_loop():
-    log("smoothed HA agent started (loop mode). Ctrl+C to stop.")
+    log(f"{engine_label()} agent started (loop mode). Ctrl+C to stop.")
     check_once()
     while True:
         wait = seconds_to_next_close()
