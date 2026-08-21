@@ -2448,6 +2448,9 @@ def im_gate_status(ast, candles, i, sym=None):
     return None
 
 
+IM_PATH = {}                       # sym -> which pathway fired, so the alert
+                                   # can say whether the bands were even part
+                                   # of the decision
 IM_LEVELS = {}                     # sym -> (md, sb, band) at the signal bar,
                                    # so the alert can print where the impulse
                                    # line sat against its own bands
@@ -3701,14 +3704,23 @@ def entry_message(asset, direction, plan, zhi, zlo, source, t, trigger):
         where = ("above the overbought line" if mdv > band else
                  "below the oversold line" if mdv < -band else
                  "between the lines")
+        pth = IM_PATH.get(asset["symbol"], "extension")
+        if pth == "breakout":
+            # the bands are NOT part of a breakout decision - it fires from a
+            # FLAT md at zero. Saying "above the overbought line" on a
+            # breakout LONG reads like the oversold rule was broken.
+            note = (f"pathway 2 \u00b7 breakout from a flat range \u00b7 "
+                    f"the bands are not used on this pathway")
+        else:
+            note = (f"pathway 1 \u00b7 {where} \u00b7 {IM_BAND_PCTILE}th pct "
+                    f"of |md| over {IM_BAND_DAYS}d")
         lines += [
             "\U0001F4C8 <b>Impulse MACD</b>",
             f"md:    <code>{mdv:+.3e}</code>   signal: <code>{sbv:+.3e}</code>"
             f"   hist: <code>{shv:+.3e}</code>",
             f"Bands: <code>+{band:.3e}</code> overbought / "
             f"<code>-{band:.3e}</code> oversold",
-            f"<i>{esc(where)} \u00b7 {IM_BAND_PCTILE}th pct of |md| over "
-            f"{IM_BAND_DAYS}d</i>",
+            f"<i>{esc(note)}</i>",
             "",
         ]
     lines += [
@@ -5410,6 +5422,7 @@ def process_candle(asset, ast, candles, ha, i):
             return False
         entry = c["c"]
         path = ast.get("im_path", "extension")
+        IM_PATH[sym] = path
         if path == "breakout":
             # "slightly below entry" - a fixed fraction of price
             risk_t = entry * IM_P2_STOP_PCT / 100.0
