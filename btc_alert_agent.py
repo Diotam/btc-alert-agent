@@ -332,6 +332,17 @@ CROSS_SLOPE_BARS = 5               # bars per slope window. 5 on 30m = 2.5h.
 # md = mi>hi ? mi-hi : (mi<lo ? mi-lo : 0), sb = SMA(md,9), sh = md-sb
 # NOTHING from the reversal-200 engine feeds this. RS_MODE is off.
 IM_MODE = True
+IM_CLAUDE_GATE = True              # 21 Aug: every signal is adjudicated by
+                                   # Claude before it fires. The scanner still
+                                   # owns the arithmetic; the model only rules
+                                   # on whether the setup is a real momentum
+                                   # event or noise that satisfies the rules
+                                   # by accident - the judgement that
+                                   # IM_TURN_MIN kept failing at. It may
+                                   # tighten the stop or cut size, never the
+                                   # reverse, and every number is clamped in
+                                   # claude_gate.py. A dead API passes the
+                                   # signal through unchanged.
 IM_LEN = 34                        # LazyBear's default
 IM_SIG = 9                         # signal line
 
@@ -5520,6 +5531,24 @@ def process_candle(asset, ast, candles, ha, i):
             stop_src = f"{IM_SWING_BARS}-bar swing"
         if risk_t <= 0:
             return False
+        # ---- CLAUDE ADJUDICATES ------------------------------------
+        verdict = ""
+        if IM_CLAUDE_GATE:
+            try:
+                import claude_gate
+                _md, _sb, _sh = impulse_macd(candles[:i])
+                _band = im_band(_md, len(_md) - 1) or 0.0
+                take, stop, rr, _q, verdict = claude_gate.adjudicate(
+                    sym, path, side, entry, stop, rr, 1.0,
+                    candles[:i], _md, _sb, _sh, _band, log)
+                risk_t = abs(entry - stop)
+                if not take:
+                    log(f"{sym}: SKIPPED by Claude - {verdict}")
+                    return False
+                if risk_t <= 0:
+                    return False
+            except Exception as e:
+                log(f"{sym}: claude gate failed {type(e).__name__}: {e}")
         tp = ((entry + rr * risk_t) if want_long
               else (entry - rr * risk_t))
         log(f"{sym}: IMPULSE-MACD {path.upper()} {side} at ${fmt_px(entry)} - "
