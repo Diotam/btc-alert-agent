@@ -3873,6 +3873,27 @@ def already_closed(sym, trade, exit_px, kind):
     return False
 
 
+def _closed_r(trade, exit_px, frac=1.0):
+    """The trade's result in R, signed. None when the risk is unknowable.
+
+    Uses risk0 - the risk distance at ENTRY - not the current stop, which may
+    have been moved. A loss can exceed -1R under close-confirmed stops, since
+    the exit is the bar's close rather than the level itself.
+    """
+    try:
+        risk = trade.get("risk0")
+        if not risk:
+            e, st = trade.get("entry"), trade.get("stop")
+            risk = abs(e - st) if (e is not None and st is not None) else None
+        if not risk:
+            return None
+        move = ((exit_px - trade["entry"]) if trade["verdict"] == "LONG"
+                else (trade["entry"] - exit_px))
+        return round(move / risk * frac, 3)
+    except Exception:
+        return None
+
+
 def record_close(sym, trade, exit_px, kind, t_event=None, frac=1.0):
     """Append a closed trade to the ledger. t_event = the actual market time
     of the exit, so late reconciliations book to the day they happened."""
@@ -3885,6 +3906,17 @@ def record_close(sym, trade, exit_px, kind, t_event=None, frac=1.0):
                 # a trade opened before tagging existed has none; read a
                 # missing tag as the original engine rather than "unknown"
                 "engine": trade.get("engine", "ha"),
+                # THE STOP AND R. Without these the ledger holds percentages
+                # with no denominator, and every performance question is
+                # unanswerable: ZORA +13.96% and HOOD +1.09% could be the
+                # same R or four times apart. risk0 is the ORIGINAL risk at
+                # entry, so R stays honest even if the stop was moved later.
+                "stop": trade.get("stop"),
+                "risk0": trade.get("risk0"),
+                "tp": trade.get("tp"),
+                "r": _closed_r(trade, exit_px, frac),
+                "path": trade.get("im_path") or trade.get("rs_path"),
+                "opened_t": trade.get("opened_t"),
                 "pnl_pct": round(pnl_pct(trade, exit_px) * frac, 3)}) + "\n")
     except OSError:
         pass
