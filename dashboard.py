@@ -368,6 +368,9 @@ def scan_age_s(state, mtime):
     return int(time.time() - mtime) if mtime else None
 
 
+STALE_GATE_BARS = 3        # gate rows older than this many bars are dropped
+
+
 def build_data():
     state, mtime = read_state()
     mids = prices()
@@ -384,6 +387,17 @@ def build_data():
             continue          # closed from here, waiting for the agent
 
         g = ast.get("gate")
+        if g and not tr and g.get("t"):
+            # DROP STALE ROWS. The agent stamps each row with the bar it was
+            # computed from; if that bar is older than STALE_GATE_BARS the
+            # symbol has not been evaluated since - a failed fetch, or it
+            # fell out of discovery - and the row describes the past.
+            # xyz:UNITREE showed "flat 38 bars" for 36 HOURS on 22-23 Aug.
+            _span = {"5m": 300_000, "15m": 900_000, "30m": 1_800_000,
+                     "1h": 3_600_000, "4h": 14_400_000}.get(
+                         (state.get("_meta") or {}).get("tf", "30m"), 1_800_000)
+            if (time.time() * 1000 - g["t"]) / _span > STALE_GATE_BARS:
+                g = None
         if g and not tr:
             # the agent writes None for anything that has not reached a
             # flip, so this list is already only the symbols in play
