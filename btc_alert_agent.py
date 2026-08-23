@@ -372,7 +372,16 @@ IM_BAND_PCTILE = 85                # 21 Aug: 70 -> 85 at his call, after ETHFI
                                    # bands.
                                    # with "percentile": the cut. 85 means the
                                    # top 15% of |md| readings count as MAJOR.
-IM_BAND_DAYS = 30                  # 20 Aug: the percentile is taken over a
+IM_BAND_DAYS = 14                  # 23 Aug: 30 -> 14 to cut the fetch load.
+                                   # At 30 days LOOKBACK["30m"] had to be
+                                   # 1500, ~3.7x the old depth, across 124
+                                   # markets - and symbols began dropping out
+                                   # of discovery on 429s and 500s.
+                                   # xyz:UNITREE went 36 HOURS without being
+                                   # evaluated while its watchlist row sat
+                                   # frozen at "flat 38 bars".
+                                   # 14 days is 672 bars on 30m.
+                                   # was: the percentile is taken over a
                                    # THIRTY DAY window, converted to bars from
                                    # TF - 1440 bars on 30m. LOOKBACK below had
                                    # to rise to match, or the window silently
@@ -1444,7 +1453,7 @@ for _n, _v in (("TF", TF), ("SCAN_EVERY", SCAN_EVERY)):
 # That is ~3.7x the candles per market. Fetches are per NEW BAR here, not
 # per pulse, so the rate-limit exposure is unchanged - but memory is not:
 # the agent held a 25MB peak at 400 bars.
-LOOKBACK = {"5m": 300, "10m": 300, "15m": 400, "30m": 1500, "1h": 500,
+LOOKBACK = {"5m": 300, "10m": 300, "15m": 400, "30m": 750, "1h": 500,
             "4h": 300}
 
 REQUEST_TIMEOUT_S = 8              # fail fast: a throttled API must not burn 20s
