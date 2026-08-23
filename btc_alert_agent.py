@@ -5513,7 +5513,14 @@ def process_candle(asset, ast, candles, ha, i):
         ast["sym"] = sym
         side = im_signal(ast, candles, i)
         try:
-            ast["gate"] = im_gate_status(ast, candles, i, sym)
+            _g = im_gate_status(ast, candles, i, sym)
+            if _g:
+                # stamp the bar this row describes. A symbol that drops out
+                # of discovery on a 429 is never re-evaluated, and its row
+                # sat on the dashboard looking current - xyz:UNITREE showed
+                # "flat 38 bars" for 36 HOURS on 22-23 Aug.
+                _g["t"] = candles[i - 1]["t"]
+            ast["gate"] = _g
         except Exception as e:
             log(f"{sym}: im_gate_status failed: {type(e).__name__}: {e}")
         if not side:
