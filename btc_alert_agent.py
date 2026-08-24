@@ -2464,8 +2464,13 @@ def rs_ma(closes, n):
     return smma(closes, n)
 
 
+def im_band(md, i):
+    """The overbought level; the oversold line is its negative.
 
-    """The overbought level. The oversold line is its negative."""
+    Only pathway 2's watchlist and the alert body use this now - pathway 1
+    moved to the MACD zero line on 23 Aug. The def line was lost when
+    im_gate_status was rewritten, leaving this body orphaned inside rs_ma.
+    """
     if IM_BAND_MODE == "abs":
         return abs(IM_BAND)
     if IM_BAND_MODE == "pct_of_price":
@@ -2541,6 +2546,16 @@ def im_gate_status(ast, candles, i, sym=None):
                                f"DOWN through the signal ({sigl[j]:.4g}) "
                                f"enters")}
     return None
+
+
+IM_PATH = {}                       # sym -> which pathway fired, for the alert
+IM_LEVELS = {}                     # sym -> (md, sb, band, sh) at the signal
+                                   # bar, so the alert can print the indicator
+                                   # values. BOTH were lost on 23 Aug when the
+                                   # old im_gate_status was replaced - they
+                                   # lived above it - and every scan then
+                                   # threw NameError on the first symbol that
+                                   # reached im_signal.
 
 
 def macd_std(candles, fast=None, slow=None, sig=None):
