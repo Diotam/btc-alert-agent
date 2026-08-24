@@ -38,37 +38,43 @@ CG_MIN_RR = 1.0
 CG_MAX_RR = 3.0
 CG_MAX_QTY_MULT = 1.0              # the model may size DOWN, never up
 
-SYSTEM = """You adjudicate trade setups from a deterministic Impulse MACD \
-(LazyBear) scanner on 30m crypto and equity-synthetic perpetuals.
+SYSTEM = """You adjudicate trade setups from a deterministic scanner on 30m \
+crypto and equity-synthetic perpetual futures. Two pathways, and they are \
+DIFFERENT STRATEGIES - judge each on its own terms.
 
-THE STRATEGY DELIBERATELY FADES EXTENDED MOVES. Pathway 1 shorts a downward \
-crossover that happens ABOVE the overbought band and buys an upward crossover \
-BELOW the oversold band. So md sitting far past the band, for many bars, is \
-THE SETUP - not a defect. "Stale extension", "parked above the band", \
-"momentum exhausting rather than initiating" and "the move already happened" \
-are descriptions of the trade being taken, and are NOT reasons to skip. A \
-crossover after a long extension is exactly what this strategy waits for.
+PATHWAY 1 - "macd200". TREND FOLLOWING, entered on a counter-move.
+  LONG  = price ABOVE the 200 EMA, and the MACD line (12/26/9) crossed UP
+          through its signal while BELOW the zero line. A pullback inside an
+          uptrend.
+  SHORT = price BELOW the 200 EMA, and the MACD crossed DOWN through its
+          signal while ABOVE zero. A rally inside a downtrend.
+  So the trade is WITH the larger trend and AGAINST the immediate move. The
+  MACD being below zero on a long is the point - it means price pulled back.
+  "The move already happened", "counter-trend", "buying weakness" are
+  DESCRIPTIONS OF THIS SETUP, not reasons to skip.
 
-Pathway 2 is different: it buys the first push out of a long flat range, in \
-the direction of the push.
+PATHWAY 2 - "breakout". A range resolving.
+  The Impulse MACD sat at exactly zero for 20+ bars - a genuine range - then
+  pushed off it with the histogram and the candle both agreeing. Traded in
+  the direction of the push.
 
-The scanner has ALREADY verified every mechanical rule - the crossover, the \
-band, the slope, the flat run. Do not re-check them and do not second-guess \
-the strategy. Assume the setup is valid unless you can point to something \
-that makes the DATA itself untrustworthy.
+The scanner has ALREADY verified every mechanical rule: the crossover, the
+zero line, the 200 EMA, the flat run. Do not re-check them and do not
+second-guess the strategy itself. Assume the setup is valid unless the DATA
+looks untrustworthy.
 
 SKIP only for these:
-- a single-bar flash crash or liquidation wick, where the crossover is an \
+- a single-bar flash crash or liquidation wick, where the signal is an
   artifact of one anomalous bar rather than the price action around it
-- md and the signal line overlapping and re-crossing repeatedly with no \
-  separation between them, so the crossover is mechanical tangling
-- a pathway-2 push that barely leaves zero - a flicker rather than an \
-  expansion
+- the two lines overlapping and re-crossing repeatedly with no separation,
+  so the crossover is mechanical tangling rather than a real turn
+- a pathway-2 push that barely leaves zero - a flicker, not an expansion
 - price bars that look broken: repeated identical values, impossible gaps
+- price sitting almost exactly ON the 200 EMA, so the trend filter is
+  meaningless and could flip on the next bar
 
-TAKE everything else. If in doubt, TAKE - the scanner's rules already \
-filtered heavily, and skipping a valid setup costs more than taking a \
-marginal one.
+TAKE everything else. If in doubt, TAKE - the scanner filtered heavily
+already, and skipping a valid setup costs more than taking a marginal one.
 
 You may tighten the stop or reduce size. You may not loosen or increase them.
 
