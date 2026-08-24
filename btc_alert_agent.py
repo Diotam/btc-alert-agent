@@ -351,6 +351,22 @@ IM_SIG = 9                         # signal line
 # while ABOVE the overbought line is a SHORT. Crossovers between the lines
 # are ignored: those are his "minor" crossovers, too close to the middle.
 IM_P1_ON = True
+# ---- PATHWAY 1 REPLACED 23 Aug: MACD + 200 EMA, his spec.
+#   LONG  - price ABOVE the 200 EMA, and the MACD line crosses UP through
+#           its signal while BOTH are BELOW the zero line (a pullback inside
+#           an uptrend)
+#   SHORT - price BELOW the 200 EMA, and the MACD line crosses DOWN through
+#           its signal while ABOVE the zero line (a rally inside a downtrend)
+# This is the STANDARD MACD, not the impulse one: the impulse md sits at
+# EXACTLY zero whenever mi is inside the SMMA band, so a zero-line rule on it
+# would be degenerate. The bands and the percentile play no part here.
+IM_P1_MACD = True                  # False restores the old impulse-crossover
+IM_MACD_FAST = 12
+IM_MACD_SLOW = 26
+IM_MACD_SIG = 9
+IM_EMA_TREND = 200                 # "200 day" read as 200 PERIODS on TF -
+                                   # 100 hours on 30m. A true daily 200 EMA
+                                   # would be a different filter entirely.
 IM_BAND_MODE = "percentile"        # how the overbought line is set.
                                    # "percentile" - a percentile of THIS
                                    #   symbol's own recent |md|, so the split
@@ -2466,59 +2482,127 @@ def rs_ma(closes, n):
 
 
 def im_gate_status(ast, candles, i, sym=None):
-    """Watchlist row for the impulse engine. Report only.
+    """Watchlist row. Report only - it never gates anything.
 
-      coiled   md has been FLAT long enough - pathway 2 is armed and waiting
-               for the first push
-      stretched  md is past the band - a crossover here would be MAJOR, so
-               pathway 1 would take it
-    Symbols in neither state return None, so the panel stays short.
+      coiled   impulse md FLAT long enough - pathway 2 waiting on the push
+      pullback price is above the 200 EMA and MACD is below zero, so a cross
+               UP would be a pathway-1 LONG
+      rally    price is below the 200 EMA and MACD is above zero, so a cross
+               DOWN would be a pathway-1 SHORT
+    Symbols in none of those return None, so the panel stays short.
     """
     last = i - 1
     if last < IM_LEN + IM_SIG + IM_FLAT_BARS + 5:
         return None
-    md, sb, sh = impulse_macd(candles[:last + 1])
-    if not md or len(md) < IM_FLAT_BARS + 3:
-        return None
-    j = len(md) - 1
-    px = candles[last]["c"]
 
+    # ---- pathway 2: the coil, on the IMPULSE macd
     if IM_P2_ON:
-        run = 0
-        for k in range(j, -1, -1):
-            if md[k] != 0.0:
-                break
-            run += 1
-        if run >= IM_FLAT_BARS:
-            return {"sym": sym, "dir": "", "stage": "ready", "run": run,
-                    "trend": "coiled", "age": 0,
-                    "detail": (f"impulse MACD flat {run} bars - the first "
-                               f"push with the candle agreeing enters")}
+        md, sb, sh = impulse_macd(candles[:last + 1])
+        if md and len(md) >= IM_FLAT_BARS + 3:
+            j = len(md) - 1
+            run = 0
+            for k in range(j, -1, -1):
+                if md[k] != 0.0:
+                    break
+                run += 1
+            if run >= IM_FLAT_BARS:
+                return {"sym": sym, "dir": "", "stage": "ready", "run": run,
+                        "trend": "coiled", "age": 0,
+                        "detail": (f"impulse MACD flat {run} bars - the first "
+                                   f"push with the candle agreeing enters")}
 
-    if IM_P1_ON:
-        band = im_band(md, j)
-        if band is None and IM_BAND_MODE == "pct_of_price":
-            band = abs(px) * IM_BAND / 100.0
-        if band and abs(md[j]) > band:
-            over = md[j] > 0
-            gap = abs(md[j] - sb[j])
-            return {"sym": sym, "dir": "SHORT" if over else "LONG",
-                    "stage": "waiting", "run": 0,
-                    "trend": "overbought" if over else "oversold",
-                    "age": 0,
-                    "detail": (f"md {md[j]:.4g} past the "
-                               f"{'+' if over else '-'}{band:.4g} line - a "
-                               f"cross {'down' if over else 'up'} through the "
-                               f"signal enters ({gap:.4g} away)")}
+    # ---- pathway 1: MACD + 200 EMA. Both HALVES must already be true, so
+    # the only thing outstanding is the crossover itself.
+    if IM_P1_ON and IM_P1_MACD:
+        need = max(IM_MACD_SLOW + IM_MACD_SIG, IM_EMA_TREND) + 3
+        if last < need:
+            return None
+        line, sigl, _ = macd_std(candles[:last + 1])
+        e = ema([x["c"] for x in candles[:last + 1]], IM_EMA_TREND)
+        if not line or not e:
+            return None
+        j = len(line) - 1
+        px, trend = candles[last]["c"], e[-1]
+        gap = line[j] - sigl[j]
+        dist = (px - trend) / px * 100.0
+        if px > trend and line[j] < 0:
+            return {"sym": sym, "dir": "LONG", "stage":
+                    "ready" if gap > -abs(line[j]) * 0.1 else "waiting",
+                    "run": 0, "trend": "pullback", "age": 0,
+                    "detail": (f"price {dist:+.2f}% above the {IM_EMA_TREND} "
+                               f"EMA, MACD {line[j]:.4g} below zero - a cross "
+                               f"UP through the signal ({sigl[j]:.4g}) enters")}
+        if px < trend and line[j] > 0:
+            return {"sym": sym, "dir": "SHORT", "stage":
+                    "ready" if gap < abs(line[j]) * 0.1 else "waiting",
+                    "run": 0, "trend": "rally", "age": 0,
+                    "detail": (f"price {dist:+.2f}% below the {IM_EMA_TREND} "
+                               f"EMA, MACD {line[j]:.4g} above zero - a cross "
+                               f"DOWN through the signal ({sigl[j]:.4g}) "
+                               f"enters")}
     return None
 
 
-IM_PATH = {}                       # sym -> which pathway fired, so the alert
-                                   # can say whether the bands were even part
-                                   # of the decision
-IM_LEVELS = {}                     # sym -> (md, sb, band) at the signal bar,
-                                   # so the alert can print where the impulse
-                                   # line sat against its own bands
+def macd_std(candles, fast=None, slow=None, sig=None):
+    """Standard MACD: EMA(fast) - EMA(slow), signal = EMA of that.
+
+    Returns (line, signal, hist) as full series. Unlike the impulse md this
+    has a real zero line - it is only zero when the two EMAs cross.
+    """
+    fast = IM_MACD_FAST if fast is None else fast
+    slow = IM_MACD_SLOW if slow is None else slow
+    sig = IM_MACD_SIG if sig is None else sig
+    if not candles or len(candles) < slow + sig + 2:
+        return [], [], []
+    c = [x["c"] for x in candles]
+    ef, es = ema(c, fast), ema(c, slow)
+    line = [a - b for a, b in zip(ef, es)]
+    signal = ema(line, sig)
+    return line, signal, [a - b for a, b in zip(line, signal)]
+
+
+def p1_macd_signal(ast, candles, i):
+    """MACD + 200 EMA. Returns "LONG" / "SHORT" to ENTER, else None.
+
+    Judged on the LAST CLOSED bar, so nothing repaints.
+    """
+    last = i - 1
+    need = max(IM_MACD_SLOW + IM_MACD_SIG, IM_EMA_TREND) + 3
+    if last < need:
+        return None
+    line, sigl, _ = macd_std(candles[:last + 1])
+    if not line or len(line) < 3:
+        return None
+    j = len(line) - 1
+    px = candles[last]["c"]
+    e200 = ema([x["c"] for x in candles[:last + 1]], IM_EMA_TREND)
+    if not e200:
+        return None
+    trend = e200[-1]
+
+    up = line[j - 1] <= sigl[j - 1] and line[j] > sigl[j]
+    dn = line[j - 1] >= sigl[j - 1] and line[j] < sigl[j]
+
+    if up and line[j] < 0 and px > trend:
+        ast["im_path"] = "macd200"
+        ast["im_why"] = (f"MACD crossed UP at {line[j]:.6g} BELOW the zero "
+                         f"line, price {fmt_px(px)} above the "
+                         f"{IM_EMA_TREND} EMA {fmt_px(trend)} - pullback in "
+                         f"an uptrend")
+        return "LONG"
+    if dn and line[j] > 0 and px < trend:
+        ast["im_path"] = "macd200"
+        ast["im_why"] = (f"MACD crossed DOWN at {line[j]:.6g} ABOVE the zero "
+                         f"line, price {fmt_px(px)} below the "
+                         f"{IM_EMA_TREND} EMA {fmt_px(trend)} - rally in a "
+                         f"downtrend")
+        return "SHORT"
+    if (up or dn) and LOG_SKIPS:
+        side = "up" if up else "down"
+        log(f"{ast.get('sym','?')}: MACD crossed {side} at {line[j]:.6g} but "
+            f"{'wrong side of zero' if (up and line[j] >= 0) or (dn and line[j] <= 0) else 'wrong side of the ' + str(IM_EMA_TREND) + ' EMA'}"
+            f" - no entry")
+    return None
 
 
 def im_band(md, i):
@@ -2563,8 +2647,12 @@ def im_signal(ast, candles, i):
         _b = abs(px) * IM_BAND / 100.0
     IM_LEVELS[ast.get("sym", "?")] = (md[j], sb[j], _b, sh[j])
 
-    # ---------------- PATHWAY 1: extension ----------------
-    if IM_P1_ON:
+    # ---------------- PATHWAY 1 ----------------
+    if IM_P1_ON and IM_P1_MACD:
+        sd = p1_macd_signal(ast, candles, i)
+        if sd:
+            return sd
+    elif IM_P1_ON:
         band = im_band(md, j)
         if band is None and IM_BAND_MODE == "pct_of_price":
             band = abs(px) * IM_BAND / 100.0
