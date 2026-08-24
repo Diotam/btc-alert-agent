@@ -911,16 +911,21 @@ function render(d){
   // agent writes null for everything else, so this list is already short.
   const G=d.gates||[];
   // WATCHLIST, back on 18 Aug for the reversal-200 engine, which has a real
-  // WATCHLIST for the impulse-MACD engine. Two pending states:
-  //   coiled     md flat for N bars - pathway 2 waiting on the first push
-  //   overbought/oversold  md past the band - pathway 1 would take a
-  //              crossover here, since it counts as MAJOR
+  // WATCHLIST. Three pending states, from two different indicators:
+  //   coiled    impulse md flat - pathway 2 waiting on the first push
+  //   pullback  price above the 200 EMA, MACD below zero - a cross UP is
+  //             a pathway-1 LONG
+  //   rally     price below the 200 EMA, MACD above zero - a cross DOWN is
+  //             a pathway-1 SHORT
   // "coiled" rows carry no direction: the push decides it.
   const _n=document.getElementById('n-gates'); if(_n) _n.textContent=G.length;
   const _g=document.getElementById('gsub');
   if(_g){
     const nc=G.filter(x=>x.trend==='coiled').length;
-    _g.textContent=G.length?nc+' coiled \u00b7 '+(G.length-nc)+' stretched':'';
+    const np=G.filter(x=>x.trend==='pullback').length;
+    const nr=G.filter(x=>x.trend==='rally').length;
+    _g.textContent=G.length?(nc+' coiled \u00b7 '+np+' pullback \u00b7 '
+      +nr+' rally'):'';
   }
   // closest to its 20 first - those are the ones about to trigger
   // coiled first, then the longest-standing; both are the ripest setups
@@ -936,7 +941,7 @@ function render(d){
       <span class="muted"${near?' style="color:#c9d1d9"':''}>${g.trend||''}</span>
       </div><div class=row>
       <span class=muted>${g.detail||''}</span></div></div>`;
-  }).join(''):'<div class="card muted">nothing coiled or stretched</div>';
+  }).join(''):'<div class="card muted">nothing set up</div>';
   step('r-gates');
   const cut=Date.now()-DAYS[PERIOD]*86400000;
   // inPeriod is EVERY trade closed in the selected window - that is the
