@@ -2567,16 +2567,20 @@ def im_gate_status(ast, candles, i, sym=None):
         px, trend = candles[last]["c"], e[-1]
         gap = line[j] - sigl[j]
         dist = (px - trend) / px * 100.0
-        if px > trend and line[j] < 0:
+        # ONLY SETUPS THAT CAN STILL FIRE. A long needs the MACD line still
+        # BELOW its signal - once it is already above, the cross has happened
+        # and no entry can come until it crosses back down and up again.
+        # Four of six rows on 25 Aug were in that state and marked "ready".
+        if px > trend and line[j] < 0 and line[j] < sigl[j]:
             return {"sym": sym, "dir": "LONG", "stage":
-                    "ready" if gap > -abs(line[j]) * 0.1 else "waiting",
+                    "ready" if abs(gap) <= abs(sigl[j]) * 0.15 else "waiting",
                     "run": 0, "trend": "pullback", "age": 0,
                     "detail": (f"price {dist:+.2f}% above the {IM_EMA_TREND} "
                                f"EMA, MACD {line[j]:.4g} below zero - a cross "
                                f"UP through the signal ({sigl[j]:.4g}) enters")}
-        if px < trend and line[j] > 0:
+        if px < trend and line[j] > 0 and line[j] > sigl[j]:
             return {"sym": sym, "dir": "SHORT", "stage":
-                    "ready" if gap < abs(line[j]) * 0.1 else "waiting",
+                    "ready" if abs(gap) <= abs(sigl[j]) * 0.15 else "waiting",
                     "run": 0, "trend": "rally", "age": 0,
                     "detail": (f"price {dist:+.2f}% below the {IM_EMA_TREND} "
                                f"EMA, MACD {line[j]:.4g} above zero - a cross "
