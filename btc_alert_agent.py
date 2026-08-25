@@ -2549,6 +2549,9 @@ def im_gate_status(ast, candles, i, sym=None):
 
 
 IM_PATH = {}                       # sym -> which pathway fired, for the alert
+IM_MACD = {}                       # sym -> (macd, signal, ema200, price) for
+                                   # pathway 1, so the alert prints the
+                                   # indicator that actually decided it
 IM_LEVELS = {}                     # sym -> (md, sb, band, sh) at the signal
                                    # bar, so the alert can print the indicator
                                    # values. BOTH were lost on 23 Aug when the
@@ -2600,6 +2603,7 @@ def p1_macd_signal(ast, candles, i):
 
     if up and line[j] < 0 and px > trend:
         ast["im_path"] = "macd200"
+        IM_MACD[ast.get("sym", "?")] = (line[j], sigl[j], trend, px)
         ast["im_why"] = (f"MACD crossed UP at {line[j]:.6g} BELOW the zero "
                          f"line, price {fmt_px(px)} above the "
                          f"{IM_EMA_TREND} EMA {fmt_px(trend)} - pullback in "
@@ -2607,6 +2611,7 @@ def p1_macd_signal(ast, candles, i):
         return "LONG"
     if dn and line[j] > 0 and px < trend:
         ast["im_path"] = "macd200"
+        IM_MACD[ast.get("sym", "?")] = (line[j], sigl[j], trend, px)
         ast["im_why"] = (f"MACD crossed DOWN at {line[j]:.6g} ABOVE the zero "
                          f"line, price {fmt_px(px)} below the "
                          f"{IM_EMA_TREND} EMA {fmt_px(trend)} - rally in a "
@@ -3876,31 +3881,40 @@ def entry_message(asset, direction, plan, zhi, zlo, source, t, trigger):
         f"\U0001F4CA <b>Setup</b>: {esc(trigger)}",
         "",
     ]
-    lv = IM_LEVELS.get(asset["symbol"]) if IM_MODE else None
-    if lv and lv[2]:
-        mdv, sbv, band, shv = lv
-        where = ("above the overbought line" if mdv > band else
-                 "below the oversold line" if mdv < -band else
-                 "between the lines")
-        pth = IM_PATH.get(asset["symbol"], "extension")
-        if pth == "breakout":
-            # the bands are NOT part of a breakout decision - it fires from a
-            # FLAT md at zero. Saying "above the overbought line" on a
-            # breakout LONG reads like the oversold rule was broken.
-            note = (f"pathway 2 \u00b7 breakout from a flat range \u00b7 "
-                    f"the bands are not used on this pathway")
-        else:
-            note = (f"pathway 1 \u00b7 {where} \u00b7 {IM_BAND_PCTILE}th pct "
-                    f"of |md| over {IM_BAND_DAYS}d")
-        lines += [
-            "\U0001F4C8 <b>Impulse MACD</b>",
-            f"md:    <code>{mdv:+.3e}</code>   signal: <code>{sbv:+.3e}</code>"
-            f"   hist: <code>{shv:+.3e}</code>",
-            f"Bands: <code>+{band:.3e}</code> overbought / "
-            f"<code>-{band:.3e}</code> oversold",
-            f"<i>{esc(note)}</i>",
-            "",
-        ]
+    pth = IM_PATH.get(asset["symbol"], "") if IM_MODE else ""
+    if pth == "macd200":
+        # PATHWAY 1 runs on the STANDARD MACD and the 200 EMA. The impulse
+        # values and the percentile bands play no part in this decision, and
+        # printing them said "above the overbought line" on a pullback trade.
+        m = IM_MACD.get(asset["symbol"])
+        if m:
+            line, sigl, trend, px = m
+            lines += [
+                "\U0001F4C8 <b>MACD 12/26/9 + 200 EMA</b>",
+                f"MACD:  <code>{line:+.4g}</code>   signal: "
+                f"<code>{sigl:+.4g}</code>   "
+                f"<i>{'below' if line < 0 else 'above'} zero</i>",
+                f"200 EMA: <code>{fmt_px(trend)}</code>   price is "
+                f"<code>{(px - trend) / px * 100:+.2f}%</code> "
+                f"{'above' if px > trend else 'below'} it",
+                f"<i>pathway 1 \u00b7 "
+                f"{'pullback in an uptrend' if direction == 'LONG' else 'rally in a downtrend'}"
+                f"</i>",
+                "",
+            ]
+    else:
+        lv = IM_LEVELS.get(asset["symbol"]) if IM_MODE else None
+        if lv and lv[2]:
+            mdv, sbv, band, shv = lv
+            lines += [
+                "\U0001F4C8 <b>Impulse MACD</b>",
+                f"md:    <code>{mdv:+.3e}</code>   signal: "
+                f"<code>{sbv:+.3e}</code>   hist: <code>{shv:+.3e}</code>",
+                f"Bands: <code>+{band:.3e}</code> / <code>-{band:.3e}</code>",
+                f"<i>pathway 2 \u00b7 breakout from a flat range \u00b7 the "
+                f"bands are not used on this pathway</i>",
+                "",
+            ]
     lines += [
         "\U0001F4CB <b>Plan</b>",
         f"Entry: <code>${fmt_px(ent)}</code>",
