@@ -394,6 +394,18 @@ IM_P1_MACD = True                  # False restores the old impulse-crossover
 IM_MACD_FAST = 12
 IM_MACD_SLOW = 26
 IM_MACD_SIG = 9
+IM_EMA_MIN_BARS = 3                # 25 Aug: pathway 1 needs THIS MANY x the
+                                   # EMA period in bars before it will trust
+                                   # the 200 EMA. ema() seeds on the FIRST
+                                   # value of whatever series it is handed, so
+                                   # a short fetch produces an EMA dominated
+                                   # by recent prices - and recent prices are
+                                   # exactly where the trend filter matters.
+                                   # AAVE 25 Aug: the agent computed 126.4968
+                                   # on a short series and took a LONG; the
+                                   # same code on 751 bars gives 130.97, and
+                                   # price was BELOW that. Better to evaluate
+                                   # nothing than to evaluate a wrong line.
 IM_EMA_TREND = 200                 # "200 day" read as 200 PERIODS on TF -
                                    # 100 hours on 30m. A true daily 200 EMA
                                    # would be a different filter entirely.
@@ -2634,6 +2646,14 @@ def p1_macd_signal(ast, candles, i):
         return None
     j = len(line) - 1
     px = candles[last]["c"]
+    # REFUSE a 200 EMA computed on too little history - it would be seeded
+    # by whatever bar happens to start the series.
+    if len(candles) < IM_EMA_TREND * max(1, IM_EMA_MIN_BARS):
+        if LOG_SKIPS:
+            log(f"{ast.get('sym','?')}: only {len(candles)} bars - need "
+                f"{IM_EMA_TREND * IM_EMA_MIN_BARS} for a trustworthy "
+                f"{IM_EMA_TREND} EMA, pathway 1 skipped")
+        return None
     e200 = ema([x["c"] for x in candles[:last + 1]], IM_EMA_TREND)
     if not e200:
         return None
@@ -3958,12 +3978,14 @@ def entry_message(asset, direction, plan, zhi, zlo, source, t, trigger):
         m = IM_MACD.get(asset["symbol"])
         if m:
             line, sigl, trend, px = m
+            # 25 Aug: the raw MACD and signal numbers are dropped. They are
+            # in PRICE UNITS, so they mean nothing without the symbol's scale
+            # in your head - "-0.0003319" told you nothing useful. Which side
+            # of zero the cross happened on is the part that matters, and
+            # that is in the Setup line already.
             lines += [
-                "\U0001F4C8 <b>MACD 12/26/9 + 200 EMA</b>",
-                f"MACD:  <code>{line:+.4g}</code>   signal: "
-                f"<code>{sigl:+.4g}</code>   "
-                f"<i>{'below' if line < 0 else 'above'} zero</i>",
-                f"200 EMA: <code>{fmt_px(trend)}</code>   price is "
+                "\U0001F4C8 <b>200 EMA</b>",
+                f"Level: <code>{fmt_px(trend)}</code>   price "
                 f"<code>{(px - trend) / px * 100:+.2f}%</code> "
                 f"{'above' if px > trend else 'below'} it",
                 f"<i>pathway 1 \u00b7 "
@@ -5752,7 +5774,7 @@ def process_candle(asset, ast, candles, ha, i):
         rr = IM_P2_RR if path == "breakout" else IM_P1_RR
         stop = None
         stop_src = ""
-        if IM_STOP_AT_EMA:
+        if IM_STOP_AT_EMA and len(candles) >= IM_EMA_TREND * max(1, IM_EMA_MIN_BARS):
             _e = ema([x["c"] for x in candles[:i]], IM_EMA_TREND)
             if _e:
                 _t = _e[-1]
