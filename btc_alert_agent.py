@@ -360,6 +360,17 @@ IM_P1_ON = True
 # This is the STANDARD MACD, not the impulse one: the impulse md sits at
 # EXACTLY zero whenever mi is inside the SMMA band, so a zero-line rule on it
 # would be degenerate. The bands and the percentile play no part here.
+IM_P2_SUPPRESSES_P1 = True         # 25 Aug: while the impulse md has been
+                                   # FLAT for IM_FLAT_BARS+, pathway 1 is
+                                   # suppressed ENTIRELY - not merely
+                                   # overridden when the breakout fires.
+                                   # xyz:COPPER 22-23 Aug: md sat at zero for
+                                   # ~30 hours while the standard MACD crossed
+                                   # its signal repeatedly around the zero
+                                   # line. Those crosses are happening in a
+                                   # market the impulse indicator says has no
+                                   # direction at all. Wait for the range to
+                                   # resolve instead.
 IM_P1_MACD = True                  # False restores the old impulse-crossover
 IM_MACD_FAST = 12
 IM_MACD_SLOW = 26
@@ -2668,11 +2679,32 @@ def im_signal(ast, candles, i):
     IM_LEVELS[ast.get("sym", "?")] = (md[j], sb[j], _b, sh[j])
 
     # ---------------- PATHWAY 1 ----------------
-    if IM_P1_ON and IM_P1_MACD:
-        sd = p1_macd_signal(ast, candles, i)
-        if sd:
-            return sd
-    elif IM_P1_ON:
+    # The verdict is HELD, not returned. Pathway 2 is checked after this and
+    # OVERRIDES it when both qualify on the same bar: a range resolving is
+    # the more specific event - md pinned at exactly zero for 20+ bars and
+    # only now leaving it - while a MACD crossover can happen on any bar.
+    _p1 = None
+    _p1_why = None
+    # SUPPRESSED WHILE COILED: a flat md means the impulse indicator sees no
+    # direction, so a MACD crossover inside that stretch is noise around the
+    # zero line. Nothing from pathway 1 is even evaluated.
+    _coiled = False
+    if IM_P2_SUPPRESSES_P1 and IM_P2_ON and md:
+        _run = 0
+        for _k in range(j, -1, -1):
+            if md[_k] != 0.0:
+                break
+            _run += 1
+        if _run >= IM_FLAT_BARS:
+            _coiled = True
+            if LOG_SKIPS:
+                log(f"{ast.get('sym','?')}: pathway 1 suppressed - impulse md "
+                    f"flat {_run} bars, waiting for the range to resolve")
+    if not _coiled and IM_P1_ON and IM_P1_MACD:
+        _p1 = p1_macd_signal(ast, candles, i)
+        if _p1:
+            _p1_why = ast.get("im_why")
+    elif (not _coiled) and IM_P1_ON:
         band = im_band(md, j)
         if band is None and IM_BAND_MODE == "pct_of_price":
             band = abs(px) * IM_BAND / 100.0
@@ -2719,13 +2751,13 @@ def im_signal(ast, candles, i):
                 ast["im_why"] = (f"impulse MACD crossed UP at {md[j]:.6g}, "
                                  f"below the oversold line {-band:.6g} "
                                  f"(major crossover)")
-                return "LONG"
+                _p1, _p1_why = "LONG", ast["im_why"]
             if dn and md[j] > band:
                 ast["im_path"] = "extension"
                 ast["im_why"] = (f"impulse MACD crossed DOWN at {md[j]:.6g}, "
                                  f"above the overbought line {band:.6g} "
                                  f"(major crossover)")
-                return "SHORT"
+                _p1, _p1_why = "SHORT", ast["im_why"]
             if up or dn:
                 ast["im_note"] = (f"minor crossover at {md[j]:.6g}, inside "
                                   f"+/-{band:.6g} - ignored")
@@ -2748,6 +2780,13 @@ def im_signal(ast, candles, i):
                                  f"pushed to {md[j]:.6g}, histogram falling, "
                                  f"candle down")
                 return "SHORT"
+
+    # pathway 2 did not fire - fall back to whatever pathway 1 found
+    if _p1:
+        ast["im_path"] = "macd200" if IM_P1_MACD else "extension"
+        if _p1_why:
+            ast["im_why"] = _p1_why
+        return _p1
     return None
 
 
