@@ -140,7 +140,7 @@ ASSETS = [                         # used when DISCOVER_ALL = False, or when
 ]
 
 # --- strategy dials -------------------------------------------------------
-TF = "30m"                         # execution timeframe. 15m -> 30m on
+TF = "15m"                         # execution timeframe. 15m -> 30m on
                                    # 9 Aug: a 50 EMA on 15m was too fast
                                    # for these markets, so price crossed
                                    # it constantly without going
@@ -332,17 +332,18 @@ CROSS_SLOPE_BARS = 5               # bars per slope window. 5 on 30m = 2.5h.
 # md = mi>hi ? mi-hi : (mi<lo ? mi-lo : 0), sb = SMA(md,9), sh = md-sb
 # NOTHING from the reversal-200 engine feeds this. RS_MODE is off.
 IM_MODE = True
-IM_CLAUDE_GATE = True              # 21 Aug: every signal is adjudicated by
-                                   # Claude before it fires. The scanner still
-                                   # owns the arithmetic; the model only rules
-                                   # on whether the setup is a real momentum
-                                   # event or noise that satisfies the rules
-                                   # by accident - the judgement that
-                                   # IM_TURN_MIN kept failing at. It may
-                                   # tighten the stop or cut size, never the
-                                   # reverse, and every number is clamped in
-                                   # claude_gate.py. A dead API passes the
-                                   # signal through unchanged.
+IM_CLAUDE_GATE = False             # 25 Aug: OFF at his call. The adjudicator
+                                   # took 3 of 98 signals over its first two
+                                   # days - a 3% pass rate. The prompt was
+                                   # rewritten twice (it originally described
+                                   # the strategy backwards, telling the model
+                                   # to reject "stale extension" when fading
+                                   # extension WAS pathway 1), but the rewrite
+                                   # was never measured before pathway 1 was
+                                   # replaced entirely.
+                                   # True re-enables it. claude_gate.py can
+                                   # stay on disk either way - nothing imports
+                                   # it while this is False.
 IM_LEN = 34                        # LazyBear's default
 IM_SIG = 9                         # signal line
 
@@ -360,6 +361,24 @@ IM_P1_ON = True
 # This is the STANDARD MACD, not the impulse one: the impulse md sits at
 # EXACTLY zero whenever mi is inside the SMMA band, so a zero-line rule on it
 # would be degenerate. The bands and the percentile play no part here.
+IM_STOP_AT_EMA = True              # 25 Aug: the stop is the 200 EMA LEVEL,
+                                   # not the 20-bar swing. On a pathway-1
+                                   # long price sits above the EMA and the
+                                   # stop goes on it - so R is exactly "how
+                                   # far price has run from its trend line".
+                                   # THAT VARIES ENORMOUSLY: a shallow
+                                   # pullback gives a tight stop, an extended
+                                   # one gives a very wide stop, and price
+                                   # sitting ON the EMA gives almost no risk
+                                   # distance at all.
+                                   # Falls back to the swing when the EMA is
+                                   # on the WRONG side of entry, or closer
+                                   # than IM_EMA_STOP_MIN_PCT.
+IM_EMA_STOP_MIN_PCT = 0.15         # % of price. Below this the EMA stop is
+                                   # too tight to be real and the swing is
+                                   # used instead.
+IM_EMA_STOP_PAD_PCT = 0.05         # push the stop this far BEYOND the EMA, so
+                                   # a touch of the line is not an exit.
 IM_P2_SUPPRESSES_P1 = True         # 25 Aug: while the impulse md has been
                                    # FLAT for IM_FLAT_BARS+, pathway 1 is
                                    # suppressed ENTIRELY - not merely
@@ -399,7 +418,12 @@ IM_BAND_PCTILE = 85                # 21 Aug: 70 -> 85 at his call, after ETHFI
                                    # bands.
                                    # with "percentile": the cut. 85 means the
                                    # top 15% of |md| readings count as MAJOR.
-IM_BAND_DAYS = 14                  # 23 Aug: 30 -> 14 to cut the fetch load.
+IM_BAND_DAYS = 7                   # 25 Aug: 14 -> 7 on the move to
+                                   # 15m, so the window fits inside
+                                   # LOOKBACK. 7 days = 672 bars on
+                                   # 15m, same bar count the 14-day
+                                   # window had on 30m.
+                                   # was: 23 Aug: 30 -> 14 to cut the fetch load.
                                    # At 30 days LOOKBACK["30m"] had to be
                                    # 1500, ~3.7x the old depth, across 124
                                    # markets - and symbols began dropping out
@@ -501,22 +525,20 @@ IM_SWING_BARS = 20                 # the nearest swing high/low for the stop
 # indicator's own "inside the band" state) for a long stretch, then take the
 # first histogram push, with price agreeing.
 IM_P2_ON = True
-IM_FLAT_BARS = 20                  # 21 Aug: 6 -> 20 at his call. md must sit
-                                   # at exactly 0 for this many bars - ten
-                                   # hours on 30m - before a push counts as a
-                                   # range breakout.
-                                   # MEASURED over 3000 bars (~62 days):
-                                   #   vol/bar   >=6   >=10   >=20
-                                   #     0.2%     39     35     16
-                                   #     0.4%     32     19      9
-                                   #     0.7%     22     11      2
-                                   #     1.2%     11      6      0
-                                   # So 20 is selective on quiet markets and
-                                   # near-silent on volatile ones - a fast
-                                   # symbol may never produce a qualifying
-                                   # range at all. That is the trade: fewer,
-                                   # cleaner setups, concentrated in the
-                                   # calmer half of the book.
+IM_FLAT_BARS = 40                  # 25 Aug: 20 -> 40 on the move to 15m. md
+                                   # must sit at exactly 0 for this many bars
+                                   # before a push counts as a range breakout.
+                                   # 40 bars on 15m is TEN HOURS - the same
+                                   # wall-clock range 20 bars gave on 30m, so
+                                   # this restores what the timeframe change
+                                   # halved rather than tightening further.
+                                   # MEASURED earlier over 3000 bars: longer
+                                   # requirements bite hardest on volatile
+                                   # symbols, which may never produce a
+                                   # qualifying range at all.
+                                   # It also sets how long pathway 1 stays
+                                   # SUPPRESSED - a symbol is only "coiled"
+                                   # once it clears this bar count.
 IM_P2_RR = 2.5                     # target, in R
 IM_P2_STOP = "swing"               # 21 Aug: pathway 2 stops at the NEAREST
                                    # SWING high/low, same as pathway 1, rather
@@ -1480,7 +1502,11 @@ for _n, _v in (("TF", TF), ("SCAN_EVERY", SCAN_EVERY)):
 # That is ~3.7x the candles per market. Fetches are per NEW BAR here, not
 # per pulse, so the rate-limit exposure is unchanged - but memory is not:
 # the agent held a 25MB peak at 400 bars.
-LOOKBACK = {"5m": 300, "10m": 300, "15m": 400, "30m": 750, "1h": 500,
+# 25 Aug: 15m raised 400 -> 750 for the move to a 15m timeframe. The band
+# window needs IM_BAND_DAYS of bars; at 400 a "14 day" band silently became
+# a 4-day one. 750 bars is ~7.8 days on 15m, so IM_BAND_DAYS was cut to 7 to
+# match rather than raising the fetch further and reviving the 429 storms.
+LOOKBACK = {"5m": 300, "10m": 300, "15m": 750, "30m": 750, "1h": 500,
             "4h": 300}
 
 REQUEST_TIMEOUT_S = 8              # fail fast: a throttled API must not burn 20s
@@ -5720,7 +5746,26 @@ def process_candle(asset, ast, candles, ha, i):
         path = ast.get("im_path", "extension")
         IM_PATH[sym] = path
         rr = IM_P2_RR if path == "breakout" else IM_P1_RR
-        if path == "breakout" and IM_P2_STOP == "pct":
+        stop = None
+        stop_src = ""
+        if IM_STOP_AT_EMA:
+            _e = ema([x["c"] for x in candles[:i]], IM_EMA_TREND)
+            if _e:
+                _t = _e[-1]
+                _pad = _t * IM_EMA_STOP_PAD_PCT / 100.0
+                _cand = (_t - _pad) if want_long else (_t + _pad)
+                _ok = (_cand < entry) if want_long else (_cand > entry)
+                _far = abs(entry - _cand) / entry * 100 >= IM_EMA_STOP_MIN_PCT
+                if _ok and _far:
+                    stop = _cand
+                    stop_src = f"{IM_EMA_TREND} EMA"
+                elif LOG_SKIPS:
+                    log(f"{sym}: {IM_EMA_TREND} EMA stop unusable "
+                        f"({fmt_px(_t)} vs entry {fmt_px(entry)}) - "
+                        f"falling back to the swing")
+        if stop is not None:
+            risk_t = abs(entry - stop)
+        elif path == "breakout" and IM_P2_STOP == "pct":
             risk_t = entry * IM_P2_STOP_PCT / 100.0
             stop = (entry - risk_t) if want_long else (entry + risk_t)
             stop_src = f"{IM_P2_STOP_PCT}% of price"
