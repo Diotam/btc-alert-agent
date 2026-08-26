@@ -409,7 +409,16 @@ IM_CHOP_MAX = 55.0                 # Choppiness Index runs 0-100; the classic
                                    # trending. 55 sits between them - stricter
                                    # than "not officially choppy", looser than
                                    # "officially trending".
-IM_EMA_MIN_DIST_PCT = 1.0          # 25 Aug: pathway 1 refuses to enter when
+IM_EMA_MIN_DIST_PCT = 0            # 26 Aug: OFF. ADX and the Choppiness
+                                   # Index now decide whether the trend has
+                                   # resolved, and they measure it over a
+                                   # window rather than at one instant. The
+                                   # distance test was the weaker proxy for
+                                   # the same thing and it cut the DEEPEST
+                                   # pullbacks - the best entry prices, and
+                                   # the tightest risk under an EMA stop.
+                                   # Non-zero re-enables it.
+                                   # was: 25 Aug: pathway 1 refuses to enter when
                                    # price is within this % of the 200 EMA.
                                    # At +0.09% the trend filter is decoration:
                                    # one bar moves price to the other side and
@@ -2613,6 +2622,21 @@ def im_gate_status(ast, candles, i, sym=None):
         px, trend = candles[last]["c"], e[-1]
         gap = line[j] - sigl[j]
         dist = (px - trend) / px * 100.0
+        # THE SAME TREND TESTS THE ENTRY USES. Without them the panel
+        # advertised setups that p1_macd_signal would then refuse, with
+        # nothing on screen saying why.
+        _w = candles[:last + 1]
+        _adx = adx(_w, IM_ADX_LEN) if IM_ADX_ON else None
+        if IM_ADX_ON and (_adx is None or _adx < IM_ADX_MIN):
+            return None
+        _chop = choppiness(_w, IM_CHOP_LEN) if IM_CHOP_ON else None
+        if IM_CHOP_ON and (_chop is None or _chop > IM_CHOP_MAX):
+            return None
+        _tr = ""
+        if _adx is not None:
+            _tr += f" \u00b7 ADX {_adx:.0f}"
+        if _chop is not None:
+            _tr += f" \u00b7 chop {_chop:.0f}"
         # ONLY SETUPS THAT CAN STILL FIRE. A long needs the MACD line still
         # BELOW its signal - once it is already above, the cross has happened
         # and no entry can come until it crosses back down and up again.
@@ -2625,15 +2649,14 @@ def im_gate_status(ast, candles, i, sym=None):
                     "ready" if abs(gap) <= abs(sigl[j]) * 0.15 else "waiting",
                     "run": 0, "trend": "pullback", "age": 0,
                     "detail": (f"price {dist:+.2f}% above the {IM_EMA_TREND} "
-                               f"EMA, MACD {line[j]:.4g} below zero - a cross "
-                               f"UP through the signal ({sigl[j]:.4g}) enters")}
+                               f"EMA{_tr} - a cross UP through the signal "
+                               f"enters")}
         if px < trend and line[j] > 0 and line[j] > sigl[j]:
             return {"sym": sym, "dir": "SHORT", "stage":
                     "ready" if abs(gap) <= abs(sigl[j]) * 0.15 else "waiting",
                     "run": 0, "trend": "rally", "age": 0,
                     "detail": (f"price {dist:+.2f}% below the {IM_EMA_TREND} "
-                               f"EMA, MACD {line[j]:.4g} above zero - a cross "
-                               f"DOWN through the signal ({sigl[j]:.4g}) "
+                               f"EMA{_tr} - a cross DOWN through the signal "
                                f"enters")}
     return None
 
