@@ -394,6 +394,22 @@ IM_P1_MACD = True                  # False restores the old impulse-crossover
 IM_MACD_FAST = 12
 IM_MACD_SLOW = 26
 IM_MACD_SIG = 9
+IM_EMA_MAX_CROSSES = 1             # 26 Aug: how many times price may have
+                                   # crossed the 200 EMA in the last
+                                   # IM_EMA_CROSS_BARS. 1 allows the single
+                                   # transition of a trend genuinely turning -
+                                   # price resolving from one side to the
+                                   # other - while still rejecting chop. 0
+                                   # would also refuse that turn for ten hours
+                                   # afterwards.
+                                   # SONIC 26 Aug: price sat 2.64% below the
+                                   # EMA - clearing the distance test easily -
+                                   # but had crossed the line six or seven
+                                   # times overnight. The distance test only
+                                   # measures NOW; this measures whether the
+                                   # trend filter has actually resolved.
+IM_EMA_CROSS_BARS = 40             # bars looked at. 40 on 15m is ten hours,
+                                   # the same window IM_FLAT_BARS uses.
 IM_EMA_MIN_DIST_PCT = 1.0          # 25 Aug: pathway 1 refuses to enter when
                                    # price is within this % of the 200 EMA.
                                    # At +0.09% the trend filter is decoration:
@@ -2654,6 +2670,26 @@ def macd_std(candles, fast=None, slow=None, sig=None):
     return line, signal, [a - b for a, b in zip(line, signal)]
 
 
+def ema_crosses(closes, e200, bars):
+    """How many times price crossed the 200 EMA in the last `bars` bars.
+
+    A crossing is a close on the opposite side of the line from the close
+    before it. Repeated crossings mean the trend filter has not resolved -
+    price is chopping around its own average and "above the EMA" says
+    nothing about the next bar.
+    """
+    n = min(bars, len(closes) - 1, len(e200) - 1)
+    if n < 2:
+        return 0
+    crosses = 0
+    for k in range(len(closes) - n, len(closes)):
+        a = closes[k - 1] > e200[k - 1]
+        b = closes[k] > e200[k]
+        if a != b:
+            crosses += 1
+    return crosses
+
+
 def p1_macd_signal(ast, candles, i):
     """MACD + 200 EMA. Returns "LONG" / "SHORT" to ENTER, else None.
 
@@ -2680,6 +2716,19 @@ def p1_macd_signal(ast, candles, i):
     if not e200:
         return None
     trend = e200[-1]
+
+    # price must have STAYED on one side - a line it keeps crossing is not a
+    # trend filter, whatever the current distance says
+    if IM_EMA_CROSS_BARS:
+        _cl = [x["c"] for x in candles[:last + 1]]
+        _x = ema_crosses(_cl, e200, IM_EMA_CROSS_BARS)
+        if _x > IM_EMA_MAX_CROSSES:
+            if LOG_SKIPS:
+                log(f"{ast.get('sym','?')}: price crossed the "
+                    f"{IM_EMA_TREND} EMA {_x}x in {IM_EMA_CROSS_BARS} bars "
+                    f"(max {IM_EMA_MAX_CROSSES}) - chopping, pathway 1 "
+                    f"skipped")
+            return None
 
     # price must have RESOLVED away from the 200 EMA for the trend filter to
     # mean anything
