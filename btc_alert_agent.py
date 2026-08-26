@@ -394,22 +394,21 @@ IM_P1_MACD = True                  # False restores the old impulse-crossover
 IM_MACD_FAST = 12
 IM_MACD_SLOW = 26
 IM_MACD_SIG = 9
-IM_EMA_MAX_CROSSES = 1             # 26 Aug: how many times price may have
-                                   # crossed the 200 EMA in the last
-                                   # IM_EMA_CROSS_BARS. 1 allows the single
-                                   # transition of a trend genuinely turning -
-                                   # price resolving from one side to the
-                                   # other - while still rejecting chop. 0
-                                   # would also refuse that turn for ten hours
-                                   # afterwards.
-                                   # SONIC 26 Aug: price sat 2.64% below the
-                                   # EMA - clearing the distance test easily -
-                                   # but had crossed the line six or seven
-                                   # times overnight. The distance test only
-                                   # measures NOW; this measures whether the
-                                   # trend filter has actually resolved.
-IM_EMA_CROSS_BARS = 40             # bars looked at. 40 on 15m is ten hours,
-                                   # the same window IM_FLAT_BARS uses.
+# ---- 26 Aug: the EMA-crossing count is REPLACED by ADX + Choppiness at his
+# call. Both must agree the market is trending before pathway 1 will fire.
+IM_ADX_ON = True
+IM_ADX_LEN = 14
+IM_ADX_MIN = 25.0                  # Wilder's own threshold. Below 25 the
+                                   # market has no directional strength,
+                                   # whichever way price happens to sit
+                                   # against the 200 EMA.
+IM_CHOP_ON = True
+IM_CHOP_LEN = 14
+IM_CHOP_MAX = 55.0                 # Choppiness Index runs 0-100; the classic
+                                   # bands are >61.8 choppy and <38.2
+                                   # trending. 55 sits between them - stricter
+                                   # than "not officially choppy", looser than
+                                   # "officially trending".
 IM_EMA_MIN_DIST_PCT = 1.0          # 25 Aug: pathway 1 refuses to enter when
                                    # price is within this % of the 200 EMA.
                                    # At +0.09% the trend filter is decoration:
@@ -2690,6 +2689,73 @@ def ema_crosses(closes, e200, bars):
     return crosses
 
 
+def adx(candles, n=None):
+    """Wilder's ADX. 0-100, higher means stronger directional movement.
+
+    Directionless by design - a hard downtrend and a hard uptrend both read
+    high. Under ~25 the market has no trend worth filtering on.
+    """
+    n = IM_ADX_LEN if n is None else n
+    if not candles or len(candles) < n * 3:
+        return None
+    tr, pdm, ndm = [], [], []
+    for k in range(1, len(candles)):
+        h, l = candles[k]["h"], candles[k]["l"]
+        ph, pl, pc = (candles[k - 1]["h"], candles[k - 1]["l"],
+                      candles[k - 1]["c"])
+        tr.append(max(h - l, abs(h - pc), abs(l - pc)))
+        up, dn = h - ph, pl - l
+        pdm.append(up if (up > dn and up > 0) else 0.0)
+        ndm.append(dn if (dn > up and dn > 0) else 0.0)
+
+    def rma(v):
+        out = [sum(v[:n]) / n]
+        for x in v[n:]:
+            out.append(out[-1] - out[-1] / n + x)
+        return out
+
+    if len(tr) < n + 1:
+        return None
+    atr_, pd_, nd_ = rma(tr), rma(pdm), rma(ndm)
+    dx = []
+    for a, pp, nn in zip(atr_, pd_, nd_):
+        if a <= 0:
+            dx.append(0.0)
+            continue
+        pdi, ndi = 100 * pp / a, 100 * nn / a
+        tot = pdi + ndi
+        dx.append(0.0 if tot <= 0 else 100 * abs(pdi - ndi) / tot)
+    if len(dx) < n:
+        return None
+    out = sum(dx[:n]) / n
+    for x in dx[n:]:
+        out = (out * (n - 1) + x) / n
+    return out
+
+
+def choppiness(candles, n=None):
+    """Choppiness Index. 0-100. High means range-bound, low means trending.
+
+        100 * log10( sum(TR, n) / (highest high - lowest low) ) / log10(n)
+
+    The classic bands are >61.8 choppy and <38.2 trending.
+    """
+    n = IM_CHOP_LEN if n is None else n
+    if not candles or len(candles) < n + 2:
+        return None
+    w = candles[-n:]
+    tr = 0.0
+    for k in range(len(candles) - n, len(candles)):
+        pc = candles[k - 1]["c"]
+        tr += max(candles[k]["h"] - candles[k]["l"],
+                  abs(candles[k]["h"] - pc), abs(candles[k]["l"] - pc))
+    rng = max(x["h"] for x in w) - min(x["l"] for x in w)
+    if rng <= 0 or tr <= 0 or n <= 1:
+        return None
+    import math as _m
+    return 100.0 * _m.log10(tr / rng) / _m.log10(n)
+
+
 def p1_macd_signal(ast, candles, i):
     """MACD + 200 EMA. Returns "LONG" / "SHORT" to ENTER, else None.
 
@@ -2717,17 +2783,25 @@ def p1_macd_signal(ast, candles, i):
         return None
     trend = e200[-1]
 
-    # price must have STAYED on one side - a line it keeps crossing is not a
-    # trend filter, whatever the current distance says
-    if IM_EMA_CROSS_BARS:
-        _cl = [x["c"] for x in candles[:last + 1]]
-        _x = ema_crosses(_cl, e200, IM_EMA_CROSS_BARS)
-        if _x > IM_EMA_MAX_CROSSES:
+    # the market must actually be TRENDING. Price sitting on one side of the
+    # 200 EMA says nothing if it is chopping there.
+    _w = candles[:last + 1]
+    if IM_ADX_ON:
+        _a = adx(_w, IM_ADX_LEN)
+        if _a is None or _a < IM_ADX_MIN:
             if LOG_SKIPS:
-                log(f"{ast.get('sym','?')}: price crossed the "
-                    f"{IM_EMA_TREND} EMA {_x}x in {IM_EMA_CROSS_BARS} bars "
-                    f"(max {IM_EMA_MAX_CROSSES}) - chopping, pathway 1 "
+                log(f"{ast.get('sym','?')}: ADX "
+                    f"{'n/a' if _a is None else round(_a, 1)} under "
+                    f"{IM_ADX_MIN} - no directional strength, pathway 1 "
                     f"skipped")
+            return None
+    if IM_CHOP_ON:
+        _c = choppiness(_w, IM_CHOP_LEN)
+        if _c is None or _c > IM_CHOP_MAX:
+            if LOG_SKIPS:
+                log(f"{ast.get('sym','?')}: choppiness "
+                    f"{'n/a' if _c is None else round(_c, 1)} over "
+                    f"{IM_CHOP_MAX} - range-bound, pathway 1 skipped")
             return None
 
     # price must have RESOLVED away from the 200 EMA for the trend filter to
