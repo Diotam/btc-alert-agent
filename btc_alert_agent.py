@@ -394,6 +394,25 @@ IM_P1_MACD = True                  # False restores the old impulse-crossover
 IM_MACD_FAST = 12
 IM_MACD_SLOW = 26
 IM_MACD_SIG = 9
+IM_EMA_MIN_DIST_PCT = 1.0          # 25 Aug: pathway 1 refuses to enter when
+                                   # price is within this % of the 200 EMA.
+                                   # At +0.09% the trend filter is decoration:
+                                   # one bar moves price to the other side and
+                                   # the same setup flips LONG to SHORT, so
+                                   # the trade rests on the MACD cross alone.
+                                   # THE COST, and it is real: this is a
+                                   # PULLBACK entry, so the deepest pullbacks
+                                   # - the best entry prices, and the tightest
+                                   # risk under an EMA stop - are exactly what
+                                   # gets cut. Expect fewer signals with WIDER
+                                   # stops.
+                                   # 0.5 comes from his own watchlist values
+                                   # (0.06 0.09 0.14 0.18 0.77 1.09 1.13 4.58
+                                   # 5.18). At 0.5 it cut three of nine; at
+                                   # 1.0, his call, it cuts four - GOOGL 0.09,
+                                   # XMR 0.14, XYZ100 0.18 and VVV 0.77.
+                                   # It is a starting point, not a finding.
+                                   # 0 disables the check.
 IM_EMA_MIN_BARS = 3                # 25 Aug: pathway 1 needs THIS MANY x the
                                    # EMA period in bars before it will trust
                                    # the 200 EMA. ema() seeds on the FIRST
@@ -2583,6 +2602,9 @@ def im_gate_status(ast, candles, i, sym=None):
         # BELOW its signal - once it is already above, the cross has happened
         # and no entry can come until it crosses back down and up again.
         # Four of six rows on 25 Aug were in that state and marked "ready".
+        if (IM_EMA_MIN_DIST_PCT
+                and abs(px - trend) / px * 100.0 < IM_EMA_MIN_DIST_PCT):
+            return None
         if px > trend and line[j] < 0 and line[j] < sigl[j]:
             return {"sym": sym, "dir": "LONG", "stage":
                     "ready" if abs(gap) <= abs(sigl[j]) * 0.15 else "waiting",
@@ -2658,6 +2680,17 @@ def p1_macd_signal(ast, candles, i):
     if not e200:
         return None
     trend = e200[-1]
+
+    # price must have RESOLVED away from the 200 EMA for the trend filter to
+    # mean anything
+    if IM_EMA_MIN_DIST_PCT:
+        _d = abs(px - trend) / px * 100.0
+        if _d < IM_EMA_MIN_DIST_PCT:
+            if LOG_SKIPS:
+                log(f"{ast.get('sym','?')}: price only {_d:.2f}% from the "
+                    f"{IM_EMA_TREND} EMA, needs {IM_EMA_MIN_DIST_PCT}% - "
+                    f"pathway 1 skipped")
+            return None
 
     up = line[j - 1] <= sigl[j - 1] and line[j] > sigl[j]
     dn = line[j - 1] >= sigl[j - 1] and line[j] < sigl[j]
