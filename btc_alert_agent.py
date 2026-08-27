@@ -6866,7 +6866,18 @@ def check_once():
                               # card on a touch. CASHCAT and xyz:SKHX sat at
                               # "stop hit - closing" for hours on 17 Aug while
                               # the agent was correctly still holding them.
-                              stop_on_close=bool(SD_STOP_ON_CLOSE and SD_MODE),
+                              # 26 Aug: this read SD_STOP_ON_CLOSE and SD_MODE only.
+                              # The stoch-doji engine has been OFF for days,
+                              # so the dashboard was told close-confirmed
+                              # stops were off and FROZE every card the
+                              # moment price touched its stop - TRUMP and
+                              # AVAX both stranded at "stop hit - closing"
+                              # while the trades were still live and could
+                              # recover.
+                              stop_on_close=bool(
+                                  (SD_STOP_ON_CLOSE and SD_MODE)
+                                  or (RS_STOP_ON_CLOSE and RS_MODE)
+                                  or (IM_STOP_ON_CLOSE and IM_MODE)),
                               # the fill is at the entry bar's CLOSE when
                               # ENTRY_AT_OPEN is off, so the card's age needs
                               # one candle added - opened_t is the bar's OPEN.
