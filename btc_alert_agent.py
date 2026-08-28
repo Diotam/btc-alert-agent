@@ -361,6 +361,21 @@ IM_P1_ON = True
 # This is the STANDARD MACD, not the impulse one: the impulse md sits at
 # EXACTLY zero whenever mi is inside the SMMA band, so a zero-line rule on it
 # would be degenerate. The bands and the percentile play no part here.
+# ---- 27 Aug: DOLLAR-BASED risk, replacing the R framework for entries.
+# Stop and target are fixed CASH amounts on a fixed margin, so every trade
+# risks the same money and targets the same money regardless of symbol.
+# The price distances fall out of the notional: at $100 margin and 10x the
+# notional is $1000, so $10 of risk is a 1.0% move and $15 is 1.5%.
+# The 1.5:1 ratio is preserved, so break-even is still a 40% win rate -
+# the same as the R framework it replaces. A $15 target against a
+# LIQUIDATION stop, which was the first proposal, needed 87%.
+IM_DOLLAR_MODE = True              # False restores the EMA/swing stop
+IM_MARGIN_USD = 100.0
+IM_RISK_USD = 10.0                 # the stop, in cash
+IM_TARGET_USD = 15.0               # the target, in cash
+IM_DOLLAR_MIN_STOP_PCT = 0.10      # a floor. At very high leverage $10 is a
+                                   # tiny price move - 0.2% at 50x - and a
+                                   # stop inside the spread is not a stop.
 IM_STOP_AT_EMA = True              # 25 Aug: the stop is the 200 EMA LEVEL,
                                    # not the 20-bar swing. On a pathway-1
                                    # long price sits above the EMA and the
@@ -5953,7 +5968,23 @@ def process_candle(asset, ast, candles, ha, i):
         rr = IM_P2_RR if path == "breakout" else IM_P1_RR
         stop = None
         stop_src = ""
-        if IM_STOP_AT_EMA and len(candles) >= IM_EMA_TREND * max(1, IM_EMA_MIN_BARS):
+        if IM_DOLLAR_MODE:
+            _lev = eff_leverage(asset)
+            _notional = IM_MARGIN_USD * _lev
+            _spct = IM_RISK_USD / _notional * 100.0
+            if _spct < IM_DOLLAR_MIN_STOP_PCT:
+                if LOG_SKIPS:
+                    log(f"{sym}: ${IM_RISK_USD:.0f} at {_lev}x is only "
+                        f"{_spct:.3f}% - under the "
+                        f"{IM_DOLLAR_MIN_STOP_PCT}% floor, skipped")
+                return False
+            risk_t = entry * _spct / 100.0
+            stop = (entry - risk_t) if want_long else (entry + risk_t)
+            rr = IM_TARGET_USD / IM_RISK_USD
+            stop_src = (f"${IM_RISK_USD:.0f} of ${IM_MARGIN_USD:.0f} margin "
+                        f"at {_lev}x")
+        if (stop is None and IM_STOP_AT_EMA
+                and len(candles) >= IM_EMA_TREND * max(1, IM_EMA_MIN_BARS)):
             _e = ema([x["c"] for x in candles[:i]], IM_EMA_TREND)
             if _e:
                 _t = _e[-1]
