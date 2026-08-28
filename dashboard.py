@@ -464,6 +464,12 @@ def build_data():
             # missed scans plus a minute of slack before anything is wrong.
             "stale_after_s": 2 * int((state.get("_meta") or {})
                                      .get("scan_every_s", 300)) + 60,
+            # PASS THE AGENT'S _meta THROUGH. Every d._meta.* read in the
+            # page - partial, stop_exit, stop_on_close, entry_on_close and
+            # the dollar figures - was resolving to undefined because this
+            # key never existed. They all had sane fallbacks, so nothing
+            # looked broken; the features just silently did nothing.
+            "_meta": (state.get("_meta") or {}),
             "scanned": scanned, "trades": trades, "runners": [],
             "gates": gates,
             "tally": signal_tally(),
