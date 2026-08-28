@@ -861,6 +861,12 @@ function render(d){
    // pierced = price is past the stop RIGHT NOW but no bar has closed there
    const pierced=SLCLOSE&&!slDone&&t.r!=null&&t.r<=-1;
    const showR=slDone?-1:t.r;
+   // DOLLAR MODE: the stop and target are fixed cash amounts, so show the
+   // money. R is the same number scaled - $10 risk means -1R is -$10 - but
+   // "+$7.20 of $15" is the thing being aimed at, and reads directly.
+   const RISKUSD=(d._meta&&d._meta.risk_usd)||0;
+   const TGTUSD=(d._meta&&d._meta.target_usd)||0;
+   const usd=showR==null||!RISKUSD?null:showR*RISKUSD;
    const showPnl=slDone?sgn*(t.stop-t.entry)/t.entry*100:t.pnl;
    // "target reached" is now computed LIVE, never latched
    // this panel holds EVERY open position - a trade at full risk and a
@@ -894,8 +900,12 @@ function render(d){
      :atTarget?`${showR.toFixed(2)}R \u00b7 target reached, ${PARTIAL>=1?'closing the position':'booking '+Math.round(PARTIAL*100)+'%'}`
      :t.half?`${showR.toFixed(2)}R from entry \u00b7 runs until the HA flips`
      :showR>=0
-     ?`${showR.toFixed(2)}R · ${Math.round(Math.min(100,showR/RRT*100))}% of the way to TP`
-     :`${showR.toFixed(2)}R · ${Math.round(Math.min(100,-showR*100))}% of the way to stop`;
+     ?(usd!=null
+       ?`${usd>=0?'+':'\u2212'}$${Math.abs(usd).toFixed(2)} of $${TGTUSD.toFixed(0)} \u00b7 ${Math.round(Math.min(100,showR/RRT*100))}% of the way to TP`
+       :`${showR.toFixed(2)}R · ${Math.round(Math.min(100,showR/RRT*100))}% of the way to TP`)
+     :(usd!=null
+       ?`\u2212$${Math.abs(usd).toFixed(2)} of $${RISKUSD.toFixed(0)} \u00b7 ${Math.round(Math.min(100,-showR*100))}% of the way to stop`
+       :`${showR.toFixed(2)}R · ${Math.round(Math.min(100,-showR*100))}% of the way to stop`);
    return `<div class="card tv" onclick="tvOpen('${t.sym}')" title="open ${t.sym} on TradingView">
     <div class=row><span class=sym>${t.sym} <span class=${cls}>${t.dir}</span>${t.lev?` <span class=lev>${t.lev}x</span>`:''}${t.opened_t?` <span class=muted style="font-size:11px;font-weight:400">${tradeAge(t.opened_t)}</span>`:''} ${badge}</span>
     <span class="num ${showPnl>=0?'pnl-pos':'pnl-neg'}">${showPnl==null?'-':(showPnl>=0?'+':'')+showPnl.toFixed(2)+'%'}</span></div>
