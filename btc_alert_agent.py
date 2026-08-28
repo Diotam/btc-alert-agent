@@ -6905,6 +6905,10 @@ def check_once():
                               # AVAX both stranded at "stop hit - closing"
                               # while the trades were still live and could
                               # recover.
+                              risk_usd=(IM_RISK_USD if (IM_MODE and IM_DOLLAR_MODE) else 0),
+                              target_usd=(IM_TARGET_USD
+                                          if (IM_MODE and IM_DOLLAR_MODE)
+                                          else 0),
                               stop_on_close=bool(
                                   (SD_STOP_ON_CLOSE and SD_MODE)
                                   or (RS_STOP_ON_CLOSE and RS_MODE)
