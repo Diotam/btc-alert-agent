@@ -369,7 +369,20 @@ IM_P1_ON = True
 # The 1.5:1 ratio is preserved, so break-even is still a 40% win rate -
 # the same as the R framework it replaces. A $15 target against a
 # LIQUIDATION stop, which was the first proposal, needed 87%.
-IM_DOLLAR_MODE = True              # False restores the EMA/swing stop
+IM_DOLLAR_MODE = True              # 29 Aug: REWORKED. It used to derive the
+                                   # STOP DISTANCE from leverage - $10 on
+                                   # $100 at 20x is a 0.50% stop, at 50x a
+                                   # 0.20% stop. Both sit inside a normal 15m
+                                   # bar on most crypto, so trades were
+                                   # stopped by noise rather than by the idea
+                                   # failing: 1 win in 12 on 29 Aug.
+                                   # The causation was backwards. Leverage
+                                   # must not decide where the market
+                                   # invalidates a trade.
+                                   # NOW: the stop comes from STRUCTURE (the
+                                   # 200 EMA, or the swing), and SIZE is set
+                                   # so that distance costs exactly
+                                   # IM_RISK_USD. Leverage becomes an output.
 IM_MARGIN_USD = 100.0
 IM_RISK_USD = 10.0                 # the stop, in cash
 IM_TARGET_USD = 15.0               # the target, in cash
@@ -618,12 +631,25 @@ IM_P2_STOP = "swing"               # 21 Aug: pathway 2 stops at the NEAREST
                                    # level the market actually made.
                                    # "pct" restores the fixed distance.
 IM_P2_STOP_PCT = 0.35              # used only when IM_P2_STOP = "pct".
-IM_STOP_ON_CLOSE = True            # close-confirmed stops: a wick through the
-                                   # level that closes back inside does not
-                                   # take the trade out. Carried across from
-                                   # the reversal engine at his 20 Aug ask -
-                                   # it was the stop-hunt fix and applies the
-                                   # same way here.
+IM_STOP_ON_CLOSE = False           # 29 Aug: OFF, and this is a MEASURED
+                                   # change rather than a preference.
+                                   # Close-confirmed stops were carried over
+                                   # from the 30m reversal engine to survive
+                                   # stop hunts. On 15m with a fixed-dollar
+                                   # stop they do the opposite: the level sits
+                                   # where price is actively trending away
+                                   # from it, so "wait for the close" reliably
+                                   # means "exit worse".
+                                   # THE EVIDENCE - 31 closed trades, 12 wins,
+                                   # -5.44R total. SEVEN losses landed at
+                                   # EXACTLY -1.50R, which is the disaster
+                                   # backstop firing after confirmation held
+                                   # the trade through its stop. Had those
+                                   # exited cleanly at -1R the total would be
+                                   # about -1.94R instead of -5.44R. The same
+                                   # pattern repeated on 29 Aug: TRUMP, HYPE
+                                   # and TRUMP again, all -1.50%.
+                                   # True restores it.
 IM_DISASTER_R = 1.5                # ...unless price runs this many stop
                                    # distances past entry, which exits at
                                    # once. 0 disables it.
@@ -5969,20 +5995,9 @@ def process_candle(asset, ast, candles, ha, i):
         stop = None
         stop_src = ""
         if IM_DOLLAR_MODE:
-            _lev = eff_leverage(asset)
-            _notional = IM_MARGIN_USD * _lev
-            _spct = IM_RISK_USD / _notional * 100.0
-            if _spct < IM_DOLLAR_MIN_STOP_PCT:
-                if LOG_SKIPS:
-                    log(f"{sym}: ${IM_RISK_USD:.0f} at {_lev}x is only "
-                        f"{_spct:.3f}% - under the "
-                        f"{IM_DOLLAR_MIN_STOP_PCT}% floor, skipped")
-                return False
-            risk_t = entry * _spct / 100.0
-            stop = (entry - risk_t) if want_long else (entry + risk_t)
+            # the R multiple is the cash ratio; the STOP is still structural
+            # and is set below. Size is derived from it afterwards.
             rr = IM_TARGET_USD / IM_RISK_USD
-            stop_src = (f"${IM_RISK_USD:.0f} of ${IM_MARGIN_USD:.0f} margin "
-                        f"at {_lev}x")
         if (stop is None and IM_STOP_AT_EMA
                 and len(candles) >= IM_EMA_TREND * max(1, IM_EMA_MIN_BARS)):
             _e = ema([x["c"] for x in candles[:i]], IM_EMA_TREND)
@@ -6034,6 +6049,28 @@ def process_candle(asset, ast, candles, ha, i):
                     return False
             except Exception as e:
                 log(f"{sym}: claude gate failed {type(e).__name__}: {e}")
+        if IM_DOLLAR_MODE and risk_t > 0:
+            # SIZE FROM THE STOP. notional * (risk_t/entry) = IM_RISK_USD
+            _spct = risk_t / entry * 100.0
+            if _spct < IM_DOLLAR_MIN_STOP_PCT:
+                if LOG_SKIPS:
+                    log(f"{sym}: stop only {_spct:.3f}% - under the "
+                        f"{IM_DOLLAR_MIN_STOP_PCT}% floor, skipped")
+                return False
+            _notional = IM_RISK_USD / (_spct / 100.0)
+            _lev_needed = _notional / IM_MARGIN_USD
+            _cap = eff_leverage(asset)
+            if _lev_needed > _cap:
+                # cannot size up enough - take the smaller position and risk
+                # less than the full $10 rather than widening the stop
+                _notional = IM_MARGIN_USD * _cap
+                _lev_needed = _cap
+            _risk_actual = _notional * _spct / 100.0
+            ast["im_notional"] = round(_notional, 2)
+            ast["im_lev"] = round(_lev_needed, 2)
+            ast["im_risk_usd"] = round(_risk_actual, 2)
+            stop_src += (f" \u00b7 ${_risk_actual:.2f} risk on "
+                         f"${_notional:,.0f} ({_lev_needed:.1f}x)")
         tp = ((entry + rr * risk_t) if want_long
               else (entry - rr * risk_t))
         log(f"{sym}: IMPULSE-MACD {path.upper()} {side} at ${fmt_px(entry)} - "
