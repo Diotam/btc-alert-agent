@@ -928,20 +928,25 @@ function render(d){
   const G=d.gates||[];
   // WATCHLIST, back on 18 Aug for the reversal-200 engine, which has a real
   // WATCHLIST. Three pending states, from two different indicators:
-  //   coiled    impulse md flat - pathway 2 waiting on the first push
-  //   pullback  price above the 200 EMA, MACD below zero - a cross UP is
-  //             a pathway-1 LONG
-  //   rally     price below the 200 EMA, MACD above zero - a cross DOWN is
-  //             a pathway-1 SHORT
+  //   coiled      impulse md flat - pathway 2 waiting on the first push
+  //   oversold    RSI below 20, md still under its signal - a cross UP is
+  //               a pathway-1 LONG
+  //   overbought  RSI above 80, md still over its signal - a cross DOWN is
+  //               a pathway-1 SHORT
+  // pullback/rally were the 200 EMA form of pathway 1 and are kept in the
+  // counts so an older agent still reads correctly.
   // "coiled" rows carry no direction: the push decides it.
   const _n=document.getElementById('n-gates'); if(_n) _n.textContent=G.length;
   const _g=document.getElementById('gsub');
   if(_g){
     const nc=G.filter(x=>x.trend==='coiled').length;
-    const np=G.filter(x=>x.trend==='pullback').length;
-    const nr=G.filter(x=>x.trend==='rally').length;
-    _g.textContent=G.length?(nc+' coiled \u00b7 '+np+' pullback \u00b7 '
-      +nr+' rally'):'';
+    const nos=G.filter(x=>x.trend==='oversold'||x.trend==='pullback').length;
+    const nob=G.filter(x=>x.trend==='overbought'||x.trend==='rally').length;
+    const bits=[];
+    if(nc) bits.push(nc+' coiled');
+    if(nos) bits.push(nos+' oversold');
+    if(nob) bits.push(nob+' overbought');
+    _g.textContent=bits.join(' \u00b7 ');
   }
   // closest to its 20 first - those are the ones about to trigger
   // coiled first, then the longest-standing; both are the ripest setups
