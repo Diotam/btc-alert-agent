@@ -140,7 +140,7 @@ ASSETS = [                         # used when DISCOVER_ALL = False, or when
 ]
 
 # --- strategy dials -------------------------------------------------------
-TF = "15m"                         # execution timeframe. 15m -> 30m on
+TF = "30m"                         # execution timeframe. 15m -> 30m on
                                    # 9 Aug: a 50 EMA on 15m was too fast
                                    # for these markets, so price crossed
                                    # it constantly without going
@@ -418,19 +418,39 @@ IM_P2_SUPPRESSES_P1 = True         # 25 Aug: while the impulse md has been
                                    # market the impulse indicator says has no
                                    # direction at all. Wait for the range to
                                    # resolve instead.
-IM_P1_MACD = True                  # False restores the old impulse-crossover
+IM_P1_MACD = False                 # 29 Aug: REVERTED to the impulse-MACD
+                                   # crossover that pathway 1 used before the
+                                   # 200 EMA rewrite. True switches back to
+                                   # MACD 12/26/9 + 200 EMA.
 IM_MACD_FAST = 12
 IM_MACD_SLOW = 26
 IM_MACD_SIG = 9
 # ---- 26 Aug: the EMA-crossing count is REPLACED by ADX + Choppiness at his
 # call. Both must agree the market is trending before pathway 1 will fire.
-IM_ADX_ON = True
+# ---- 29 Aug: OVERBOUGHT / OVERSOLD is now RSI, not the impulse percentile
+# band. The band measured "extreme relative to this symbol's own recent |md|",
+# which drifted with volatility and was not comparable over time. RSI is
+# absolute and reads the same on every market.
+# Applied as a VETO, the conventional way: do not buy something already
+# overbought, do not sell something already oversold.
+IM_RSI_ON = True
+IM_RSI_LEN = 14
+IM_RSI_OB = 80.0                   # a SHORT needs RSI at or above this
+IM_RSI_OS = 20.0                   # a LONG needs RSI at or below this
+                                   # 29 Aug: RSI REPLACES the percentile band
+                                   # as the major/minor test. A crossover only
+                                   # counts when RSI says the market is
+                                   # genuinely stretched - absolute, and the
+                                   # same reading on every symbol, where the
+                                   # band drifted with each symbol's own
+                                   # recent volatility.
+IM_ADX_ON = False                  # 29 Aug: off at his call
 IM_ADX_LEN = 14
 IM_ADX_MIN = 25.0                  # Wilder's own threshold. Below 25 the
                                    # market has no directional strength,
                                    # whichever way price happens to sit
                                    # against the 200 EMA.
-IM_CHOP_ON = True
+IM_CHOP_ON = False                 # 29 Aug: off at his call
 IM_CHOP_LEN = 14
 IM_CHOP_MAX = 55.0                 # Choppiness Index runs 0-100; the classic
                                    # bands are >61.8 choppy and <38.2
@@ -501,7 +521,10 @@ IM_BAND_PCTILE = 85                # 21 Aug: 70 -> 85 at his call, after ETHFI
                                    # bands.
                                    # with "percentile": the cut. 85 means the
                                    # top 15% of |md| readings count as MAJOR.
-IM_BAND_DAYS = 7                   # 25 Aug: 14 -> 7 on the move to
+IM_BAND_DAYS = 14                  # 29 Aug: back to 14 on 30m - 672 bars,
+                                   # the same sample the 7-day window held on
+                                   # 15m. LOOKBACK["30m"] is 750, so it fits.
+                                   # was: 25 Aug: 14 -> 7 on the move to
                                    # 15m, so the window fits inside
                                    # LOOKBACK. 7 days = 672 bars on
                                    # 15m, same bar count the 14-day
@@ -608,20 +631,13 @@ IM_SWING_BARS = 20                 # the nearest swing high/low for the stop
 # indicator's own "inside the band" state) for a long stretch, then take the
 # first histogram push, with price agreeing.
 IM_P2_ON = True
-IM_FLAT_BARS = 40                  # 25 Aug: 20 -> 40 on the move to 15m. md
-                                   # must sit at exactly 0 for this many bars
-                                   # before a push counts as a range breakout.
-                                   # 40 bars on 15m is TEN HOURS - the same
-                                   # wall-clock range 20 bars gave on 30m, so
-                                   # this restores what the timeframe change
-                                   # halved rather than tightening further.
-                                   # MEASURED earlier over 3000 bars: longer
-                                   # requirements bite hardest on volatile
-                                   # symbols, which may never produce a
-                                   # qualifying range at all.
-                                   # It also sets how long pathway 1 stays
-                                   # SUPPRESSED - a symbol is only "coiled"
-                                   # once it clears this bar count.
+IM_FLAT_BARS = 20                  # 29 Aug: 40 -> 20 on the move back to
+                                   # 30m. TEN HOURS of range either way - the
+                                   # wall-clock requirement is unchanged, only
+                                   # the bar count follows the timeframe.
+                                   # This also sets how long pathway 1 stays
+                                   # SUPPRESSED: a symbol counts as coiled
+                                   # only once it clears this.
 IM_P2_RR = 2.5                     # target, in R
 IM_P2_STOP = "swing"               # 21 Aug: pathway 2 stops at the NEAREST
                                    # SWING high/low, same as pathway 1, rather
@@ -2649,8 +2665,31 @@ def im_gate_status(ast, candles, i, sym=None):
                         "detail": (f"impulse MACD flat {run} bars - the first "
                                    f"push with the candle agreeing enters")}
 
-    # ---- pathway 1: MACD + 200 EMA. Both HALVES must already be true, so
-    # the only thing outstanding is the crossover itself.
+    # ---- pathway 1, IMPULSE CROSSOVER form: RSI already stretched, so the
+    # only thing outstanding is the crossover.
+    if IM_P1_ON and not IM_P1_MACD:
+        md, sb, sh = impulse_macd(candles[:last + 1])
+        if not md or len(md) < 3:
+            return None
+        j = len(md) - 1
+        r = rsi(candles[:last + 1], IM_RSI_LEN) if IM_RSI_ON else None
+        if r is None:
+            return None
+        if r <= IM_RSI_OS and md[j] < sb[j]:
+            return {"sym": sym, "dir": "LONG", "stage":
+                    "ready" if abs(md[j] - sb[j]) <= abs(sb[j]) * 0.15
+                    else "waiting", "run": 0, "trend": "oversold", "age": 0,
+                    "detail": (f"RSI {r:.0f} at or below {IM_RSI_OS:.0f} - a "
+                               f"cross UP through the signal enters")}
+        if r >= IM_RSI_OB and md[j] > sb[j]:
+            return {"sym": sym, "dir": "SHORT", "stage":
+                    "ready" if abs(md[j] - sb[j]) <= abs(sb[j]) * 0.15
+                    else "waiting", "run": 0, "trend": "overbought", "age": 0,
+                    "detail": (f"RSI {r:.0f} at or above {IM_RSI_OB:.0f} - a "
+                               f"cross DOWN through the signal enters")}
+        return None
+
+    # ---- pathway 1, MACD + 200 EMA form
     if IM_P1_ON and IM_P1_MACD:
         need = max(IM_MACD_SLOW + IM_MACD_SIG, IM_EMA_TREND) + 3
         if last < need:
@@ -2667,6 +2706,12 @@ def im_gate_status(ast, candles, i, sym=None):
         # advertised setups that p1_macd_signal would then refuse, with
         # nothing on screen saying why.
         _w = candles[:last + 1]
+        _rsi = rsi(_w, IM_RSI_LEN) if IM_RSI_ON else None
+        if _rsi is not None:
+            if px > trend and _rsi >= IM_RSI_OB:
+                return None
+            if px < trend and _rsi <= IM_RSI_OS:
+                return None
         _adx = adx(_w, IM_ADX_LEN) if IM_ADX_ON else None
         if IM_ADX_ON and (_adx is None or _adx < IM_ADX_MIN):
             return None
@@ -2674,6 +2719,8 @@ def im_gate_status(ast, candles, i, sym=None):
         if IM_CHOP_ON and (_chop is None or _chop > IM_CHOP_MAX):
             return None
         _tr = ""
+        if _rsi is not None:
+            _tr += f" \u00b7 RSI {_rsi:.0f}"
         if _adx is not None:
             _tr += f" \u00b7 ADX {_adx:.0f}"
         if _chop is not None:
@@ -2751,6 +2798,36 @@ def ema_crosses(closes, e200, bars):
         if a != b:
             crosses += 1
     return crosses
+
+
+def rsi(candles, n=None):
+    """Wilder's RSI, 0-100. Returns the latest value, or None.
+
+    Absolute, unlike the impulse band: 80 means the same thing on BTC and on
+    kPEPE, and the same thing this week as last.
+    """
+    n = IM_RSI_LEN if n is None else n
+    if not candles or len(candles) < n * 3:
+        return None
+    cl = [x["c"] for x in candles]
+    gains, losses = [], []
+    for k in range(1, len(cl)):
+        d = cl[k] - cl[k - 1]
+        gains.append(max(d, 0.0))
+        losses.append(max(-d, 0.0))
+    if len(gains) < n:
+        return None
+    ag, al = sum(gains[:n]) / n, sum(losses[:n]) / n
+    for k in range(n, len(gains)):
+        ag = (ag * (n - 1) + gains[k]) / n
+        al = (al * (n - 1) + losses[k]) / n
+    if al == 0:
+        # no losses at all. A genuine one-way run is 100; a DEAD FLAT series
+        # has no gains either and is not overbought - it is nothing. The
+        # naive "return 100" made a motionless market look extreme and
+        # vetoed every long on it.
+        return 100.0 if ag > 0 else 50.0
+    return 100.0 - (100.0 / (1.0 + ag / al))
 
 
 def adx(candles, n=None):
@@ -2850,6 +2927,19 @@ def p1_macd_signal(ast, candles, i):
     # the market must actually be TRENDING. Price sitting on one side of the
     # 200 EMA says nothing if it is chopping there.
     _w = candles[:last + 1]
+    if IM_RSI_ON:
+        _r = rsi(_w, IM_RSI_LEN)
+        if _r is not None:
+            if px > trend and _r >= IM_RSI_OB:
+                if LOG_SKIPS:
+                    log(f"{ast.get('sym','?')}: RSI {_r:.0f} at or above "
+                        f"{IM_RSI_OB:.0f} - overbought, no LONG")
+                return None
+            if px < trend and _r <= IM_RSI_OS:
+                if LOG_SKIPS:
+                    log(f"{ast.get('sym','?')}: RSI {_r:.0f} at or below "
+                        f"{IM_RSI_OS:.0f} - oversold, no SHORT")
+                return None
     if IM_ADX_ON:
         _a = adx(_w, IM_ADX_LEN)
         if _a is None or _a < IM_ADX_MIN:
@@ -3016,13 +3106,39 @@ def im_signal(ast, candles, i):
                                       f"of |md|), needs {-need:+.3e} - "
                                       f"sideways, skipped")
                     dn = False
-            if up and md[j] < -band:
+            _r = rsi(candles[:last + 1], IM_RSI_LEN) if IM_RSI_ON else None
+            if IM_RSI_ON and _r is None:
+                return None
+            if IM_RSI_ON:
+                if up and _r > IM_RSI_OS:
+                    if LOG_SKIPS:
+                        log(f"{sym}: cross UP but RSI {_r:.0f} is not at or "
+                            f"below {IM_RSI_OS:.0f} - minor, skipped")
+                    up = False
+                if dn and _r < IM_RSI_OB:
+                    if LOG_SKIPS:
+                        log(f"{sym}: cross DOWN but RSI {_r:.0f} is not at or "
+                            f"above {IM_RSI_OB:.0f} - minor, skipped")
+                    dn = False
+            if up and (not IM_RSI_ON) and md[j] < -band:
                 ast["im_path"] = "extension"
                 ast["im_why"] = (f"impulse MACD crossed UP at {md[j]:.6g}, "
                                  f"below the oversold line {-band:.6g} "
                                  f"(major crossover)")
                 _p1, _p1_why = "LONG", ast["im_why"]
-            if dn and md[j] > band:
+            if up and IM_RSI_ON:
+                ast["im_path"] = "extension"
+                ast["im_why"] = (f"impulse MACD crossed UP with RSI "
+                                 f"{_r:.0f} at or below {IM_RSI_OS:.0f} "
+                                 f"- oversold")
+                _p1, _p1_why = "LONG", ast["im_why"]
+            if dn and IM_RSI_ON:
+                ast["im_path"] = "extension"
+                ast["im_why"] = (f"impulse MACD crossed DOWN with RSI "
+                                 f"{_r:.0f} at or above {IM_RSI_OB:.0f} "
+                                 f"- overbought")
+                _p1, _p1_why = "SHORT", ast["im_why"]
+            if dn and (not IM_RSI_ON) and md[j] > band:
                 ast["im_path"] = "extension"
                 ast["im_why"] = (f"impulse MACD crossed DOWN at {md[j]:.6g}, "
                                  f"above the overbought line {band:.6g} "
