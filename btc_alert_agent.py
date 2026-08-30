@@ -407,6 +407,15 @@ IM_EMA_STOP_MIN_PCT = 0.15         # % of price. Below this the EMA stop is
                                    # used instead.
 IM_EMA_STOP_PAD_PCT = 0.05         # push the stop this far BEYOND the EMA, so
                                    # a touch of the line is not an exit.
+IM_P2_CANDLE = False               # 30 Aug: OFF at his call. The breakout
+                                   # used to need the CANDLE to close in the
+                                   # push direction as well. md leaving zero
+                                   # and the histogram expanding already
+                                   # encode direction, so the candle was a
+                                   # third confirmation of the same thing -
+                                   # and it vetoed valid pushes whenever the
+                                   # bar happened to close against a wick.
+                                   # True restores it.
 IM_P2_SUPPRESSES_P1 = True         # 25 Aug: while the impulse md has been
                                    # FLAT for IM_FLAT_BARS+, pathway 1 is
                                    # suppressed ENTIRELY - not merely
@@ -2680,7 +2689,8 @@ def im_gate_status(ast, candles, i, sym=None):
                 return {"sym": sym, "dir": "", "stage": "ready", "run": run,
                         "trend": "coiled", "age": 0,
                         "detail": (f"impulse MACD flat {run} bars - the first "
-                                   f"push with the candle agreeing enters")}
+                                   f"push with the histogram agreeing "
+                                   f"enters")}
 
     # ---- pathway 1, IMPULSE CROSSOVER form: RSI already stretched, so the
     # only thing outstanding is the crossover.
@@ -3229,17 +3239,20 @@ def im_signal(ast, candles, i):
         if flat and all(x == 0.0 for x in flat) and md[j] != 0.0:
             rising = sh[j] > sh[j - 1]
             up_px = candles[last]["c"] > candles[last]["o"]
-            if md[j] > 0 and rising and up_px:
+            _ok_up = rising and (up_px or not IM_P2_CANDLE)
+            _ok_dn = (not rising) and ((not up_px) or not IM_P2_CANDLE)
+            _c = ", candle agrees" if IM_P2_CANDLE else ""
+            if md[j] > 0 and _ok_up:
                 ast["im_path"] = "breakout"
                 ast["im_why"] = (f"impulse MACD flat {IM_FLAT_BARS} bars then "
-                                 f"pushed to {md[j]:.6g}, histogram rising, "
-                                 f"candle up")
+                                 f"pushed UP to {md[j]:.6g}, histogram "
+                                 f"rising{_c}")
                 return "LONG"
-            if md[j] < 0 and (not rising) and (not up_px):
+            if md[j] < 0 and _ok_dn:
                 ast["im_path"] = "breakout"
                 ast["im_why"] = (f"impulse MACD flat {IM_FLAT_BARS} bars then "
-                                 f"pushed to {md[j]:.6g}, histogram falling, "
-                                 f"candle down")
+                                 f"pushed DOWN to {md[j]:.6g}, histogram "
+                                 f"falling{_c}")
                 return "SHORT"
 
     # pathway 2 did not fire - fall back to whatever pathway 1 found
