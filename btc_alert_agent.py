@@ -435,8 +435,25 @@ IM_MACD_SIG = 9
 # overbought, do not sell something already oversold.
 IM_RSI_ON = True
 IM_RSI_LEN = 14
-IM_RSI_OB = 80.0                   # a SHORT needs RSI at or above this
-IM_RSI_OS = 20.0                   # a LONG needs RSI at or below this
+# ---- 30 Aug: ADAPTIVE RSI thresholds, per symbol per bar.
+# One fixed pair cannot serve 48 markets at once. His own count over 15,030
+# bars: RSI>80 on 1.15% of them, RSI<20 on 0.10% - 173 against 15. That 11:1
+# asymmetry is a rising market, and it had the LONG side effectively closed.
+# ADX decides the regime, and the thresholds shift the way Constance Brown
+# described: bull markets hold RSI in roughly 40-80, bear markets 20-60.
+#   ranging   (ADX below IM_ADX_TREND)  -> 70 / 30
+#   uptrend   (ADX above, +DI leading)  -> 80 / 40
+#   downtrend (ADX above, -DI leading)  -> 60 / 20
+IM_RSI_ADAPTIVE = True             # False uses the fixed pair below
+IM_ADX_TREND = 25.0                # above this the market counts as trending
+IM_RSI_RANGE = (70.0, 30.0)        # (overbought, oversold) when ranging
+IM_RSI_UP = (80.0, 40.0)           # in an uptrend - avoid selling strength
+IM_RSI_DOWN = (60.0, 20.0)         # in a downtrend - avoid buying weakness
+IM_RSI_OB = 80.0                   # used only when IM_RSI_ADAPTIVE is False
+                                   # a SHORT needs RSI strictly ABOVE this
+IM_RSI_OS = 20.0                   # a LONG needs RSI strictly BELOW this
+                                   # 29 Aug: strict, not inclusive - exactly
+                                   # 80.0 or 20.0 does not qualify.
                                    # 29 Aug: RSI REPLACES the percentile band
                                    # as the major/minor test. A crossover only
                                    # counts when RSI says the market is
@@ -2675,17 +2692,18 @@ def im_gate_status(ast, candles, i, sym=None):
         r = rsi(candles[:last + 1], IM_RSI_LEN) if IM_RSI_ON else None
         if r is None:
             return None
-        if r <= IM_RSI_OS and md[j] < sb[j]:
+        ob, os_, reg = rsi_levels(candles[:last + 1])
+        if r < os_ and md[j] < sb[j]:
             return {"sym": sym, "dir": "LONG", "stage":
                     "ready" if abs(md[j] - sb[j]) <= abs(sb[j]) * 0.15
                     else "waiting", "run": 0, "trend": "oversold", "age": 0,
-                    "detail": (f"RSI {r:.0f} at or below {IM_RSI_OS:.0f} - a "
+                    "detail": (f"RSI {r:.1f} below {os_:.0f} ({reg}) - a "
                                f"cross UP through the signal enters")}
-        if r >= IM_RSI_OB and md[j] > sb[j]:
+        if r > ob and md[j] > sb[j]:
             return {"sym": sym, "dir": "SHORT", "stage":
                     "ready" if abs(md[j] - sb[j]) <= abs(sb[j]) * 0.15
                     else "waiting", "run": 0, "trend": "overbought", "age": 0,
-                    "detail": (f"RSI {r:.0f} at or above {IM_RSI_OB:.0f} - a "
+                    "detail": (f"RSI {r:.1f} above {ob:.0f} ({reg}) - a "
                                f"cross DOWN through the signal enters")}
         return None
 
@@ -2760,6 +2778,55 @@ IM_LEVELS = {}                     # sym -> (md, sb, band, sh) at the signal
                                    # lived above it - and every scan then
                                    # threw NameError on the first symbol that
                                    # reached im_signal.
+
+
+def rsi_levels(candles):
+    """(overbought, oversold, regime) for THIS symbol on THIS bar.
+
+    A fixed pair cannot fit a trending market and a ranging one at once. In a
+    strong uptrend RSI holds above 70 for long stretches, so 70 sells into
+    strength that keeps running; in a downtrend it sits low, so 30 buys into
+    weakness that keeps falling.
+    """
+    if not IM_RSI_ADAPTIVE:
+        return IM_RSI_OB, IM_RSI_OS, "fixed"
+    a = adx(candles, IM_ADX_LEN)
+    if a is None or a < IM_ADX_TREND:
+        return IM_RSI_RANGE[0], IM_RSI_RANGE[1], "ranging"
+    up = _di_bias(candles, IM_ADX_LEN)
+    if up is None:
+        return IM_RSI_RANGE[0], IM_RSI_RANGE[1], "ranging"
+    return ((IM_RSI_UP[0], IM_RSI_UP[1], "uptrend") if up
+            else (IM_RSI_DOWN[0], IM_RSI_DOWN[1], "downtrend"))
+
+
+def _di_bias(candles, n=None):
+    """True when +DI leads -DI, False when it trails. Direction only."""
+    n = IM_ADX_LEN if n is None else n
+    if not candles or len(candles) < n * 2 + 2:
+        return None
+    tr, pdm, ndm = [], [], []
+    for k in range(1, len(candles)):
+        h, l = candles[k]["h"], candles[k]["l"]
+        ph, pl, pc = (candles[k - 1]["h"], candles[k - 1]["l"],
+                      candles[k - 1]["c"])
+        tr.append(max(h - l, abs(h - pc), abs(l - pc)))
+        u, d = h - ph, pl - l
+        pdm.append(u if (u > d and u > 0) else 0.0)
+        ndm.append(d if (d > u and d > 0) else 0.0)
+
+    def rma(v):
+        out = sum(v[:n]) / n
+        for x in v[n:]:
+            out = out - out / n + x
+        return out
+
+    if len(tr) < n + 1:
+        return None
+    a = rma(tr)
+    if a <= 0:
+        return None
+    return (rma(pdm) / a) > (rma(ndm) / a)
 
 
 def macd_std(candles, fast=None, slow=None, sig=None):
@@ -3110,15 +3177,16 @@ def im_signal(ast, candles, i):
             if IM_RSI_ON and _r is None:
                 return None
             if IM_RSI_ON:
-                if up and _r > IM_RSI_OS:
+                _ob, _os, _reg = rsi_levels(candles[:last + 1])
+                if up and _r >= _os:
                     if LOG_SKIPS:
-                        log(f"{sym}: cross UP but RSI {_r:.0f} is not at or "
-                            f"below {IM_RSI_OS:.0f} - minor, skipped")
+                        log(f"{sym}: cross UP but RSI {_r:.1f} is not BELOW "
+                            f"{_os:.0f} ({_reg}) - minor, skipped")
                     up = False
-                if dn and _r < IM_RSI_OB:
+                if dn and _r <= _ob:
                     if LOG_SKIPS:
-                        log(f"{sym}: cross DOWN but RSI {_r:.0f} is not at or "
-                            f"above {IM_RSI_OB:.0f} - minor, skipped")
+                        log(f"{sym}: cross DOWN but RSI {_r:.1f} is not ABOVE "
+                            f"{_ob:.0f} ({_reg}) - minor, skipped")
                     dn = False
             if up and (not IM_RSI_ON) and md[j] < -band:
                 ast["im_path"] = "extension"
@@ -3129,14 +3197,14 @@ def im_signal(ast, candles, i):
             if up and IM_RSI_ON:
                 ast["im_path"] = "extension"
                 ast["im_why"] = (f"impulse MACD crossed UP with RSI "
-                                 f"{_r:.0f} at or below {IM_RSI_OS:.0f} "
-                                 f"- oversold")
+                                 f"{_r:.1f} below {_os:.0f} "
+                                 f"- oversold in a {_reg} market")
                 _p1, _p1_why = "LONG", ast["im_why"]
             if dn and IM_RSI_ON:
                 ast["im_path"] = "extension"
                 ast["im_why"] = (f"impulse MACD crossed DOWN with RSI "
-                                 f"{_r:.0f} at or above {IM_RSI_OB:.0f} "
-                                 f"- overbought")
+                                 f"{_r:.1f} above {_ob:.0f} "
+                                 f"- overbought in a {_reg} market")
                 _p1, _p1_why = "SHORT", ast["im_why"]
             if dn and (not IM_RSI_ON) and md[j] > band:
                 ast["im_path"] = "extension"
