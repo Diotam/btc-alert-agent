@@ -2768,6 +2768,11 @@ def im_gate_status(ast, candles, i, sym=None):
 
 
 IM_PATH = {}                       # sym -> which pathway fired, for the alert
+IM_RSI_INFO = {}                   # sym -> (rsi, ob, os, regime) at the
+                                   # signal bar, so the alert can print the
+                                   # levels that actually applied - they are
+                                   # adaptive, so "RSI 43" means nothing
+                                   # without the pair it was judged against
 IM_MACD = {}                       # sym -> (macd, signal, ema200, price) for
                                    # pathway 1, so the alert prints the
                                    # indicator that actually decided it
@@ -3196,12 +3201,14 @@ def im_signal(ast, candles, i):
                 _p1, _p1_why = "LONG", ast["im_why"]
             if up and IM_RSI_ON:
                 ast["im_path"] = "extension"
+                IM_RSI_INFO[sym] = (_r, _ob, _os, _reg)
                 ast["im_why"] = (f"impulse MACD crossed UP with RSI "
                                  f"{_r:.1f} below {_os:.0f} "
                                  f"- oversold in a {_reg} market")
                 _p1, _p1_why = "LONG", ast["im_why"]
             if dn and IM_RSI_ON:
                 ast["im_path"] = "extension"
+                IM_RSI_INFO[sym] = (_r, _ob, _os, _reg)
                 ast["im_why"] = (f"impulse MACD crossed DOWN with RSI "
                                  f"{_r:.1f} above {_ob:.0f} "
                                  f"- overbought in a {_reg} market")
@@ -4397,6 +4404,23 @@ def entry_message(asset, direction, plan, zhi, zlo, source, t, trigger):
                 f"</i>",
                 "",
             ]
+    elif pth == "extension":
+        # PATHWAY 1 is now the impulse crossover gated by RSI. The percentile
+        # bands play no part - RSI decides major from minor, and the levels
+        # are ADAPTIVE, so the pair must be printed alongside the reading.
+        ri = IM_RSI_INFO.get(asset["symbol"])
+        if ri:
+            rv, ob, os_, reg = ri
+            lines += [
+                "\U0001F4C8 <b>RSI</b>",
+                f"Reading: <code>{rv:.1f}</code>   levels "
+                f"<code>{ob:.0f}</code> / <code>{os_:.0f}</code>   "
+                f"<i>{esc(reg)} market</i>",
+                f"<i>pathway 1 \u00b7 "
+                f"{'oversold, crossing up' if direction == 'LONG' else 'overbought, crossing down'}"
+                f"</i>",
+                "",
+            ]
     else:
         lv = IM_LEVELS.get(asset["symbol"]) if IM_MODE else None
         if lv and lv[2]:
@@ -4405,7 +4429,6 @@ def entry_message(asset, direction, plan, zhi, zlo, source, t, trigger):
                 "\U0001F4C8 <b>Impulse MACD</b>",
                 f"md:    <code>{mdv:+.3e}</code>   signal: "
                 f"<code>{sbv:+.3e}</code>   hist: <code>{shv:+.3e}</code>",
-                f"Bands: <code>+{band:.3e}</code> / <code>-{band:.3e}</code>",
                 f"<i>pathway 2 \u00b7 breakout from a flat range \u00b7 the "
                 f"bands are not used on this pathway</i>",
                 "",
