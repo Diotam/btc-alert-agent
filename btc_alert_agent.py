@@ -351,7 +351,20 @@ IM_SIG = 9                         # signal line
 # a cross UP while md is BELOW the oversold line is a LONG, a cross DOWN
 # while ABOVE the overbought line is a SHORT. Crossovers between the lines
 # are ignored: those are his "minor" crossovers, too close to the middle.
-IM_P1_ON = True
+IM_P1_ON = False                   # 31 Aug: PATHWAY 1 IS OFF. Measured over
+                                   # 750 bars on 30 symbols: 1023 impulse
+                                   # crossovers, of which ONE had RSI in range
+                                   # on the bar and 10 more within 3 bars.
+                                   # 1011 never qualified at all.
+                                   # The two conditions are near-independent -
+                                   # md crosses its 9-bar signal several times
+                                   # a day while RSI reaches 20 or 80 on about
+                                   # 0.1% of bars - so the intersection is
+                                   # empty by construction, whatever the
+                                   # window. No threshold tweak fixes that.
+                                   # Pathway 2 is the strategy now. True
+                                   # re-enables this, but the percentile band
+                                   # scaled per symbol and RSI does not.
 # ---- PATHWAY 1 REPLACED 23 Aug: MACD + 200 EMA, his spec.
 #   LONG  - price ABOVE the 200 EMA, and the MACD line crosses UP through
 #           its signal while BOTH are BELOW the zero line (a pullback inside
@@ -657,13 +670,14 @@ IM_SWING_BARS = 20                 # the nearest swing high/low for the stop
 # indicator's own "inside the band" state) for a long stretch, then take the
 # first histogram push, with price agreeing.
 IM_P2_ON = True
-IM_FLAT_BARS = 20                  # 29 Aug: 40 -> 20 on the move back to
-                                   # 30m. TEN HOURS of range either way - the
-                                   # wall-clock requirement is unchanged, only
-                                   # the bar count follows the timeframe.
-                                   # This also sets how long pathway 1 stays
-                                   # SUPPRESSED: a symbol counts as coiled
-                                   # only once it clears this.
+IM_FLAT_BARS = 15                  # 31 Aug: 20 -> 15 at his call. md must
+                                   # sit at exactly 0 for this many bars
+                                   # before a push counts as a range
+                                   # breakout. On 30m that is SEVEN AND A
+                                   # HALF HOURS, down from ten.
+                                   # This is now the ONLY entry rule in the
+                                   # engine - pathway 1 is off - so it also no
+                                   # longer suppresses anything.
 IM_P2_RR = 2.5                     # target, in R
 IM_P2_STOP = "swing"               # 21 Aug: pathway 2 stops at the NEAREST
                                    # SWING high/low, same as pathway 1, rather
