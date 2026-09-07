@@ -928,21 +928,23 @@ function render(d){
   const G=d.gates||[];
   // WATCHLIST, back on 18 Aug for the reversal-200 engine, which has a real
   // WATCHLIST. Three pending states, from two different indicators:
-  //   coiled      impulse md flat - pathway 2 waiting on the first push
-  //   oversold    RSI below 20, md still under its signal - a cross UP is
-  //               a pathway-1 LONG
-  //   overbought  RSI above 80, md still over its signal - a cross DOWN is
-  //               a pathway-1 SHORT
-  // pullback/rally were the 200 EMA form of pathway 1 and are kept in the
-  // counts so an older agent still reads correctly.
-  // "coiled" rows carry no direction: the push decides it.
+  // WATCHLIST states. The FVG engine emits:
+  //   bullish FVG  an unmitigated gap BELOW price with a break of structure
+  //                behind it - a tap that closes inside or up is a LONG
+  //   bearish FVG  the mirror, above price
+  // The impulse engine's states (coiled / oversold / overbought) are still
+  // counted so rolling IM_MODE back keeps the panel readable.
   const _n=document.getElementById('n-gates'); if(_n) _n.textContent=G.length;
   const _g=document.getElementById('gsub');
   if(_g){
-    const nc=G.filter(x=>x.trend==='coiled').length;
-    const nos=G.filter(x=>x.trend==='oversold'||x.trend==='pullback').length;
-    const nob=G.filter(x=>x.trend==='overbought'||x.trend==='rally').length;
+    const cnt=t=>G.filter(x=>x.trend===t).length;
     const bits=[];
+    const nbu=cnt('bullish FVG'), nbe=cnt('bearish FVG');
+    if(nbu) bits.push(nbu+' bullish');
+    if(nbe) bits.push(nbe+' bearish');
+    const nc=cnt('coiled');
+    const nos=cnt('oversold')+cnt('pullback');
+    const nob=cnt('overbought')+cnt('rally');
     if(nc) bits.push(nc+' coiled');
     if(nos) bits.push(nos+' oversold');
     if(nob) bits.push(nob+' overbought');
@@ -950,7 +952,11 @@ function render(d){
   }
   // closest to its 20 first - those are the ones about to trigger
   // coiled first, then the longest-standing; both are the ripest setups
-  const gr=g=>(g.trend==='coiled'? -1000-(g.run||0) : 0);
+  // ready rows first - price is at the zone. Then by how close it is.
+  const gd=g=>{const m=/([-0-9.]+)% away/.exec(g.detail||''); 
+               return m?Math.abs(parseFloat(m[1])):999;};
+  const gr=g=>(g.trend==='coiled'? -1000-(g.run||0)
+               : (g.stage==='ready'? -500 : 0) + gd(g));
   document.getElementById('gates').innerHTML=G.length?G.slice()
     .sort((a,b)=>gr(a)-gr(b)).map(g=>{
     const cls=g.dir==='LONG'?'long':(g.dir==='SHORT'?'short':'muted');
