@@ -2806,6 +2806,9 @@ def im_gate_status(ast, candles, i, sym=None):
 
 
 IM_PATH = {}                       # sym -> which pathway fired, for the alert
+FVG_INFO = {}                      # sym -> the zone that fired, so the alert
+                                   # can show its edges and where price came
+                                   # back into it
 IM_RSI_INFO = {}                   # sym -> (rsi, ob, os, regime) at the
                                    # signal bar, so the alert can print the
                                    # levels that actually applied - they are
@@ -3187,6 +3190,8 @@ def fvg_signal(ast, candles, i):
         inside = g["bot"] <= c["c"] <= g["top"]
         if inside or c["c"] > c["o"]:
             ast["fvg"] = g
+            FVG_INFO[ast.get("sym", "?")] = dict(g, entry=c["c"],
+                                                 low=c["l"], high=c["h"])
             ast["im_path"] = "fvg"
             ast["im_why"] = (
                 f"bullish FVG {fmt_px(g['bot'])}-{fmt_px(g['top'])} "
@@ -3200,6 +3205,8 @@ def fvg_signal(ast, candles, i):
         inside = g["bot"] <= c["c"] <= g["top"]
         if inside or c["c"] < c["o"]:
             ast["fvg"] = g
+            FVG_INFO[ast.get("sym", "?")] = dict(g, entry=c["c"],
+                                                 low=c["l"], high=c["h"])
             ast["im_path"] = "fvg"
             ast["im_why"] = (
                 f"bearish FVG {fmt_px(g['bot'])}-{fmt_px(g['top'])} "
@@ -4552,8 +4559,32 @@ def entry_message(asset, direction, plan, zhi, zlo, source, t, trigger):
         f"\U0001F4CA <b>Setup</b>: {esc(trigger)}",
         "",
     ]
-    pth = IM_PATH.get(asset["symbol"], "") if IM_MODE else ""
-    if pth == "macd200":
+    # 7 Sep: this was gated on IM_MODE, so with the FVG engine live it
+    # resolved to "" and every indicator block was skipped.
+    pth = (IM_PATH.get(asset["symbol"], "") if (IM_MODE or FVG_MODE) else "")
+    if pth == "fvg":
+        z = FVG_INFO.get(asset["symbol"])
+        if z:
+            top, bot = z["top"], z["bot"]
+            wide = (top - bot) / z["entry"] * 100.0
+            # how far INTO the zone price actually came. 0% is a touch of
+            # the near edge, 100% is all the way through to the far edge.
+            reach = ((top - z["low"]) / (top - bot) * 100.0
+                     if z["kind"] == "bull"
+                     else (z["high"] - bot) / (top - bot) * 100.0)
+            lines += [
+                "\U0001F4C8 <b>Fair Value Gap</b>",
+                f"Zone:  <code>{fmt_px(bot)}</code> - "
+                f"<code>{fmt_px(top)}</code>   "
+                f"<i>{wide:.2f}% wide</i>",
+                f"Entry came <code>{max(0, min(100, reach)):.0f}%</code> into "
+                f"the zone \u00b7 closed <code>{fmt_px(z['entry'])}</code>",
+                f"<i>{'bullish' if z['kind'] == 'bull' else 'bearish'} \u00b7 "
+                f"unmitigated \u00b7 break of structure"
+                f"{' \u00b7 prior level' if z.get('conf') else ''}</i>",
+                "",
+            ]
+    elif pth == "macd200":
         # PATHWAY 1 runs on the STANDARD MACD and the 200 EMA. The impulse
         # values and the percentile bands play no part in this decision, and
         # printing them said "above the overbought line" on a pullback trade.
