@@ -331,7 +331,41 @@ CROSS_SLOPE_BARS = 5               # bars per slope window. 5 on 30m = 2.5h.
 # ===================== IMPULSE MACD (LazyBear), his spec 20 Aug ============
 # md = mi>hi ? mi-hi : (mi<lo ? mi-lo : 0), sb = SMA(md,9), sh = md-sb
 # NOTHING from the reversal-200 engine feeds this. RS_MODE is off.
-IM_MODE = True
+
+# ============================ FAIR VALUE GAP ============================
+# A three-candle imbalance. BULLISH: candle1.high < candle3.low, leaving an
+# untraded band between them. BEARISH: candle1.low > candle3.high.
+#
+# His six rules, in the order he gave them:
+#   1. UNMITIGATED - price must not have traded back into the zone since it
+#      formed. One touch and the gap is dead.
+#   2. REACTION - the candle must close INSIDE the gap, or close in the
+#      gap's direction. A candle that pierces a bullish gap and closes
+#      BELOW it kills the gap.
+#   3. CONFLUENCE - a prior swing high/low sitting at the zone.
+#   4/5. PRIORITY - the LOWEST bullish gap is strongest, the HIGHEST bearish
+#      gap is strongest. When several qualify, take the strongest.
+#   6. BREAK OF STRUCTURE - the leg that created the gap must have broken
+#      the prior swing high (bullish) or swing low (bearish). A gap with no
+#      BOS behind it is not traded.
+FVG_MODE = True                    # 1 Sep: LIVE. This is the engine now.
+                                   # IM_MODE is off - the impulse breakout
+                                   # and both of its pathways are retired.
+FVG_LOOKBACK = 200                 # bars scanned for gaps
+FVG_MIN_PCT = 0.10                 # a gap under this % of price is noise
+FVG_SWING = 10                     # bars either side that define a swing
+FVG_CONFLUENCE = True              # rule 3. False skips the confluence test
+FVG_CONF_TOL_PCT = 0.35            # how close a prior swing must sit to the
+                                   # zone to count as confluence
+FVG_RR = 2.0                       # target, in R
+FVG_STOP_PAD_PCT = 0.05            # stop this far beyond the far edge
+
+IM_MODE = False                    # 1 Sep: OFF, replaced by FVG_MODE.
+                                   # The impulse engine's record: 6 closed
+                                   # trades, 4W, +4.00R, both losses clean at
+                                   # -1R. Never backtested. True brings it
+                                   # back - the pathway config below is
+                                   # untouched.
 IM_CLAUDE_GATE = False             # 25 Aug: OFF at his call. The adjudicator
                                    # took 3 of 98 signals over its first two
                                    # days - a 3% pass rate. The prompt was
@@ -1780,6 +1814,8 @@ def fetch_hyperliquid(coin, interval, lookback):
 
 def engine_label():
     """What the alerts should call the running engine."""
+    if FVG_MODE:
+        return "Fair Value Gap"
     if IM_MODE:
         return f"Impulse MACD {IM_LEN},{IM_SIG}"
     if RS_MODE:
@@ -2653,28 +2689,6 @@ def rs_ma(closes, n):
     return smma(closes, n)
 
 
-def im_band(md, i):
-    """The overbought level; the oversold line is its negative.
-
-    Only pathway 2's watchlist and the alert body use this now - pathway 1
-    moved to the MACD zero line on 23 Aug. The def line was lost when
-    im_gate_status was rewritten, leaving this body orphaned inside rs_ma.
-    """
-    if IM_BAND_MODE == "abs":
-        return abs(IM_BAND)
-    if IM_BAND_MODE == "pct_of_price":
-        return None                       # resolved by the caller, needs price
-    span = MS.get(TF, 0)
-    bars = (IM_BAND_LOOKBACK if IM_BAND_LOOKBACK
-            else (int(IM_BAND_DAYS * 86_400_000 / span) if span else 300))
-    lo = max(0, i - bars)
-    hist = sorted(abs(x) for x in md[lo:i + 1] if x)
-    if len(hist) < 20:
-        return None
-    k = min(len(hist) - 1, int(len(hist) * IM_BAND_PCTILE / 100.0))
-    return hist[k]
-
-
 def im_gate_status(ast, candles, i, sym=None):
     """Watchlist row. Report only - it never gates anything.
 
@@ -3090,6 +3104,136 @@ def p1_macd_signal(ast, candles, i):
             f"{'wrong side of zero' if (up and line[j] >= 0) or (dn and line[j] <= 0) else 'wrong side of the ' + str(IM_EMA_TREND) + ' EMA'}"
             f" - no entry")
     return None
+
+
+def swing_points(candles, n=None):
+    """(highs, lows) as (index, price). A swing high tops the n bars either
+    side of it. Feeds the break-of-structure test and confluence."""
+    n = FVG_SWING if n is None else n
+    hi, lo = [], []
+    for k in range(n, len(candles) - n):
+        h, l = candles[k]["h"], candles[k]["l"]
+        if all(h >= candles[k + d]["h"] for d in range(-n, n + 1) if d):
+            hi.append((k, h))
+        if all(l <= candles[k + d]["l"] for d in range(-n, n + 1) if d):
+            lo.append((k, l))
+    return hi, lo
+
+
+def find_fvgs(candles):
+    """Every three-candle gap in the window, with his rules attached."""
+    out = []
+    lo_i = max(2, len(candles) - FVG_LOOKBACK)
+    hi_sw, lo_sw = swing_points(candles)
+    for k in range(lo_i, len(candles)):
+        a, c = candles[k - 2], candles[k]
+        px = c["c"] or 1.0
+        if a["h"] < c["l"]:                      # BULLISH
+            bot, top = a["h"], c["l"]
+            if (top - bot) / px * 100.0 >= FVG_MIN_PCT:
+                prior = [p for (j, p) in hi_sw if j < k - 2]
+                out.append({"kind": "bull", "top": top, "bot": bot,
+                            "i": k,
+                            "bos": bool(prior) and c["h"] > max(prior[-3:]),
+                            "conf": any(
+                                min(abs(p - top), abs(p - bot)) / px * 100.0
+                                <= FVG_CONF_TOL_PCT
+                                for (j, p) in hi_sw + lo_sw if j < k - 2),
+                            "mitigated": any(x["l"] <= top
+                                             for x in candles[k + 1:])})
+        if a["l"] > c["h"]:                      # BEARISH
+            top, bot = a["l"], c["h"]
+            if (top - bot) / px * 100.0 >= FVG_MIN_PCT:
+                prior = [p for (j, p) in lo_sw if j < k - 2]
+                out.append({"kind": "bear", "top": top, "bot": bot,
+                            "i": k,
+                            "bos": bool(prior) and c["l"] < min(prior[-3:]),
+                            "conf": any(
+                                min(abs(p - top), abs(p - bot)) / px * 100.0
+                                <= FVG_CONF_TOL_PCT
+                                for (j, p) in hi_sw + lo_sw if j < k - 2),
+                            "mitigated": any(x["h"] >= bot
+                                             for x in candles[k + 1:])})
+    return out
+
+
+def live_fvgs(candles):
+    """Tradeable gaps, STRONGEST FIRST.
+
+    Rules 4 and 5: the LOWEST bullish gap is strongest, the HIGHEST bearish
+    gap is strongest.
+    """
+    g = [x for x in find_fvgs(candles)
+         if x["bos"] and not x["mitigated"]
+         and (x["conf"] or not FVG_CONFLUENCE)]
+    return (sorted([x for x in g if x["kind"] == "bull"],
+                   key=lambda x: x["top"]),
+            sorted([x for x in g if x["kind"] == "bear"],
+                   key=lambda x: -x["bot"]))
+
+
+def fvg_signal(ast, candles, i):
+    """Rule 2 is the trigger: price reaches the zone and the candle closes
+    INSIDE it, or closes in the zone's direction. A candle that pierces a
+    bullish zone and closes BELOW it invalidates the gap instead."""
+    last = i - 1
+    if last < FVG_SWING * 2 + 5:
+        return None
+    c = candles[last]
+    bull, bear = live_fvgs(candles[:last])
+    for g in bull:
+        if c["l"] > g["top"] or c["c"] < g["bot"]:
+            continue
+        inside = g["bot"] <= c["c"] <= g["top"]
+        if inside or c["c"] > c["o"]:
+            ast["fvg"] = g
+            ast["im_path"] = "fvg"
+            ast["im_why"] = (
+                f"bullish FVG {fmt_px(g['bot'])}-{fmt_px(g['top'])} "
+                f"{'tapped, closed inside' if inside else 'held, closed up'}"
+                f" - unmitigated, BOS"
+                f"{', prior level' if g['conf'] else ''}")
+            return "LONG"
+    for g in bear:
+        if c["h"] < g["bot"] or c["c"] > g["top"]:
+            continue
+        inside = g["bot"] <= c["c"] <= g["top"]
+        if inside or c["c"] < c["o"]:
+            ast["fvg"] = g
+            ast["im_path"] = "fvg"
+            ast["im_why"] = (
+                f"bearish FVG {fmt_px(g['bot'])}-{fmt_px(g['top'])} "
+                f"{'tapped, closed inside' if inside else 'held, closed down'}"
+                f" - unmitigated, BOS"
+                f"{', prior level' if g['conf'] else ''}")
+            return "SHORT"
+    return None
+
+
+def fvg_gate_status(ast, candles, i, sym=None):
+    """Watchlist: the strongest live gap and how far price sits from it."""
+    last = i - 1
+    if last < FVG_SWING * 2 + 5:
+        return None
+    px = candles[last]["c"]
+    bull, bear = live_fvgs(candles[:last + 1])
+    best = kind = None
+    if bull and (not bear
+                 or abs(px - bull[0]["top"]) < abs(px - bear[0]["bot"])):
+        best, kind = bull[0], "bull"
+    elif bear:
+        best, kind = bear[0], "bear"
+    if not best:
+        return None
+    dist = ((px - best["top"]) if kind == "bull"
+            else (best["bot"] - px)) / px * 100.0
+    return {"sym": sym, "dir": "LONG" if kind == "bull" else "SHORT",
+            "stage": "ready" if abs(dist) <= 0.5 else "waiting", "run": 0,
+            "trend": "bullish FVG" if kind == "bull" else "bearish FVG",
+            "age": 0,
+            "detail": (f"{fmt_px(best['bot'])}-{fmt_px(best['top'])}, price "
+                       f"{dist:+.2f}% away \u00b7 unmitigated \u00b7 BOS"
+                       f"{' \u00b7 prior level' if best['conf'] else ''}")}
 
 
 def im_band(md, i):
@@ -6203,11 +6347,13 @@ def process_candle(asset, ast, candles, ha, i):
     # BTC vote - the cross IS the trend read, so layering the old filters on
     # top would refuse the very setups it exists to take.
     # ---------------- IMPULSE MACD ENGINE (LazyBear, his 20 Aug spec) ------
-    if IM_MODE:
+    if IM_MODE or FVG_MODE:
         ast["sym"] = sym
-        side = im_signal(ast, candles, i)
+        side = (fvg_signal(ast, candles, i) if FVG_MODE
+                else im_signal(ast, candles, i))
         try:
-            _g = im_gate_status(ast, candles, i, sym)
+            _g = (fvg_gate_status(ast, candles, i, sym) if FVG_MODE
+                  else im_gate_status(ast, candles, i, sym))
             if _g:
                 # stamp the bar this row describes. A symbol that drops out
                 # of discovery on a 429 is never re-evaluated, and its row
@@ -6228,6 +6374,17 @@ def process_candle(asset, ast, candles, ha, i):
         rr = IM_P2_RR if path == "breakout" else IM_P1_RR
         stop = None
         stop_src = ""
+        if FVG_MODE and ast.get("fvg"):
+            # the zone's FAR edge, padded. If price closes through it the
+            # gap is invalid by his rule 2, so there is no reason to still
+            # be in the trade.
+            _z = ast["fvg"]
+            _pad = entry * FVG_STOP_PAD_PCT / 100.0
+            stop = ((_z["bot"] - _pad) if want_long else (_z["top"] + _pad))
+            rr = FVG_RR
+            stop_src = "far edge of the gap"
+            if (stop >= entry) if want_long else (stop <= entry):
+                return False
         if IM_DOLLAR_MODE:
             # the R multiple is the cash ratio; the STOP is still structural
             # and is set below. Size is derived from it afterwards.
