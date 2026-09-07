@@ -351,7 +351,14 @@ CROSS_SLOPE_BARS = 5               # bars per slope window. 5 on 30m = 2.5h.
 FVG_MODE = True                    # 1 Sep: LIVE. This is the engine now.
                                    # IM_MODE is off - the impulse breakout
                                    # and both of its pathways are retired.
-FVG_LOOKBACK = 200                 # bars scanned for gaps
+FVG_LOOKBACK = 100                 # 7 Sep: 200 -> 100. Bars scanned for
+                                   # gaps. On 30m that is ~2 days rather than
+                                   # 4. Of 31 live gaps at 200 bars, TEN sat
+                                   # more than 6% from price - old zones price
+                                   # had long moved away from. Unmitigated
+                                   # keeps them valid by the rules, but they
+                                   # cluttered the panel and were not going to
+                                   # trade soon.
 FVG_MIN_PCT = 0.10                 # a gap under this % of price is noise
 FVG_SWING = 10                     # bars either side that define a swing
 FVG_CONFLUENCE = True              # rule 3. False skips the confluence test
