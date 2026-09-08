@@ -378,14 +378,21 @@ FVG_CONF_DIRECTIONAL = True        # 8 Sep: the level must be the RIGHT KIND.
                                    # to accept either against either edge, so
                                    # a bullish gap could qualify on a swing
                                    # high, which is not what he asked for.
-FVG_CONF_INSIDE = True             # 8 Sep: the prior level must sit INSIDE
-                                   # the zone, between its two edges - not
-                                   # merely near one of them. A swing that
-                                   # stops just short of the gap is a
-                                   # different price to the gap.
-FVG_CONF_TOL_PCT = 0.35            # only used when FVG_CONF_INSIDE is False:
-                                   # how close a prior swing must sit to an
-                                   # edge to count
+FVG_CONF_INSIDE = False            # 8 Sep: REVERTED. Strict containment -
+                                   # the swing must sit BETWEEN the edges -
+                                   # is the cleaner rule, but it collapsed the
+                                   # watchlist: 17 rows became 1 at swing 25
+                                   # and 2 at swing 15. Loosening the swing
+                                   # barely helped, which showed the binding
+                                   # constraint was containment itself, not
+                                   # the swing width. These gaps are often
+                                   # under 1% wide and a specific prior swing
+                                   # price landing inside that band is rare
+                                   # geometry, not a tuning problem.
+                                   # True restores it.
+FVG_CONF_TOL_PCT = 0.35            # how close a prior swing must sit to an
+                                   # EDGE of the zone to count as confluence.
+                                   # Used when FVG_CONF_INSIDE is False.
 FVG_RR = 2.0                       # target, in R
 FVG_STOP_PAD_PCT = 0.30            # 8 Sep: 0.05 -> 0.30, as % of price.
                                    # How far past the far edge the stop sits.
