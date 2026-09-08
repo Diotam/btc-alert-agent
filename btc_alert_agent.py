@@ -2813,6 +2813,17 @@ def im_gate_status(ast, candles, i, sym=None):
 
 
 IM_PATH = {}                       # sym -> which pathway fired, for the alert
+FVG_USED = {}                      # sym -> [(bot, top), ...] zones that have
+                                   # already traded. A gap is a ONE-SHOT
+                                   # setup: price came back, the reaction
+                                   # happened, it is spent. Rule 1 says a
+                                   # tested zone is invalid, and taking the
+                                   # trade IS the test.
+                                   # xyz:KORU 7 Sep entered the identical zone
+                                   # 23.8210-24.1410 twice, 25 minutes apart,
+                                   # the second time straight after a restart
+                                   # - the zone is re-derived from candles on
+                                   # every scan and had no memory of firing.
 FVG_INFO = {}                      # sym -> the zone that fired, so the alert
                                    # can show its edges and where price came
                                    # back into it
@@ -3191,7 +3202,17 @@ def fvg_signal(ast, candles, i):
         return None
     c = candles[last]
     bull, bear = live_fvgs(candles[:last])
+    used = FVG_USED.get(ast.get("sym", "?"), [])
+
+    def _spent(g):
+        # same zone within a hair - float equality is not safe across
+        # re-derivations, so compare on a tolerance
+        return any(abs(g["bot"] - b) <= abs(b) * 1e-6
+                   and abs(g["top"] - t) <= abs(t) * 1e-6
+                   for (b, t) in used)
     for g in bull:
+        if _spent(g):
+            continue
         if c["l"] > g["top"] or c["c"] < g["bot"]:
             continue
         inside = g["bot"] <= c["c"] <= g["top"]
@@ -3199,6 +3220,8 @@ def fvg_signal(ast, candles, i):
             ast["fvg"] = g
             FVG_INFO[ast.get("sym", "?")] = dict(g, entry=c["c"],
                                                  low=c["l"], high=c["h"])
+            FVG_USED.setdefault(ast.get("sym", "?"), []).append(
+                (g["bot"], g["top"]))
             ast["im_path"] = "fvg"
             ast["im_why"] = (
                 f"bullish FVG {fmt_px(g['bot'])}-{fmt_px(g['top'])} "
@@ -3207,6 +3230,8 @@ def fvg_signal(ast, candles, i):
                 f"{', prior level' if g['conf'] else ''}")
             return "LONG"
     for g in bear:
+        if _spent(g):
+            continue
         if c["h"] < g["bot"] or c["c"] > g["top"]:
             continue
         inside = g["bot"] <= c["c"] <= g["top"]
@@ -3214,6 +3239,8 @@ def fvg_signal(ast, candles, i):
             ast["fvg"] = g
             FVG_INFO[ast.get("sym", "?")] = dict(g, entry=c["c"],
                                                  low=c["l"], high=c["h"])
+            FVG_USED.setdefault(ast.get("sym", "?"), []).append(
+                (g["bot"], g["top"]))
             ast["im_path"] = "fvg"
             ast["im_why"] = (
                 f"bearish FVG {fmt_px(g['bot'])}-{fmt_px(g['top'])} "
@@ -3231,6 +3258,12 @@ def fvg_gate_status(ast, candles, i, sym=None):
         return None
     px = candles[last]["c"]
     bull, bear = live_fvgs(candles[:last + 1])
+    _u = FVG_USED.get(sym or ast.get("sym", "?"), [])
+    _sp = lambda g: any(abs(g["bot"] - b) <= abs(b) * 1e-6
+                        and abs(g["top"] - t) <= abs(t) * 1e-6
+                        for (b, t) in _u)
+    bull = [g for g in bull if not _sp(g)]
+    bear = [g for g in bear if not _sp(g)]
     best = kind = None
     if bull and (not bear
                  or abs(px - bull[0]["top"]) < abs(px - bear[0]["bot"])):
