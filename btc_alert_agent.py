@@ -360,7 +360,7 @@ FVG_LOOKBACK = 100                 # 7 Sep: 200 -> 100. Bars scanned for
                                    # cluttered the panel and were not going to
                                    # trade soon.
 FVG_MIN_PCT = 0.10                 # a gap under this % of price is noise
-FVG_SWING = 15                     # 8 Sep: 25 -> 15. Bars either side that
+FVG_SWING = 10                     # 8 Sep: back to 10. Bars either side that
                                    # define a swing - 7.5 hours of 30m bars
                                    # each way.
                                    # At 25, combined with strict containment,
@@ -371,7 +371,9 @@ FVG_SWING = 15                     # 8 Sep: 25 -> 15. Bars either side that
                                    # demanding alongside it.
                                    # This drives BOTH rule 3 and rule 6.
 FVG_CONFLUENCE = True              # rule 3. False skips the confluence test
-FVG_CONF_DIRECTIONAL = True        # 8 Sep: the level must be the RIGHT KIND.
+FVG_CONF_DIRECTIONAL = False       # 8 Sep: REVERTED to off. Any prior swing,
+                                   # high or low, counts against either edge.
+                                   # True demands the RIGHT KIND -
                                    # A long needs SUPPORT at the zone - a
                                    # prior swing LOW. A short needs
                                    # RESISTANCE - a prior swing HIGH. It used
@@ -394,6 +396,17 @@ FVG_CONF_TOL_PCT = 0.35            # how close a prior swing must sit to an
                                    # EDGE of the zone to count as confluence.
                                    # Used when FVG_CONF_INSIDE is False.
 FVG_RR = 2.0                       # target, in R
+FVG_BTC_FILTER = True              # 8 Sep: CRYPTO must trade WITH bitcoin.
+                                   # The first 19 trades: every crypto SHORT
+                                   # lost - XMR twice, MON, PENGU, ENA, five
+                                   # of five - while the only winning shorts
+                                   # were equity synthetics. Bearish gaps get
+                                   # run over in a rising tape.
+                                   # A crypto LONG needs BTC above its EMA, a
+                                   # crypto SHORT needs BTC below it. The
+                                   # xyz: synthetics are EXEMPT - they follow
+                                   # their own market, not bitcoin.
+FVG_BTC_EMA = 50                   # bars for that EMA - 25 hours on 30m
 FVG_STOP_ON_CLOSE = True           # 8 Sep: the stop needs a CLOSE past the
                                    # level, not a wick. Rule 2 already says a
                                    # candle that closes through the far edge
@@ -409,7 +422,7 @@ FVG_STOP_ON_CLOSE = True           # 8 Sep: the stop needs a CLOSE past the
 FVG_DISASTER_R = 1.5               # immediate exit if price runs this many
                                    # stop distances past entry, no close
                                    # needed. 0 disables it.
-FVG_STOP_PAD_PCT = 0.30            # 8 Sep: 0.05 -> 0.30, as % of price.
+FVG_STOP_PAD_PCT = 0.05            # 8 Sep: back to 0.05, as % of price.
                                    # How far past the far edge the stop sits.
                                    # MEASURED on the first 19 trades: of the
                                    # stopped trades with enough bars since to
@@ -3182,6 +3195,46 @@ def p1_macd_signal(ast, candles, i):
     return None
 
 
+_BTC_BIAS = {"t": 0, "up": None}
+
+
+def btc_bias():
+    """True when BTC is above its own EMA, False below, None if unknown.
+
+    Cached for one bar - every symbol in a scan asks the same question and
+    there is no sense fetching BTC ninety times.
+    """
+    if not FVG_BTC_FILTER:
+        return None
+    span = MS.get(TF, 1_800_000)
+    now = now_ms()
+    if _BTC_BIAS["up"] is not None and now - _BTC_BIAS["t"] < span:
+        return _BTC_BIAS["up"]
+    try:
+        _, cs = fetch({"symbol": "BTC", "hl_coin": "BTC", "fallbacks": [],
+                       "cls": "crypto"}, TF, FVG_BTC_EMA * 4)
+        if not cs or len(cs) < FVG_BTC_EMA * 2:
+            return _BTC_BIAS["up"]
+        e = ema([x["c"] for x in cs], FVG_BTC_EMA)
+        if not e:
+            return _BTC_BIAS["up"]
+        _BTC_BIAS["up"] = cs[-2]["c"] > e[-1]
+        _BTC_BIAS["t"] = now
+    except Exception as ex:
+        log(f"btc_bias failed: {type(ex).__name__}: {ex}")
+    return _BTC_BIAS["up"]
+
+
+def btc_allows(sym, want_long):
+    """Crypto trades WITH bitcoin. xyz: synthetics are exempt."""
+    if not FVG_BTC_FILTER or str(sym).startswith("xyz:"):
+        return True
+    up = btc_bias()
+    if up is None:
+        return True                     # unknown - do not block on a failure
+    return up if want_long else (not up)
+
+
 def swing_points(candles, n=None):
     """(highs, lows) as (index, price). A swing high tops the n bars either
     side of it. Feeds the break-of-structure test and confluence."""
@@ -3271,8 +3324,9 @@ def fvg_signal(ast, candles, i):
         return any(abs(g["bot"] - b) <= abs(b) * 1e-6
                    and abs(g["top"] - t) <= abs(t) * 1e-6
                    for (b, t) in used)
+    _sym = ast.get("sym", "?")
     for g in bull:
-        if _spent(g):
+        if _spent(g) or not btc_allows(_sym, True):
             continue
         if c["l"] > g["top"] or c["c"] < g["bot"]:
             continue
@@ -3291,7 +3345,7 @@ def fvg_signal(ast, candles, i):
                 f"{(', prior support' if g['kind'] == 'bull' else ', prior resistance') if g['conf'] else ''}")
             return "LONG"
     for g in bear:
-        if _spent(g):
+        if _spent(g) or not btc_allows(_sym, False):
             continue
         if c["h"] < g["bot"] or c["c"] > g["top"]:
             continue
@@ -3323,8 +3377,9 @@ def fvg_gate_status(ast, candles, i, sym=None):
     _sp = lambda g: any(abs(g["bot"] - b) <= abs(b) * 1e-6
                         and abs(g["top"] - t) <= abs(t) * 1e-6
                         for (b, t) in _u)
-    bull = [g for g in bull if not _sp(g)]
-    bear = [g for g in bear if not _sp(g)]
+    _s = sym or ast.get("sym", "?")
+    bull = [g for g in bull if not _sp(g) and btc_allows(_s, True)]
+    bear = [g for g in bear if not _sp(g) and btc_allows(_s, False)]
     best = kind = None
     if bull and (not bear
                  or abs(px - bull[0]["top"]) < abs(px - bear[0]["bot"])):
