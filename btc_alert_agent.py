@@ -360,10 +360,27 @@ FVG_LOOKBACK = 100                 # 7 Sep: 200 -> 100. Bars scanned for
                                    # cluttered the panel and were not going to
                                    # trade soon.
 FVG_MIN_PCT = 0.10                 # a gap under this % of price is noise
-FVG_SWING = 10                     # bars either side that define a swing
+FVG_SWING = 25                     # 8 Sep: 10 -> 25. Bars either side that
+                                   # define a swing. A swing now has to
+                                   # dominate 12.5 hours of 30m bars on each
+                                   # side, so only major turning points count.
+                                   # This drives BOTH rule 3 and rule 6.
 FVG_CONFLUENCE = True              # rule 3. False skips the confluence test
-FVG_CONF_TOL_PCT = 0.35            # how close a prior swing must sit to the
-                                   # zone to count as confluence
+FVG_CONF_DIRECTIONAL = True        # 8 Sep: the level must be the RIGHT KIND.
+                                   # A long needs SUPPORT at the zone - a
+                                   # prior swing LOW. A short needs
+                                   # RESISTANCE - a prior swing HIGH. It used
+                                   # to accept either against either edge, so
+                                   # a bullish gap could qualify on a swing
+                                   # high, which is not what he asked for.
+FVG_CONF_INSIDE = True             # 8 Sep: the prior level must sit INSIDE
+                                   # the zone, between its two edges - not
+                                   # merely near one of them. A swing that
+                                   # stops just short of the gap is a
+                                   # different price to the gap.
+FVG_CONF_TOL_PCT = 0.35            # only used when FVG_CONF_INSIDE is False:
+                                   # how close a prior swing must sit to an
+                                   # edge to count
 FVG_RR = 2.0                       # target, in R
 FVG_STOP_PAD_PCT = 0.30            # 8 Sep: 0.05 -> 0.30, as % of price.
                                    # How far past the far edge the stop sits.
@@ -3164,26 +3181,32 @@ def find_fvgs(candles):
             bot, top = a["h"], c["l"]
             if (top - bot) / px * 100.0 >= FVG_MIN_PCT:
                 prior = [p for (j, p) in hi_sw if j < k - 2]
+                # SUPPORT for a long: prior swing LOWS only
+                _lv = lo_sw if FVG_CONF_DIRECTIONAL else hi_sw + lo_sw
                 out.append({"kind": "bull", "top": top, "bot": bot,
                             "i": k,
                             "bos": bool(prior) and c["h"] > max(prior[-3:]),
                             "conf": any(
-                                min(abs(p - top), abs(p - bot)) / px * 100.0
-                                <= FVG_CONF_TOL_PCT
-                                for (j, p) in hi_sw + lo_sw if j < k - 2),
+                                (bot <= p <= top) if FVG_CONF_INSIDE else
+                                (min(abs(p - top), abs(p - bot)) / px * 100.0
+                                 <= FVG_CONF_TOL_PCT)
+                                for (j, p) in _lv if j < k - 2),
                             "mitigated": any(x["l"] <= top
                                              for x in candles[k + 1:])})
         if a["l"] > c["h"]:                      # BEARISH
             top, bot = a["l"], c["h"]
             if (top - bot) / px * 100.0 >= FVG_MIN_PCT:
                 prior = [p for (j, p) in lo_sw if j < k - 2]
+                # RESISTANCE for a short: prior swing HIGHS only
+                _lv = hi_sw if FVG_CONF_DIRECTIONAL else hi_sw + lo_sw
                 out.append({"kind": "bear", "top": top, "bot": bot,
                             "i": k,
                             "bos": bool(prior) and c["l"] < min(prior[-3:]),
                             "conf": any(
-                                min(abs(p - top), abs(p - bot)) / px * 100.0
-                                <= FVG_CONF_TOL_PCT
-                                for (j, p) in hi_sw + lo_sw if j < k - 2),
+                                (bot <= p <= top) if FVG_CONF_INSIDE else
+                                (min(abs(p - top), abs(p - bot)) / px * 100.0
+                                 <= FVG_CONF_TOL_PCT)
+                                for (j, p) in _lv if j < k - 2),
                             "mitigated": any(x["h"] >= bot
                                              for x in candles[k + 1:])})
     return out
@@ -3238,7 +3261,7 @@ def fvg_signal(ast, candles, i):
                 f"bullish FVG {fmt_px(g['bot'])}-{fmt_px(g['top'])} "
                 f"{'tapped, closed inside' if inside else 'held, closed up'}"
                 f" - unmitigated, BOS"
-                f"{', prior level' if g['conf'] else ''}")
+                f"{(', prior support' if g['kind'] == 'bull' else ', prior resistance') if g['conf'] else ''}")
             return "LONG"
     for g in bear:
         if _spent(g):
@@ -3257,7 +3280,7 @@ def fvg_signal(ast, candles, i):
                 f"bearish FVG {fmt_px(g['bot'])}-{fmt_px(g['top'])} "
                 f"{'tapped, closed inside' if inside else 'held, closed down'}"
                 f" - unmitigated, BOS"
-                f"{', prior level' if g['conf'] else ''}")
+                f"{(', prior support' if g['kind'] == 'bull' else ', prior resistance') if g['conf'] else ''}")
             return "SHORT"
     return None
 
@@ -3291,7 +3314,7 @@ def fvg_gate_status(ast, candles, i, sym=None):
             "age": 0,
             "detail": (f"{fmt_px(best['bot'])}-{fmt_px(best['top'])}, price "
                        f"{dist:+.2f}% away \u00b7 unmitigated \u00b7 BOS"
-                       f"{' \u00b7 prior level' if best['conf'] else ''}")}
+                       f"{(' \u00b7 prior support' if best['kind'] == 'bull' else ' \u00b7 prior resistance') if best['conf'] else ''}")}
 
 
 def im_band(md, i):
