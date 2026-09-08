@@ -394,6 +394,21 @@ FVG_CONF_TOL_PCT = 0.35            # how close a prior swing must sit to an
                                    # EDGE of the zone to count as confluence.
                                    # Used when FVG_CONF_INSIDE is False.
 FVG_RR = 2.0                       # target, in R
+FVG_STOP_ON_CLOSE = True           # 8 Sep: the stop needs a CLOSE past the
+                                   # level, not a wick. Rule 2 already says a
+                                   # candle that closes through the far edge
+                                   # invalidates the gap - so the exit test
+                                   # now matches the rule that defines the
+                                   # setup, rather than firing on any touch.
+                                   # WHAT THIS COSTS: the exit is the bar's
+                                   # CLOSE, not the level, so a real loss runs
+                                   # past -1R. On the impulse engine that
+                                   # produced seven losses at exactly -1.50R
+                                   # before FVG_DISASTER_R caught them. Watch
+                                   # for the same pattern here.
+FVG_DISASTER_R = 1.5               # immediate exit if price runs this many
+                                   # stop distances past entry, no close
+                                   # needed. 0 disables it.
 FVG_STOP_PAD_PCT = 0.30            # 8 Sep: 0.05 -> 0.30, as % of price.
                                    # How far past the far edge the stop sits.
                                    # MEASURED on the first 19 trades: of the
@@ -5156,11 +5171,15 @@ def process_open_trade(asset, trade, candles, ha, last_closed_t):
             # stop hunt. Two escapes: a bar that CLOSES past the level, and
             # the disaster level, which needs no close at all.
             eng = trade.get("engine")
+            # FVG trades carry engine="im" - they share the entry branch -
+            # so the FVG flag is checked first when that engine is live.
             on_close = ((SD_STOP_ON_CLOSE and eng == "sd")
                         or (RS_STOP_ON_CLOSE and eng == "rs")
-                        or (IM_STOP_ON_CLOSE and eng == "im"))
-            dis_r = {"sd": SD_DISASTER_R, "im": IM_DISASTER_R}.get(
-                eng, RS_DISASTER_R)
+                        or (FVG_STOP_ON_CLOSE and FVG_MODE and eng == "im")
+                        or (IM_STOP_ON_CLOSE and not FVG_MODE and eng == "im"))
+            dis_r = (FVG_DISASTER_R if (FVG_MODE and eng == "im")
+                     else {"sd": SD_DISASTER_R,
+                           "im": IM_DISASTER_R}.get(eng, RS_DISASTER_R))
             if on_close and STOP_EXIT:
                 r0 = abs(trade["entry"] - trade["stop"]) or None
                 dis = None
@@ -5330,10 +5349,13 @@ def process_open_trade(asset, trade, candles, ha, last_closed_t):
             eng_l = trade.get("engine")
             on_close_l = ((SD_STOP_ON_CLOSE and eng_l == "sd")
                           or (RS_STOP_ON_CLOSE and eng_l == "rs")
-                          or (IM_STOP_ON_CLOSE and eng_l == "im"))
+                          or (FVG_STOP_ON_CLOSE and FVG_MODE and eng_l == "im")
+                          or (IM_STOP_ON_CLOSE and not FVG_MODE
+                              and eng_l == "im"))
             if on_close_l:
-                dr = {"sd": SD_DISASTER_R, "im": IM_DISASTER_R}.get(
-                    eng_l, RS_DISASTER_R)
+                dr = (FVG_DISASTER_R if (FVG_MODE and eng_l == "im")
+                      else {"sd": SD_DISASTER_R,
+                            "im": IM_DISASTER_R}.get(eng_l, RS_DISASTER_R))
                 r0 = abs(trade["entry"] - trade["stop"]) or None
                 dis = (((trade["entry"] - dr * r0) if long
                         else (trade["entry"] + dr * r0))
