@@ -365,7 +365,18 @@ FVG_CONFLUENCE = True              # rule 3. False skips the confluence test
 FVG_CONF_TOL_PCT = 0.35            # how close a prior swing must sit to the
                                    # zone to count as confluence
 FVG_RR = 2.0                       # target, in R
-FVG_STOP_PAD_PCT = 0.05            # stop this far beyond the far edge
+FVG_STOP_PAD_PCT = 0.30            # 8 Sep: 0.05 -> 0.30, as % of price.
+                                   # How far past the far edge the stop sits.
+                                   # MEASURED on the first 19 trades: of the
+                                   # stopped trades with enough bars since to
+                                   # judge, THREE OF FOUR later reached their
+                                   # target - XMR twice and VVV. The zone was
+                                   # right and the stop was too tight.
+                                   # This is cheap because SIZE follows the
+                                   # stop: a wider stop means less notional,
+                                   # not more dollar risk. Still $10 either
+                                   # way. The cost is a smaller position and a
+                                   # target slightly further in percent.
 
 IM_MODE = False                    # 1 Sep: OFF, replaced by FVG_MODE.
                                    # The impulse engine's record: 6 closed
