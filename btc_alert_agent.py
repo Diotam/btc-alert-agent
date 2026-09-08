@@ -360,10 +360,15 @@ FVG_LOOKBACK = 100                 # 7 Sep: 200 -> 100. Bars scanned for
                                    # cluttered the panel and were not going to
                                    # trade soon.
 FVG_MIN_PCT = 0.10                 # a gap under this % of price is noise
-FVG_SWING = 25                     # 8 Sep: 10 -> 25. Bars either side that
-                                   # define a swing. A swing now has to
-                                   # dominate 12.5 hours of 30m bars on each
-                                   # side, so only major turning points count.
+FVG_SWING = 15                     # 8 Sep: 25 -> 15. Bars either side that
+                                   # define a swing - 7.5 hours of 30m bars
+                                   # each way.
+                                   # At 25, combined with strict containment,
+                                   # the watchlist fell to ONE row across 97
+                                   # markets: swings that rare almost never
+                                   # land inside a gap that narrow. The
+                                   # containment rule is right; 25 was too
+                                   # demanding alongside it.
                                    # This drives BOTH rule 3 and rule 6.
 FVG_CONFLUENCE = True              # rule 3. False skips the confluence test
 FVG_CONF_DIRECTIONAL = True        # 8 Sep: the level must be the RIGHT KIND.
