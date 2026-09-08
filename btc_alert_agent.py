@@ -6423,9 +6423,13 @@ def process_candle(asset, ast, candles, ha, i):
             stop_src = "far edge of the gap"
             if (stop >= entry) if want_long else (stop <= entry):
                 return False
-        if IM_DOLLAR_MODE:
+        if IM_DOLLAR_MODE and not (FVG_MODE and ast.get("fvg")):
             # the R multiple is the cash ratio; the STOP is still structural
             # and is set below. Size is derived from it afterwards.
+            # 7 Sep: this used to run unconditionally and silently overwrote
+            # FVG_RR - the FVG block sets rr just above, and this replaced it
+            # with 15/10 = 1.5. On the FVG engine the ZONE decides the ratio,
+            # so the dollar risk still governs SIZE but no longer the target.
             rr = IM_TARGET_USD / IM_RISK_USD
         if (stop is None and IM_STOP_AT_EMA
                 and len(candles) >= IM_EMA_TREND * max(1, IM_EMA_MIN_BARS)):
