@@ -424,7 +424,21 @@ FVG_INVERSION = True
 FVG_INV_MAX_AGE = 40               # bars since the violation. Older than this
                                    # and the flip has lost its meaning.
 FVG_INV_RR = 2.0
-FVG_STOP_ON_CLOSE = True           # 8 Sep: the stop needs a CLOSE past the
+FVG_STOP_ON_CLOSE = False          # 8 Sep: OFF AGAIN, and this time the
+                                   # number is unambiguous. Turned ON earlier
+                                   # today; the ledger went from +10.80R over
+                                   # 35 trades to -21.77R over 71. TWENTY of
+                                   # the new losses booked at exactly -1.50R
+                                   # - FVG_DISASTER_R firing after the close
+                                   # test held the trade through its stop.
+                                   # That is 10R of pure leakage, about half
+                                   # the damage.
+                                   # The identical failure happened on the
+                                   # impulse engine on 29 Aug: seven losses at
+                                   # -1.50R, same cause, fixed the same way.
+                                   # It has now cost twice. Losses book at a
+                                   # clean -1R with this off.
+                                   # was: the stop needs a CLOSE past the
                                    # level, not a wick. Rule 2 already says a
                                    # candle that closes through the far edge
                                    # invalidates the gap - so the exit test
@@ -6401,6 +6415,11 @@ def adopt_position(asset, ast, candles, coin_sz, entry_px):
              "tp": entry + HA_RR * risk if now_long else entry - HA_RR * risk,
              "size": abs(coin_sz), "left": 1.0, "half": False,
              "risk0": risk, "rr": HA_RR, "opened_t": now_ms(),
+             # the strategy that opened this, carried onto the TRADE so
+             # record_close can log it. It lived only on ast before, so all
+             # 71 rows to 8 Sep recorded path "?".
+             "im_path": (ast.get("_path_for_trade") or ast.get("im_path")
+                         if isinstance(ast, dict) else None),
              # START THE STOP WATCH NOW, not at the beginning of the series.
              # The stop is the LOWEST LOW of the last stop_bars() candles, so
              # by construction a candle inside that window already touched it.
@@ -6519,7 +6538,12 @@ def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger,
     ast["trade"] = {"verdict": direction, "entry": entry, "stop": stop,
                     "tp": tp, "opened_t": c["t"], "checked_t": c["t"],
                     "rr": HA_RR, "risk0": risk, "half": False, "left": 1.0,
-                    "engine": engine or ENGINE_TAG}
+                    "engine": engine or ENGINE_TAG,
+                    # the strategy that opened it. record_close reads the
+                    # TRADE, and im_path lived only on ast - so all 71 rows
+                    # to 8 Sep logged path "?" and could not be split by
+                    # strategy. fvg and ifvg were indistinguishable.
+                    "im_path": ast.get("im_path")}
     # remember WHICH setup this came from so it cannot fire a second time
     if ast.get("setup"):
         ast["traded"] = {"ft": ast["setup"].get("ft"), "dir": direction}
@@ -6690,6 +6714,11 @@ def process_candle(asset, ast, candles, ha, i):
         entry = c["c"]
         path = ast.get("im_path", "extension")
         IM_PATH[sym] = path
+        ast["_path_for_trade"] = path      # record_close reads the TRADE, and
+                                           # im_path lived only on ast - every
+                                           # one of the first 71 rows logged
+                                           # path "?" and could not be split
+                                           # by strategy
         rr = IM_P2_RR if path == "breakout" else IM_P1_RR
         stop = None
         stop_src = ""
