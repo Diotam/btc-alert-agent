@@ -4850,22 +4850,18 @@ def entry_message(asset, direction, plan, zhi, zlo, source, t, trigger):
             reach = ((top - z["low"]) / (top - bot) * 100.0
                      if z["kind"] == "bull"
                      else (z["high"] - bot) / (top - bot) * 100.0)
+            # the zone bounds and the entry price are already in the Setup
+            # line and the Plan - repeating them here said it three times.
             _inv = str(z.get("kind", "")).startswith("inv_")
+            _dir = "bullish" if z["kind"] in ("bull", "inv_bull") else "bearish"
             lines += [
-                ("\U0001F504 <b>Inverted Fair Value Gap</b>" if _inv
-                 else "\U0001F4C8 <b>Fair Value Gap</b>"),
-                f"Zone:  <code>{fmt_px(bot)}</code> - "
-                f"<code>{fmt_px(top)}</code>   "
-                f"<i>{wide:.2f}% wide</i>",
-                f"Entry came <code>{max(0, min(100, reach)):.0f}%</code> into "
-                f"the zone \u00b7 closed <code>{fmt_px(z['entry'])}</code>",
-                (f"<i>broken {z.get('age', 0)} bars ago, now "
+                "\U0001F4C8 <b>Fair Value Gap</b>",
+                (f"<i>INVERTED \u00b7 broken {z.get('age', 0)} bars ago, now "
                  f"{'support' if z['kind'] == 'inv_bull' else 'resistance'}"
                  f" \u00b7 break of structure"
                  f"{' \u00b7 prior level' if z.get('conf') else ''}</i>"
                  if _inv else
-                 f"<i>{'bullish' if z['kind'] == 'bull' else 'bearish'} \u00b7 "
-                 f"unmitigated \u00b7 break of structure"
+                 f"<i>{_dir} \u00b7 unmitigated \u00b7 break of structure"
                  f"{' \u00b7 prior level' if z.get('conf') else ''}</i>"),
                 "",
             ]
