@@ -3486,6 +3486,13 @@ def fvg_gate_status(ast, candles, i, sym=None):
     _s = sym or ast.get("sym", "?")
     bull = [g for g in bull if not _sp(g) and btc_allows(_s, True)]
     bear = [g for g in bear if not _sp(g) and btc_allows(_s, False)]
+    # inversions too, so the panel warns before one fires
+    if FVG_INVERSION:
+        ib, ie = inverted_fvgs(candles[:last + 1])
+        bull = bull + [g for g in ib if not _sp(g) and btc_allows(_s, True)]
+        bear = bear + [g for g in ie if not _sp(g) and btc_allows(_s, False)]
+        bull.sort(key=lambda g: abs(px - g["top"]))
+        bear.sort(key=lambda g: abs(px - g["bot"]))
     best = kind = None
     if bull and (not bear
                  or abs(px - bull[0]["top"]) < abs(px - bear[0]["bot"])):
@@ -3494,15 +3501,24 @@ def fvg_gate_status(ast, candles, i, sym=None):
         best, kind = bear[0], "bear"
     if not best:
         return None
+    inv = str(best["kind"]).startswith("inv_")
     dist = ((px - best["top"]) if kind == "bull"
             else (best["bot"] - px)) / px * 100.0
+    if inv:
+        note = (f"broken {best.get('age', 0)} bars ago, now "
+                f"{'support' if kind == 'bull' else 'resistance'}")
+        trend = ("inverted support" if kind == "bull"
+                 else "inverted resistance")
+    else:
+        note = "unmitigated"
+        trend = "bullish FVG" if kind == "bull" else "bearish FVG"
+    lvl = ((" \u00b7 prior support" if kind == "bull"
+            else " \u00b7 prior resistance") if best.get("conf") else "")
     return {"sym": sym, "dir": "LONG" if kind == "bull" else "SHORT",
             "stage": "ready" if abs(dist) <= 0.5 else "waiting", "run": 0,
-            "trend": "bullish FVG" if kind == "bull" else "bearish FVG",
-            "age": 0,
+            "trend": trend, "age": best.get("age", 0),
             "detail": (f"{fmt_px(best['bot'])}-{fmt_px(best['top'])}, price "
-                       f"{dist:+.2f}% away \u00b7 unmitigated \u00b7 BOS"
-                       f"{(' \u00b7 prior support' if best['kind'] == 'bull' else ' \u00b7 prior resistance') if best['conf'] else ''}")}
+                       f"{dist:+.2f}% away \u00b7 {note} \u00b7 BOS{lvl}")}
 
 
 def im_band(md, i):
@@ -4824,7 +4840,7 @@ def entry_message(asset, direction, plan, zhi, zlo, source, t, trigger):
     # 7 Sep: this was gated on IM_MODE, so with the FVG engine live it
     # resolved to "" and every indicator block was skipped.
     pth = (IM_PATH.get(asset["symbol"], "") if (IM_MODE or FVG_MODE) else "")
-    if pth == "fvg":
+    if pth in ("fvg", "ifvg"):
         z = FVG_INFO.get(asset["symbol"])
         if z:
             top, bot = z["top"], z["bot"]
@@ -4834,16 +4850,23 @@ def entry_message(asset, direction, plan, zhi, zlo, source, t, trigger):
             reach = ((top - z["low"]) / (top - bot) * 100.0
                      if z["kind"] == "bull"
                      else (z["high"] - bot) / (top - bot) * 100.0)
+            _inv = str(z.get("kind", "")).startswith("inv_")
             lines += [
-                "\U0001F4C8 <b>Fair Value Gap</b>",
+                ("\U0001F504 <b>Inverted Fair Value Gap</b>" if _inv
+                 else "\U0001F4C8 <b>Fair Value Gap</b>"),
                 f"Zone:  <code>{fmt_px(bot)}</code> - "
                 f"<code>{fmt_px(top)}</code>   "
                 f"<i>{wide:.2f}% wide</i>",
                 f"Entry came <code>{max(0, min(100, reach)):.0f}%</code> into "
                 f"the zone \u00b7 closed <code>{fmt_px(z['entry'])}</code>",
-                f"<i>{'bullish' if z['kind'] == 'bull' else 'bearish'} \u00b7 "
-                f"unmitigated \u00b7 break of structure"
-                f"{' \u00b7 prior level' if z.get('conf') else ''}</i>",
+                (f"<i>broken {z.get('age', 0)} bars ago, now "
+                 f"{'support' if z['kind'] == 'inv_bull' else 'resistance'}"
+                 f" \u00b7 break of structure"
+                 f"{' \u00b7 prior level' if z.get('conf') else ''}</i>"
+                 if _inv else
+                 f"<i>{'bullish' if z['kind'] == 'bull' else 'bearish'} \u00b7 "
+                 f"unmitigated \u00b7 break of structure"
+                 f"{' \u00b7 prior level' if z.get('conf') else ''}</i>"),
                 "",
             ]
     elif pth == "macd200":
