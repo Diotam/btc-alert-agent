@@ -395,7 +395,8 @@ FVG_CONF_INSIDE = False            # 8 Sep: REVERTED. Strict containment -
 FVG_CONF_TOL_PCT = 0.35            # how close a prior swing must sit to an
                                    # EDGE of the zone to count as confluence.
                                    # Used when FVG_CONF_INSIDE is False.
-FVG_RR = 2.0                       # target, in R
+FVG_RR = 1.5                       # 8 Sep: 2.0 -> 1.5. Break-even rises from
+                                   # 33% to 40%.                       # target, in R
 FVG_BTC_FILTER = False             # 8 Sep: OFF. Built on five crypto shorts
                                    # that all lost - at 35 trades the pattern
                                    # REVERSED: crypto SHORT +2.00R, crypto
@@ -423,7 +424,7 @@ FVG_BTC_EMA = 50                   # bars for that EMA - 25 hours on 30m
 FVG_INVERSION = True
 FVG_INV_MAX_AGE = 40               # bars since the violation. Older than this
                                    # and the flip has lost its meaning.
-FVG_INV_RR = 2.0
+FVG_INV_RR = 1.5
 FVG_STOP_ON_CLOSE = False          # 8 Sep: OFF AGAIN, and this time the
                                    # number is unambiguous. Turned ON earlier
                                    # today; the ledger went from +10.80R over
