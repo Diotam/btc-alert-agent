@@ -132,7 +132,7 @@ ONLY_SYMBOLS = ()
 EXCLUDE = []                       # never trade these (matches the base name
                                    # on any venue). PUMP was removed from
                                    # this list 3 Aug - it trades again
-MAX_ASSETS = 100
+MAX_ASSETS = 110
 
 ASSETS = [                         # used when DISCOVER_ALL = False, or when
     {"symbol": "BTC", "label": "BTC-PERP", "hl_coin": "BTC",   # discovery fails
@@ -396,7 +396,14 @@ FVG_CONF_TOL_PCT = 0.35            # how close a prior swing must sit to an
                                    # EDGE of the zone to count as confluence.
                                    # Used when FVG_CONF_INSIDE is False.
 FVG_RR = 2.0                       # target, in R
-FVG_BTC_FILTER = True              # 8 Sep: CRYPTO must trade WITH bitcoin.
+FVG_BTC_FILTER = False             # 8 Sep: OFF. Built on five crypto shorts
+                                   # that all lost - at 35 trades the pattern
+                                   # REVERSED: crypto SHORT +2.00R, crypto
+                                   # LONG -1.50R. The filter was blocking the
+                                   # better-performing half. A five-trade
+                                   # artifact, and a lesson about acting on
+                                   # one.
+                                   # was: CRYPTO must trade WITH bitcoin.
                                    # The first 19 trades: every crypto SHORT
                                    # lost - XMR twice, MON, PENGU, ENA, five
                                    # of five - while the only winning shorts
@@ -407,6 +414,16 @@ FVG_BTC_FILTER = True              # 8 Sep: CRYPTO must trade WITH bitcoin.
                                    # xyz: synthetics are EXEMPT - they follow
                                    # their own market, not bitcoin.
 FVG_BTC_EMA = 50                   # bars for that EMA - 25 hours on 30m
+# ---- INVERSION FVG. A gap that price CLOSED THROUGH flips polarity: a
+# violated bullish gap becomes resistance, a violated bearish gap becomes
+# support. This is deliberately an EXCEPTION to rule 1 - it trades the gaps
+# the main strategy discards as mitigated - and it inverts rule 2, since the
+# close-through that kills a normal setup is what CREATES this one.
+# Tagged "ifvg" in the ledger so the two never blur together.
+FVG_INVERSION = True
+FVG_INV_MAX_AGE = 40               # bars since the violation. Older than this
+                                   # and the flip has lost its meaning.
+FVG_INV_RR = 2.0
 FVG_STOP_ON_CLOSE = True           # 8 Sep: the stop needs a CLOSE past the
                                    # level, not a wick. Rule 2 already says a
                                    # candle that closes through the far edge
@@ -3235,6 +3252,57 @@ def btc_allows(sym, want_long):
     return up if want_long else (not up)
 
 
+def inverted_fvgs(candles):
+    """Gaps that price CLOSED THROUGH, now flipped.
+
+    A bullish gap violated by a close below its bottom becomes RESISTANCE -
+    price returning to it is a short. A bearish gap violated by a close above
+    its top becomes SUPPORT - a long.
+
+    The break of structure that validated the original gap still stands, so
+    rule 6 carries over. Rule 1 does NOT: these are mitigated by definition.
+    Returned strongest-first on the same logic as the live gaps - the nearest
+    flipped zone to price is the one that matters.
+    """
+    out = []
+    for g in find_fvgs(candles):
+        if not g["bos"]:
+            continue
+        if FVG_CONFLUENCE and not g["conf"]:
+            continue
+        k = g["i"]
+        viol = None
+        for n in range(k + 1, len(candles)):
+            c = candles[n]
+            if g["kind"] == "bull" and c["c"] < g["bot"]:
+                viol = n
+                break
+            if g["kind"] == "bear" and c["c"] > g["top"]:
+                viol = n
+                break
+        if viol is None:
+            continue                       # never violated - not an inversion
+        age = len(candles) - 1 - viol
+        if age > FVG_INV_MAX_AGE:
+            continue                       # the flip has gone stale
+        # since the violation, price must not have already worked back
+        # through the zone - that would spend the flip
+        after = candles[viol + 1:]
+        if g["kind"] == "bull":
+            if any(x["c"] > g["top"] for x in after):
+                continue
+            out.append(dict(g, kind="inv_bear", age=age, viol=viol))
+        else:
+            if any(x["c"] < g["bot"] for x in after):
+                continue
+            out.append(dict(g, kind="inv_bull", age=age, viol=viol))
+    bull = sorted([x for x in out if x["kind"] == "inv_bull"],
+                  key=lambda x: x["top"])
+    bear = sorted([x for x in out if x["kind"] == "inv_bear"],
+                  key=lambda x: -x["bot"])
+    return bull, bear
+
+
 def swing_points(candles, n=None):
     """(highs, lows) as (index, price). A swing high tops the n bars either
     side of it. Feeds the break-of-structure test and confluence."""
@@ -3362,6 +3430,44 @@ def fvg_signal(ast, candles, i):
                 f"{'tapped, closed inside' if inside else 'held, closed down'}"
                 f" - unmitigated, BOS"
                 f"{(', prior support' if g['kind'] == 'bull' else ', prior resistance') if g['conf'] else ''}")
+            return "SHORT"
+
+    # ---- INVERSIONS. Only reached when no live gap fired, so a clean
+    # unmitigated zone always takes precedence over a flipped one.
+    if not FVG_INVERSION:
+        return None
+    ibull, ibear = inverted_fvgs(candles[:last])
+    for g in ibull:                        # violated BEARISH gap = support
+        if _spent(g) or not btc_allows(_sym, True):
+            continue
+        if c["l"] > g["top"] or c["c"] < g["bot"]:
+            continue
+        inside = g["bot"] <= c["c"] <= g["top"]
+        if inside or c["c"] > c["o"]:
+            ast["fvg"] = g
+            FVG_INFO[_sym] = dict(g, entry=c["c"], low=c["l"], high=c["h"])
+            FVG_USED.setdefault(_sym, []).append((g["bot"], g["top"]))
+            ast["im_path"] = "ifvg"
+            ast["im_why"] = (
+                f"INVERTED bearish FVG {fmt_px(g['bot'])}-{fmt_px(g['top'])} "
+                f"- broken {g['age']} bars ago, now support"
+                f"{', BOS' if g['bos'] else ''}")
+            return "LONG"
+    for g in ibear:                        # violated BULLISH gap = resistance
+        if _spent(g) or not btc_allows(_sym, False):
+            continue
+        if c["h"] < g["bot"] or c["c"] > g["top"]:
+            continue
+        inside = g["bot"] <= c["c"] <= g["top"]
+        if inside or c["c"] < c["o"]:
+            ast["fvg"] = g
+            FVG_INFO[_sym] = dict(g, entry=c["c"], low=c["l"], high=c["h"])
+            FVG_USED.setdefault(_sym, []).append((g["bot"], g["top"]))
+            ast["im_path"] = "ifvg"
+            ast["im_why"] = (
+                f"INVERTED bullish FVG {fmt_px(g['bot'])}-{fmt_px(g['top'])} "
+                f"- broken {g['age']} bars ago, now resistance"
+                f"{', BOS' if g['bos'] else ''}")
             return "SHORT"
     return None
 
