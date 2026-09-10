@@ -443,7 +443,13 @@ FVG_SWEEP_TOL_PCT = 0.15           # how close two swings must sit to count as
                                    # "equal" - this is where stops pile up
 FVG_SWEEP_LOOKBACK = 10            # bars before the gap the sweep must fall in
 FVG_SWEEP_MIN_TOUCH = 2            # swings at that level to call it liquidity
-FVG_INVERSION = True
+FVG_INVERSION = False              # 10 Sep: OFF. Measured on the first
+                                   # tagged sample: clean gaps 38 trades,
+                                   # 27W, +29.50R, +0.78R each. Inversions 22
+                                   # trades, 7W, -4.00R, -0.18R each. A 71%
+                                   # win rate against 32%, on enough trades
+                                   # to act on. The flip was diluting the
+                                   # strategy that works. True re-enables.
 FVG_INV_MAX_AGE = 40               # bars since the violation. Older than this
                                    # and the flip has lost its meaning.
 FVG_INV_RR = 1.5
