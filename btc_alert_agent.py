@@ -415,12 +415,34 @@ FVG_BTC_FILTER = False             # 8 Sep: OFF. Built on five crypto shorts
                                    # xyz: synthetics are EXEMPT - they follow
                                    # their own market, not bitcoin.
 FVG_BTC_EMA = 50                   # bars for that EMA - 25 hours on 30m
+# ---- 10 Sep: ONE-WAY gate. No crypto LONGS while BTC sits under its 200
+# EMA. Shorts are untouched, and so are the xyz: synthetics - they follow
+# their own market. This is narrower than FVG_BTC_FILTER above, which blocked
+# both directions and was turned off when the five-trade pattern behind it
+# reversed. A bear regime blocking longs is a more defensible claim than a
+# 50-EMA cross blocking either side.
+FVG_BTC_LONG_GATE = True
+FVG_BTC_LONG_EMA = 200             # 100 hours on 30m
 # ---- INVERSION FVG. A gap that price CLOSED THROUGH flips polarity: a
 # violated bullish gap becomes resistance, a violated bearish gap becomes
 # support. This is deliberately an EXCEPTION to rule 1 - it trades the gaps
 # the main strategy discards as mitigated - and it inverts rule 2, since the
 # close-through that kills a normal setup is what CREATES this one.
 # Tagged "ifvg" in the ledger so the two never blur together.
+# ---- LIQUIDITY SWEEP. Stops cluster where several swings sit at the SAME
+# price - equal highs above, equal lows below. Price runs through that level,
+# takes the stops, and reverses. A gap formed by that reversal is the one
+# worth trading; a gap formed without a sweep behind it is just a gap.
+# A sweep is a WICK through the level that CLOSES BACK inside. A candle that
+# closes beyond has broken the level, not swept it.
+# Defaults OFF - this is a FOURTH filter on top of unmitigated, break of
+# structure and confluence, and filters compound faster than they look. Turn
+# it on and compare the watchlist count before trusting it.
+FVG_SWEEP = False
+FVG_SWEEP_TOL_PCT = 0.15           # how close two swings must sit to count as
+                                   # "equal" - this is where stops pile up
+FVG_SWEEP_LOOKBACK = 10            # bars before the gap the sweep must fall in
+FVG_SWEEP_MIN_TOUCH = 2            # swings at that level to call it liquidity
 FVG_INVERSION = True
 FVG_INV_MAX_AGE = 40               # bars since the violation. Older than this
                                    # and the flip has lost its meaning.
@@ -3257,14 +3279,100 @@ def btc_bias():
     return _BTC_BIAS["up"]
 
 
+_BTC_200 = {"t": 0, "above": None}
+
+
+def btc_above_200():
+    """True when BTC's last closed bar is above its 200 EMA. Cached one bar.
+    None when it cannot be computed - which blocks nothing."""
+    span = MS.get(TF, 1_800_000)
+    now = now_ms()
+    if _BTC_200["above"] is not None and now - _BTC_200["t"] < span:
+        return _BTC_200["above"]
+    try:
+        _, cs = fetch({"symbol": "BTC", "hl_coin": "BTC", "fallbacks": [],
+                       "cls": "crypto"}, TF, LOOKBACK.get(TF, 750))
+        need = FVG_BTC_LONG_EMA * 3
+        if not cs or len(cs) < need:
+            log(f"btc_above_200: only {len(cs) if cs else 0} bars, need "
+                f"{need} - gate not applied")
+            return _BTC_200["above"]
+        e = ema([x["c"] for x in cs], FVG_BTC_LONG_EMA)
+        _BTC_200["above"] = cs[-2]["c"] > e[-1]
+        _BTC_200["t"] = now
+    except Exception as ex:
+        log(f"btc_above_200 failed: {type(ex).__name__}: {ex}")
+    return _BTC_200["above"]
+
+
 def btc_allows(sym, want_long):
     """Crypto trades WITH bitcoin. xyz: synthetics are exempt."""
-    if not FVG_BTC_FILTER or str(sym).startswith("xyz:"):
+    if str(sym).startswith("xyz:"):
+        return True
+    # one-way: no crypto longs under the 200 EMA
+    if FVG_BTC_LONG_GATE and want_long:
+        above = btc_above_200()
+        if above is False:
+            return False
+    if not FVG_BTC_FILTER:
         return True
     up = btc_bias()
     if up is None:
         return True                     # unknown - do not block on a failure
     return up if want_long else (not up)
+
+
+def liquidity_levels(candles, upto):
+    """(highs, lows) where stops cluster - prices touched by MIN_TOUCH swings.
+
+    Equal highs are resting sell-side liquidity, equal lows buy-side. Two
+    swings within FVG_SWEEP_TOL_PCT of each other count as the same level.
+    """
+    hi_sw, lo_sw = swing_points(candles[:upto])
+    out = []
+    for pts in (hi_sw, lo_sw):
+        levels = []
+        for (j, p) in pts:
+            for lv in levels:
+                if abs(p - lv["px"]) / (p or 1) * 100.0 <= FVG_SWEEP_TOL_PCT:
+                    lv["n"] += 1
+                    lv["px"] = (lv["px"] * (lv["n"] - 1) + p) / lv["n"]
+                    break
+            else:
+                levels.append({"px": p, "n": 1})
+        out.append([lv["px"] for lv in levels
+                    if lv["n"] >= FVG_SWEEP_MIN_TOUCH])
+    return out[0], out[1]
+
+
+def swept_before(candles, k, want_long):
+    """Did price sweep liquidity in the bars just before the gap at k?
+
+    A LONG wants buy-side liquidity taken - a wick BELOW equal lows that
+    closes back above. A SHORT wants equal highs swept from above.
+    """
+    if not FVG_SWEEP:
+        return True
+    # scan levels up to the gap itself. Truncating at k-2 cut off the bars a
+    # swing needs on its right to confirm, so a level touched twice was only
+    # ever seen once and no liquidity was found at all.
+    eq_hi, eq_lo = liquidity_levels(candles, k)
+    lo_i = max(1, k - FVG_SWEEP_LOOKBACK)
+    for n in range(lo_i, k + 1):
+        c = candles[n]
+        if want_long:
+            for lv in eq_lo:
+                if c["l"] < lv and c["c"] > lv:
+                    return True
+        else:
+            for lv in eq_hi:
+                if c["h"] > lv and c["c"] < lv:
+                    return True
+    return False
+
+
+def liquidity_levels_unused():
+    return None
 
 
 def inverted_fvgs(candles):
@@ -3383,7 +3491,8 @@ def live_fvgs(candles):
     """
     g = [x for x in find_fvgs(candles)
          if x["bos"] and not x["mitigated"]
-         and (x["conf"] or not FVG_CONFLUENCE)]
+         and (x["conf"] or not FVG_CONFLUENCE)
+         and swept_before(candles, x["i"], x["kind"] == "bull")]
     return (sorted([x for x in g if x["kind"] == "bull"],
                    key=lambda x: x["top"]),
             sorted([x for x in g if x["kind"] == "bear"],
