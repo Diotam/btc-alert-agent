@@ -932,9 +932,6 @@ function render(d){
   //   bullish FVG  an unmitigated gap BELOW price with a break of structure
   //                behind it - a tap that closes inside or up is a LONG
   //   bearish FVG  the mirror, above price
-  //   inverted support / resistance  a gap price CLOSED THROUGH, now
-  //                flipped - these are mitigated by design, the exception
-  //                to rule 1
   // The impulse engine's states (coiled / oversold / overbought) are still
   // counted so rolling IM_MODE back keeps the panel readable.
   const _n=document.getElementById('n-gates'); if(_n) _n.textContent=G.length;
@@ -943,11 +940,8 @@ function render(d){
     const cnt=t=>G.filter(x=>x.trend===t).length;
     const bits=[];
     const nbu=cnt('bullish FVG'), nbe=cnt('bearish FVG');
-    const nis=cnt('inverted support'), nir=cnt('inverted resistance');
     if(nbu) bits.push(nbu+' bullish');
     if(nbe) bits.push(nbe+' bearish');
-    if(nis) bits.push(nis+' inv support');
-    if(nir) bits.push(nir+' inv resistance');
     const nc=cnt('coiled');
     const nos=cnt('oversold')+cnt('pullback');
     const nob=cnt('overbought')+cnt('rally');
