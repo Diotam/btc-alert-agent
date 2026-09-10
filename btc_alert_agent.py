@@ -565,7 +565,20 @@ IM_DOLLAR_MODE = True              # 29 Aug: REWORKED. It used to derive the
                                    # 200 EMA, or the swing), and SIZE is set
                                    # so that distance costs exactly
                                    # IM_RISK_USD. Leverage becomes an output.
-IM_MARGIN_USD = 100.0
+# ---- 10 Sep: FIXED MARGIN sizing. Every trade commits IM_MARGIN_USD of
+# collateral. The stop still comes from the GAP - its far edge, which is the
+# level that invalidates the setup under rule 2 - and leverage is derived so
+# that a stop-out costs at most IM_MAX_LOSS_FRAC of the margin. That keeps
+# the stop and the liquidation price apart: at 50x a 2% stop IS liquidation.
+IM_SIZE_MODE = "margin"            # "margin" - fixed collateral, gap stop,
+                                   #            leverage derived, risk varies
+                                   # "risk"   - the old way: fixed $ risk,
+                                   #            notional derived
+IM_MARGIN_USD = 50.0
+IM_MAX_LOSS_FRAC = 0.50            # a stop-out may cost at most this share of
+                                   # the margin. Bounds the leverage: a 1%
+                                   # stop allows 50x, a 2% stop 25x, a 4% stop
+                                   # 12.5x - always capped by the market too.
 IM_RISK_USD = 10.0                 # the stop, in cash
 IM_TARGET_USD = 15.0               # the target, in cash
 IM_DOLLAR_MIN_STOP_PCT = 0.10      # a floor. At very high leverage $10 is a
@@ -1721,7 +1734,7 @@ ALERT_ENTRIES = True
 ALERT_LIFECYCLE = True             # target, runner, stop and breakeven alerts
 
 # --- execution ------------------------------------------------------------
-EXEC_LIVE = False                   # place real orders. Back ON 4 Aug after a
+EXEC_LIVE = True                   # place real orders. Back ON 4 Aug after a
                                    # night tracked-only. When False: every
                                    # entry alert carries "NOT PLACED on
                                    # Hyperliquid - live execution OFF"; the
@@ -1739,7 +1752,7 @@ EXEC_LOG_ORDERS = True             # write every sized order to orders.log.
                                    # gated execution. EXEC_LIVE alone decides
                                    # whether real orders are sent
 EXEC_TESTNET = False               # False = MAINNET, real money
-EXEC_MARGIN_MODE = "cross"         # "isolated" or "cross". CROSS as of
+EXEC_MARGIN_MODE = "isolated"         # "isolated" or "cross". CROSS as of
                                    # 3 Aug, reverting the isolated switch he
                                    # made earlier the same day. Cross lets
                                    # one bad position draw on the whole
@@ -1765,7 +1778,7 @@ EXEC_SIZING = "margin"             # "margin"   = a FIXED DOLLAR AMOUNT of
                                    #   size, whatever collateral that needs
                                    # "risk"     = fixed dollar LOSS at the
                                    #   stop; the position size then varies
-EXEC_MARGIN_USD = 150.0             # collateral per trade in "margin" mode
+EXEC_MARGIN_USD = 50.0             # collateral per trade in "margin" mode
 EXEC_LEVERAGE = 999                # MAX leverage: eff_leverage() clamps this
                                    # to each market's own maximum, so 999
                                    # simply means "whatever this market
@@ -1791,7 +1804,7 @@ EXEC_MAX_NOTIONAL_USD = 12000      # cap on position value. Raised from 8000
                                    # THIS ABOVE EXEC_MARGIN_USD x 40 or the
                                    # cap trims the position and the risk
                                    # with it, without saying so
-EXEC_MAX_POSITIONS = 0             # concurrent live positions. 0 = NO CAP:
+EXEC_MAX_POSITIONS = 20             # concurrent live positions. 0 = NO CAP:
                                    # the only remaining limits are the halt
                                    # file, EXEC_MAX_NOTIONAL_USD per trade,
                                    # and whatever margin the account has
@@ -5891,6 +5904,14 @@ def plan_entry_orders(asset, trade, live_px=None):
         # market's maximum, and place_entry_live SETS that same leverage on
         # the exchange, so the two cannot disagree.
         lev = eff_leverage(asset)
+        # 10 Sep: BOUND the leverage the same way the paper trade does, so a
+        # stop-out costs at most IM_MAX_LOSS_FRAC of the margin. Without
+        # this the live order used market MAX - on a 50x market with a 2%
+        # stop the stop and the liquidation price were the same level, while
+        # the dashboard showed a bounded position. Live and paper now agree.
+        _spct = per_unit / size_px
+        if IM_SIZE_MODE == "margin" and _spct > 0:
+            lev = max(1.0, min(lev, IM_MAX_LOSS_FRAC / _spct))
         size = (EXEC_MARGIN_USD * lev) / size_px
     elif EXEC_SIZING == "notional":
         # the SAME dollar amount goes into every trade. What that costs if
@@ -6909,21 +6930,27 @@ def process_candle(asset, ast, candles, ha, i):
             except Exception as e:
                 log(f"{sym}: claude gate failed {type(e).__name__}: {e}")
         if IM_DOLLAR_MODE and risk_t > 0:
-            # SIZE FROM THE STOP. notional * (risk_t/entry) = IM_RISK_USD
             _spct = risk_t / entry * 100.0
             if _spct < IM_DOLLAR_MIN_STOP_PCT:
                 if LOG_SKIPS:
                     log(f"{sym}: stop only {_spct:.3f}% - under the "
                         f"{IM_DOLLAR_MIN_STOP_PCT}% floor, skipped")
                 return False
-            _notional = IM_RISK_USD / (_spct / 100.0)
-            _lev_needed = _notional / IM_MARGIN_USD
             _cap = eff_leverage(asset)
-            if _lev_needed > _cap:
-                # cannot size up enough - take the smaller position and risk
-                # less than the full $10 rather than widening the stop
-                _notional = IM_MARGIN_USD * _cap
-                _lev_needed = _cap
+            if IM_SIZE_MODE == "margin":
+                # FIXED MARGIN. Leverage is whatever keeps a stop-out inside
+                # IM_MAX_LOSS_FRAC of the collateral, never above the market
+                # cap. Risk in dollars is an OUTPUT here.
+                _lev_safe = IM_MAX_LOSS_FRAC / (_spct / 100.0)
+                _lev_needed = max(1.0, min(_cap, _lev_safe))
+                _notional = IM_MARGIN_USD * _lev_needed
+            else:
+                # FIXED RISK. notional * (risk_t/entry) = IM_RISK_USD
+                _notional = IM_RISK_USD / (_spct / 100.0)
+                _lev_needed = _notional / IM_MARGIN_USD
+                if _lev_needed > _cap:
+                    _notional = IM_MARGIN_USD * _cap
+                    _lev_needed = _cap
             _risk_actual = _notional * _spct / 100.0
             ast["im_notional"] = round(_notional, 2)
             ast["im_lev"] = round(_lev_needed, 2)
