@@ -332,6 +332,58 @@ CROSS_SLOPE_BARS = 5               # bars per slope window. 5 on 30m = 2.5h.
 # md = mi>hi ? mi-hi : (mi<lo ? mi-lo : 0), sb = SMA(md,9), sh = md-sb
 # NOTHING from the reversal-200 engine feeds this. RS_MODE is off.
 
+
+# ======================= MACD TRADING SYSTEM =======================
+# Three systems stacked. All three must agree before a trade.
+#
+#  1 TREND   - MACD above zero means LONGS ONLY, below zero SHORTS ONLY.
+#              Only crossovers beyond the threshold count, and the cross must
+#              hold for MACD_CONFIRM_BARS before it fires.
+#  2 REVERSAL- price makes a higher high while MACD makes a lower high =
+#              bearish divergence. Mirrored for bullish.
+#  3 CONFIRM - daily gives the BIAS (which side of zero), 4h gives the
+#              SIGNAL (crossover or divergence), 1h gives the TRIGGER (the
+#              histogram flipping). Any disagreement = no trade.
+MACD_MODE = False                  # True switches the engine to this
+MACD_FAST, MACD_SLOW, MACD_SIG = 12, 26, 9
+
+# ---- THE THRESHOLD. His spec says "above +0.5 / below -0.5". MACD is in
+# PRICE UNITS, so a fixed 0.5 means something completely different on BTC at
+# 76,000 than on a token at 0.0004 - it would take every crossover on one and
+# none on the other. "pct" scales it per market and is the only version that
+# can serve 93 symbols at once. "abs" is the literal reading.
+MACD_THRESH_MODE = "pct"           # "pct" or "abs"
+MACD_THRESH = 0.5                  # in "abs": MACD units. In "pct": % of price
+MACD_CONFIRM_BARS = 2              # candles the cross must hold (his 2-3).
+                                   # Measures the TREND DIRECTION: the line
+                                   # must stay crossed AND be further from
+                                   # the signal than it was at the cross.
+                                   # Separate from MACD_DIV_PIVOT below,
+                                   # which is about swing detection.
+
+MACD_DIVERGENCE = True             # system 2
+MACD_DIV_LOOKBACK = 60             # bars searched for the two swing highs
+MACD_DIV_MIN_GAP = 5               # bars apart the two swings must be
+MACD_DIV_PIVOT = 3                 # bars either side that confirm a pivot. At
+                                   # 1 a smooth trend produces NO pivots at
+                                   # all until it turns, which is why the
+                                   # first build never found a divergence.
+
+MACD_MTF = True                    # system 3. False trades the entry TF alone
+MACD_TF_BIAS = "1d"                # daily - which side of zero
+MACD_TF_SIGNAL = "4h"              # the crossover or divergence
+MACD_TF_TRIGGER = "1h"             # the histogram flip. This is also TF.
+MACD_DIV_ONLY = True               # 10 Sep: DIVERGENCE ONLY. The crossover
+                                   # and multi-timeframe systems stay in the
+                                   # file but are not consulted - price makes
+                                   # a higher high while MACD makes a lower
+                                   # high, and that is the whole signal.
+MACD_DIV_CONFIRM = True            # require the bar to close in the trade's
+                                   # direction. The divergence says a reversal
+                                   # is coming; this waits for it to start.
+MACD_RR = 1.5
+MACD_SWING_BARS = 20               # stop at this swing high/low
+
 # ============================ FAIR VALUE GAP ============================
 # A three-candle imbalance. BULLISH: candle1.high < candle3.low, leaving an
 # untraded band between them. BEARISH: candle1.low > candle3.high.
@@ -1734,7 +1786,7 @@ ALERT_ENTRIES = True
 ALERT_LIFECYCLE = True             # target, runner, stop and breakeven alerts
 
 # --- execution ------------------------------------------------------------
-EXEC_LIVE = True                   # place real orders. Back ON 4 Aug after a
+EXEC_LIVE = False                   # place real orders. Back ON 4 Aug after a
                                    # night tracked-only. When False: every
                                    # entry alert carries "NOT PLACED on
                                    # Hyperliquid - live execution OFF"; the
@@ -1804,7 +1856,7 @@ EXEC_MAX_NOTIONAL_USD = 12000      # cap on position value. Raised from 8000
                                    # THIS ABOVE EXEC_MARGIN_USD x 40 or the
                                    # cap trims the position and the risk
                                    # with it, without saying so
-EXEC_MAX_POSITIONS = 20             # concurrent live positions. 0 = NO CAP:
+EXEC_MAX_POSITIONS = 0             # concurrent live positions. 0 = NO CAP:
                                    # the only remaining limits are the halt
                                    # file, EXEC_MAX_NOTIONAL_USD per trade,
                                    # and whatever margin the account has
@@ -1962,6 +2014,8 @@ def fetch_hyperliquid(coin, interval, lookback):
 
 def engine_label():
     """What the alerts should call the running engine."""
+    if MACD_MODE:
+        return "MACD Divergence"
     if FVG_MODE:
         return "Fair Value Gap"
     if IM_MODE:
@@ -3443,6 +3497,253 @@ def inverted_fvgs(candles):
     bear = sorted([x for x in out if x["kind"] == "inv_bear"],
                   key=lambda x: -x["bot"])
     return bull, bear
+
+
+def macd_div_signal(ast, candles, i):
+    """DIVERGENCE ENGINE. "LONG"/"SHORT" on the last closed bar, else None.
+
+    Bearish: price makes a HIGHER HIGH, MACD makes a LOWER HIGH - the rally
+    is running on less momentum than the one before it. Bullish mirrors it.
+
+    macd_divergence finds the pattern; this decides whether to act on it.
+    The divergence alone says a reversal is COMING, not that it has begun,
+    so MACD_DIV_CONFIRM waits for a bar closing the trade's way.
+    """
+    w = candles[:i]
+    if len(w) < MACD_DIV_LOOKBACK + 5:
+        return None
+    side = macd_divergence(w)
+    if not side:
+        return None
+    c = w[-1]
+    if MACD_DIV_CONFIRM:
+        down = c["c"] < c["o"]
+        if (side == "SHORT") != down:
+            if LOG_SKIPS:
+                log(f"{ast.get('sym','?')}: {side.lower()} divergence but the "
+                    f"candle closed the other way - waiting")
+            return None
+    line, _, _ = macd_line(w)
+    ast["im_path"] = "macd_div"
+    ast["im_why"] = (
+        f"{'bearish' if side == 'SHORT' else 'bullish'} divergence - price "
+        f"{'higher high' if side == 'SHORT' else 'lower low'} while MACD "
+        f"{'lower high' if side == 'SHORT' else 'higher low'}"
+        f" (MACD {line[-1]:+.4g})")
+    return side
+
+
+def macd_div_gate(ast, candles, i, sym=None):
+    """Watchlist: a live divergence waiting on its confirming candle."""
+    w = candles[:i]
+    if len(w) < MACD_DIV_LOOKBACK + 5:
+        return None
+    side = macd_divergence(w)
+    if not side:
+        return None
+    c = w[-1]
+    down = c["c"] < c["o"]
+    ready = (side == "SHORT") == down
+    line, _, _ = macd_line(w)
+    return {"sym": sym, "dir": "LONG" if side == "LONG" else "SHORT",
+            "stage": "ready" if ready else "waiting", "run": 0,
+            "trend": ("bearish divergence" if side == "SHORT"
+                      else "bullish divergence"),
+            "age": 0,
+            "detail": (f"price {'higher high' if side == 'SHORT' else 'lower low'}"
+                       f", MACD {'lower high' if side == 'SHORT' else 'higher low'}"
+                       f" \u00b7 MACD {line[-1]:+.4g} \u00b7 "
+                       f"{'candle confirms' if ready else 'waiting on a candle'}")}
+
+
+def macd_line(candles):
+    """(line, signal, hist) using MACD_FAST/SLOW/SIG."""
+    if not candles or len(candles) < MACD_SLOW + MACD_SIG + 2:
+        return [], [], []
+    c = [x["c"] for x in candles]
+    ef, es = ema(c, MACD_FAST), ema(c, MACD_SLOW)
+    line = [a - b for a, b in zip(ef, es)]
+    sig = ema(line, MACD_SIG)
+    return line, sig, [a - b for a, b in zip(line, sig)]
+
+
+def macd_thresh(px):
+    """The +/- level a crossover must be beyond, in MACD units."""
+    if MACD_THRESH_MODE == "abs":
+        return MACD_THRESH
+    return abs(px) * MACD_THRESH / 100.0
+
+
+def macd_bias(candles):
+    """SYSTEM 1 / SYSTEM 3 BIAS. 1 when MACD is above zero, -1 below, 0 when
+    it cannot be read. Above zero means LONGS ONLY."""
+    line, _, _ = macd_line(candles)
+    if not line:
+        return 0
+    return 1 if line[-1] > 0 else -1
+
+
+def macd_cross(candles):
+    """SYSTEM 1 SIGNAL. "LONG"/"SHORT" when a qualifying crossover has held
+    for MACD_CONFIRM_BARS, else None.
+
+    The cross must have happened BEYOND the threshold - his "above +0.5,
+    below -0.5" - and the line must still be on that side of the signal
+    every bar since. A cross that flips back inside the window is not a
+    confirmed cross.
+    """
+    line, sig, _ = macd_line(candles)
+    n = max(1, MACD_CONFIRM_BARS)
+    if len(line) < n + 3:
+        return None
+    j = len(line) - 1
+    k = j - n                      # the bar the cross must have happened on
+    if k < 1:
+        return None
+    th = macd_thresh(candles[-1]["c"])
+    up = line[k - 1] <= sig[k - 1] and line[k] > sig[k]
+    dn = line[k - 1] >= sig[k - 1] and line[k] < sig[k]
+    # CONFIRMATION measures the trend DIRECTION, not merely that the cross
+    # held. MACD drifting back toward the signal line for two bars is a
+    # failing cross even though it never re-crossed - so the line must also
+    # be further from the signal than it was at the cross.
+    held_up = all(line[m] > sig[m] for m in range(k, j + 1))
+    held_dn = all(line[m] < sig[m] for m in range(k, j + 1))
+    adv_up = (line[j] - sig[j]) >= (line[k] - sig[k])
+    adv_dn = (sig[j] - line[j]) >= (sig[k] - line[k])
+    if up and line[k] > th and held_up and adv_up:
+        return "LONG"
+    if dn and line[k] < -th and held_dn and adv_dn:
+        return "SHORT"
+    if LOG_SKIPS and ((up and line[k] > th) or (dn and line[k] < -th)):
+        log(f"cross beyond the line but not advancing over "
+            f"{n} bars - no trade")
+    return None
+
+
+def macd_divergence(candles):
+    """SYSTEM 2. "SHORT" on bearish divergence - price makes a HIGHER HIGH
+    while MACD makes a LOWER HIGH. "LONG" on the mirror.
+
+    Two things the first build got wrong, both of which made it blind:
+      - a 3-bar pivot finds nothing on a smooth trend, because a rising
+        series has no local maximum until it turns. MACD_DIV_PIVOT widens it.
+      - comparing only the LAST TWO pivots picks up whatever two wiggles
+        happen to be adjacent. The comparison that matters is the most
+        recent peak against the HIGHEST earlier one.
+    """
+    if not MACD_DIVERGENCE:
+        return None
+    line, _, _ = macd_line(candles)
+    if not line or len(line) < MACD_DIV_LOOKBACK:
+        return None
+    n = max(1, MACD_DIV_PIVOT)
+    w = candles[-MACD_DIV_LOOKBACK:]
+    lw = line[-MACD_DIV_LOOKBACK:]
+    hi, lo = [], []
+    for k in range(n, len(w) - n):
+        seg = range(k - n, k + n + 1)
+        if all(w[k]["h"] >= w[m]["h"] for m in seg if m != k):
+            hi.append(k)
+        if all(w[k]["l"] <= w[m]["l"] for m in seg if m != k):
+            lo.append(k)
+
+    if len(hi) >= 2:
+        b = hi[-1]                              # most recent confirmed peak
+        prior = [a for a in hi[:-1] if b - a >= MACD_DIV_MIN_GAP]
+        if prior:
+            a = max(prior, key=lambda x: w[x]["h"])   # the highest one
+            if w[b]["h"] > w[a]["h"] and lw[b] < lw[a]:
+                return "SHORT"
+    if len(lo) >= 2:
+        b = lo[-1]
+        prior = [a for a in lo[:-1] if b - a >= MACD_DIV_MIN_GAP]
+        if prior:
+            a = min(prior, key=lambda x: w[x]["l"])   # the lowest one
+            if w[b]["l"] < w[a]["l"] and lw[b] > lw[a]:
+                return "LONG"
+    return None
+
+
+def macd_trigger(candles, want_long):
+    """SYSTEM 3 TRIGGER. The histogram must have FLIPPED into the trade's
+    direction on the last closed bar."""
+    _, _, h = macd_line(candles)
+    if len(h) < 2:
+        return False
+    return (h[-1] > 0 >= h[-2]) if want_long else (h[-1] < 0 <= h[-2])
+
+
+def macd_signal(ast, candles, i):
+    """All three systems. Returns "LONG"/"SHORT" or None.
+
+    Without MTF the entry timeframe does every job. With it, the daily sets
+    the bias, the 4h carries the signal, and this timeframe triggers.
+    """
+    w = candles[:i]                       # closed bars only
+    if len(w) < MACD_SLOW + MACD_SIG + 5:
+        return None
+    sym = ast.get("sym", "?")
+    asset = ast.get("_asset")
+
+    if MACD_MTF and asset:
+        bias_c = tf_candles(asset, MACD_TF_BIAS)
+        sig_c = tf_candles(asset, MACD_TF_SIGNAL)
+        if not bias_c or not sig_c:
+            return None
+        bias = macd_bias(bias_c)
+        if bias == 0:
+            return None
+        side = macd_cross(sig_c) or macd_divergence(sig_c)
+        if not side:
+            return None
+        # every layer must agree
+        if (side == "LONG") != (bias > 0):
+            if LOG_SKIPS:
+                log(f"{sym}: {MACD_TF_SIGNAL} says {side} but "
+                    f"{MACD_TF_BIAS} bias is "
+                    f"{'bullish' if bias > 0 else 'bearish'} - no trade")
+            return None
+        if not macd_trigger(w, side == "LONG"):
+            return None
+        ast["im_path"] = "macd_mtf"
+        ast["im_why"] = (f"{MACD_TF_BIAS} MACD {'above' if bias > 0 else 'below'}"
+                         f" zero, {MACD_TF_SIGNAL} {side.lower()} signal, "
+                         f"{TF} histogram flipped")
+        return side
+
+    bias = macd_bias(w)
+    if bias == 0:
+        return None
+    side = macd_cross(w) or macd_divergence(w)
+    if not side:
+        return None
+    if (side == "LONG") != (bias > 0):
+        return None
+    ast["im_path"] = "macd"
+    ast["im_why"] = (f"MACD {'above' if bias > 0 else 'below'} zero, "
+                     f"confirmed {side.lower()} crossover")
+    return side
+
+
+def tf_candles(asset, tf):
+    """Candles on another timeframe, cached one bar per symbol."""
+    key = (asset.get("symbol"), tf)
+    span = MS.get(tf, 3_600_000)
+    now = now_ms()
+    ent = _TF_CACHE.get(key)
+    if ent and now - ent[0] < span:
+        return ent[1]
+    try:
+        _, cs = fetch(asset, tf, LOOKBACK.get(tf, 400))
+    except Exception:
+        cs = None
+    if cs:
+        _TF_CACHE[key] = (now, cs)
+    return cs
+
+
+_TF_CACHE = {}
 
 
 def swing_points(candles, n=None):
@@ -6827,12 +7128,15 @@ def process_candle(asset, ast, candles, ha, i):
     # BTC vote - the cross IS the trend read, so layering the old filters on
     # top would refuse the very setups it exists to take.
     # ---------------- IMPULSE MACD ENGINE (LazyBear, his 20 Aug spec) ------
-    if IM_MODE or FVG_MODE:
+    if IM_MODE or FVG_MODE or MACD_MODE:
         ast["sym"] = sym
-        side = (fvg_signal(ast, candles, i) if FVG_MODE
+        ast["_asset"] = asset
+        side = (macd_div_signal(ast, candles, i) if MACD_MODE
+                else fvg_signal(ast, candles, i) if FVG_MODE
                 else im_signal(ast, candles, i))
         try:
-            _g = (fvg_gate_status(ast, candles, i, sym) if FVG_MODE
+            _g = (macd_div_gate(ast, candles, i, sym) if MACD_MODE
+                  else fvg_gate_status(ast, candles, i, sym) if FVG_MODE
                   else im_gate_status(ast, candles, i, sym))
             if _g:
                 # stamp the bar this row describes. A symbol that drops out
@@ -6859,7 +7163,21 @@ def process_candle(asset, ast, candles, ha, i):
         rr = IM_P2_RR if path == "breakout" else IM_P1_RR
         stop = None
         stop_src = ""
-        if FVG_MODE and ast.get("fvg"):
+        if MACD_MODE:
+            # the swing the divergence formed against - the high price just
+            # failed to hold, or the low it just failed to break
+            _lo = max(0, i - MACD_SWING_BARS)
+            _win = candles[_lo:i]
+            if not _win:
+                return False
+            stop = (min(x["l"] for x in _win) if want_long
+                    else max(x["h"] for x in _win))
+            risk_t = abs(entry - stop)
+            rr = MACD_RR
+            stop_src = f"{MACD_SWING_BARS}-bar swing"
+            if risk_t <= 0:
+                return False
+        elif FVG_MODE and ast.get("fvg"):
             # the zone's FAR edge, padded. If price closes through it the
             # gap is invalid by his rule 2, so there is no reason to still
             # be in the trade.
