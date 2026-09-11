@@ -344,7 +344,7 @@ CROSS_SLOPE_BARS = 5               # bars per slope window. 5 on 30m = 2.5h.
 #  3 CONFIRM - daily gives the BIAS (which side of zero), 4h gives the
 #              SIGNAL (crossover or divergence), 1h gives the TRIGGER (the
 #              histogram flipping). Any disagreement = no trade.
-MACD_MODE = False                  # True switches the engine to this
+MACD_MODE = True                   # True switches the engine to this
 MACD_FAST, MACD_SLOW, MACD_SIG = 12, 26, 9
 
 # ---- THE THRESHOLD. His spec says "above +0.5 / below -0.5". MACD is in
@@ -400,7 +400,7 @@ MACD_SWING_BARS = 20               # stop at this swing high/low
 #   6. BREAK OF STRUCTURE - the leg that created the gap must have broken
 #      the prior swing high (bullish) or swing low (bearish). A gap with no
 #      BOS behind it is not traded.
-FVG_MODE = True                    # 1 Sep: LIVE. This is the engine now.
+FVG_MODE = False                    # 1 Sep: LIVE. This is the engine now.
                                    # IM_MODE is off - the impulse breakout
                                    # and both of its pathways are retired.
 FVG_LOOKBACK = 100                 # 7 Sep: 200 -> 100. Bars scanned for
