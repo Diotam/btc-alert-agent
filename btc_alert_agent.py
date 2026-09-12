@@ -333,6 +333,32 @@ CROSS_SLOPE_BARS = 5               # bars per slope window. 5 on 30m = 2.5h.
 # NOTHING from the reversal-200 engine feeds this. RS_MODE is off.
 
 
+
+# ==================== LIQUIDITY GRABS (Flux Charts) ====================
+# A pivot is a candle with the highest/lowest WICK of the LG_PIVOT bars
+# either side of it - that is where resting orders sit. A later candle that
+# sweeps beyond the pivot and closes back inside is a FALSE BREAKOUT, and if
+# the wick that did the sweeping is large relative to the body it counts as a
+# LIQUIDITY GRAB: a lot of market orders filled, then rejected.
+#   BUYSIDE grab  - a pivot HIGH swept, closed back below  -> SHORT
+#   SELLSIDE grab - a pivot LOW swept, closed back above   -> LONG
+LG_MODE = False                    # True switches the engine to this
+LG_PIVOT = 25                      # bars either side that define a pivot -
+                                   # 12.5 hours each way on 30m, so only
+                                   # major highs and lows count as liquidity
+LG_WICK_BODY = 0.5                 # the sweeping wick must be this many
+                                   # times the body. At 0.5 the wick need
+                                   # only be HALF the body - a mild rejection
+                                   # qualifies, not just a violent one. This
+                                   # is a loose setting: most candles that
+                                   # sweep a level at all will pass it, so
+                                   # the pivot length is doing nearly all the
+                                   # filtering.
+LG_MAX_AGE = 30                    # bars a pivot stays live as liquidity
+LG_INVALIDATION = "close"          # "close" or "wick" - what kills a zone
+LG_RR = 1.5
+LG_STOP_PAD_PCT = 0.05             # stop this far beyond the sweeping wick
+
 # ======================= MACD TRADING SYSTEM =======================
 # Three systems stacked. All three must agree before a trade.
 #
@@ -2014,6 +2040,8 @@ def fetch_hyperliquid(coin, interval, lookback):
 
 def engine_label():
     """What the alerts should call the running engine."""
+    if LG_MODE:
+        return "Liquidity Grabs"
     if MACD_MODE:
         return "MACD Divergence"
     if FVG_MODE:
@@ -3497,6 +3525,115 @@ def inverted_fvgs(candles):
     bear = sorted([x for x in out if x["kind"] == "inv_bear"],
                   key=lambda x: -x["bot"])
     return bull, bear
+
+
+def lg_pivots(candles, upto):
+    """(highs, lows) as (index, price) - candles whose WICK tops or bottoms
+    the LG_PIVOT bars either side. That is where stops rest."""
+    n = max(1, LG_PIVOT)
+    hi, lo = [], []
+    end = min(upto, len(candles) - n)
+    for k in range(n, end):
+        seg = range(k - n, k + n + 1)
+        if all(candles[k]["h"] >= candles[m]["h"] for m in seg if m != k):
+            hi.append((k, candles[k]["h"]))
+        if all(candles[k]["l"] <= candles[m]["l"] for m in seg if m != k):
+            lo.append((k, candles[k]["l"]))
+    return hi, lo
+
+
+def wick_body(c, upper):
+    """The sweeping wick as a multiple of the body. A doji body would divide
+    by ~0, so the body is floored at a fraction of the candle's range."""
+    body = abs(c["c"] - c["o"])
+    rng = max(1e-12, c["h"] - c["l"])
+    body = max(body, rng * 0.05)
+    wick = (c["h"] - max(c["o"], c["c"])) if upper \
+        else (min(c["o"], c["c"]) - c["l"])
+    return wick / body
+
+
+def lg_signal(ast, candles, i):
+    """LIQUIDITY GRAB on the last closed bar. "LONG"/"SHORT" or None."""
+    last = i - 1
+    if last < LG_PIVOT * 2 + 5:
+        return None
+    c = candles[last]
+    hi, lo = lg_pivots(candles, last - LG_PIVOT)
+    sym = ast.get("sym", "?")
+
+    # ---- BUYSIDE: swept a pivot HIGH, closed back below it -> SHORT
+    for (k, px) in reversed(hi):
+        if last - k > LG_MAX_AGE:
+            break
+        if c["h"] <= px:
+            continue                      # never reached the liquidity
+        if c["c"] >= px:
+            continue                      # closed through - a break, not a grab
+        r = wick_body(c, True)
+        if r < LG_WICK_BODY:
+            if LOG_SKIPS:
+                log(f"{sym}: swept the {fmt_px(px)} high but wick/body "
+                    f"{r:.2f} under {LG_WICK_BODY} - not a grab")
+            continue
+        ast["lg"] = {"side": "SHORT", "level": px, "ratio": r,
+                     "extreme": c["h"], "age": last - k}
+        ast["im_path"] = "liqgrab"
+        ast["im_why"] = (f"buyside grab - swept the {fmt_px(px)} pivot high "
+                         f"({last - k} bars old) and closed back below, "
+                         f"wick {r:.1f}x the body")
+        return "SHORT"
+
+    # ---- SELLSIDE: swept a pivot LOW, closed back above -> LONG
+    for (k, px) in reversed(lo):
+        if last - k > LG_MAX_AGE:
+            break
+        if c["l"] >= px:
+            continue
+        if c["c"] <= px:
+            continue
+        r = wick_body(c, False)
+        if r < LG_WICK_BODY:
+            if LOG_SKIPS:
+                log(f"{sym}: swept the {fmt_px(px)} low but wick/body "
+                    f"{r:.2f} under {LG_WICK_BODY} - not a grab")
+            continue
+        ast["lg"] = {"side": "LONG", "level": px, "ratio": r,
+                     "extreme": c["l"], "age": last - k}
+        ast["im_path"] = "liqgrab"
+        ast["im_why"] = (f"sellside grab - swept the {fmt_px(px)} pivot low "
+                         f"({last - k} bars old) and closed back above, "
+                         f"wick {r:.1f}x the body")
+        return "LONG"
+    return None
+
+
+def lg_gate(ast, candles, i, sym=None):
+    """Watchlist: the nearest live pivot and how far price sits from it."""
+    last = i - 1
+    if last < LG_PIVOT * 2 + 5:
+        return None
+    px = candles[last]["c"]
+    hi, lo = lg_pivots(candles, last - LG_PIVOT)
+    hi = [(k, p) for (k, p) in hi if last - k <= LG_MAX_AGE and p > px]
+    lo = [(k, p) for (k, p) in lo if last - k <= LG_MAX_AGE and p < px]
+    best = side = None
+    if hi and (not lo or (hi[-1][1] - px) < (px - lo[-1][1])):
+        best, side = hi[-1], "SHORT"
+    elif lo:
+        best, side = lo[-1], "LONG"
+    if not best:
+        return None
+    k, lvl = best
+    dist = abs(lvl - px) / px * 100.0
+    return {"sym": sym, "dir": side, "run": 0, "age": last - k,
+            "stage": "ready" if dist <= 0.5 else "waiting",
+            "trend": "buyside liquidity" if side == "SHORT"
+                     else "sellside liquidity",
+            "detail": (f"pivot {'high' if side == 'SHORT' else 'low'} "
+                       f"{fmt_px(lvl)}, price {dist:.2f}% away \u00b7 "
+                       f"{last - k} bars old \u00b7 a sweep that closes back "
+                       f"inside with a {LG_WICK_BODY}x wick enters")}
 
 
 def macd_div_signal(ast, candles, i):
@@ -7128,14 +7265,16 @@ def process_candle(asset, ast, candles, ha, i):
     # BTC vote - the cross IS the trend read, so layering the old filters on
     # top would refuse the very setups it exists to take.
     # ---------------- IMPULSE MACD ENGINE (LazyBear, his 20 Aug spec) ------
-    if IM_MODE or FVG_MODE or MACD_MODE:
+    if IM_MODE or FVG_MODE or MACD_MODE or LG_MODE:
         ast["sym"] = sym
         ast["_asset"] = asset
-        side = (macd_div_signal(ast, candles, i) if MACD_MODE
+        side = (lg_signal(ast, candles, i) if LG_MODE
+                else macd_div_signal(ast, candles, i) if MACD_MODE
                 else fvg_signal(ast, candles, i) if FVG_MODE
                 else im_signal(ast, candles, i))
         try:
-            _g = (macd_div_gate(ast, candles, i, sym) if MACD_MODE
+            _g = (lg_gate(ast, candles, i, sym) if LG_MODE
+                  else macd_div_gate(ast, candles, i, sym) if MACD_MODE
                   else fvg_gate_status(ast, candles, i, sym) if FVG_MODE
                   else im_gate_status(ast, candles, i, sym))
             if _g:
@@ -7163,7 +7302,20 @@ def process_candle(asset, ast, candles, ha, i):
         rr = IM_P2_RR if path == "breakout" else IM_P1_RR
         stop = None
         stop_src = ""
-        if MACD_MODE:
+        if LG_MODE and ast.get("lg"):
+            # beyond the wick that did the sweeping. If price trades back
+            # through it the rejection failed and the idea is wrong.
+            _z = ast["lg"]
+            _pad = entry * LG_STOP_PAD_PCT / 100.0
+            stop = ((_z["extreme"] - _pad) if want_long
+                    else (_z["extreme"] + _pad))
+            risk_t = abs(entry - stop)
+            rr = LG_RR
+            stop_src = "beyond the sweep"
+            if risk_t <= 0 or ((stop >= entry) if want_long
+                               else (stop <= entry)):
+                return False
+        elif MACD_MODE:
             # the swing the divergence formed against - the high price just
             # failed to hold, or the low it just failed to break
             _lo = max(0, i - MACD_SWING_BARS)
