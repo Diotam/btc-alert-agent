@@ -342,7 +342,7 @@ CROSS_SLOPE_BARS = 5               # bars per slope window. 5 on 30m = 2.5h.
 # LIQUIDITY GRAB: a lot of market orders filled, then rejected.
 #   BUYSIDE grab  - a pivot HIGH swept, closed back below  -> SHORT
 #   SELLSIDE grab - a pivot LOW swept, closed back above   -> LONG
-LG_MODE = False                    # True switches the engine to this
+LG_MODE = True                     # 11 Sep: LIVE. This is the engine now.
 LG_PIVOT = 25                      # bars either side that define a pivot -
                                    # 12.5 hours each way on 30m, so only
                                    # major highs and lows count as liquidity
@@ -370,7 +370,7 @@ LG_STOP_PAD_PCT = 0.05             # stop this far beyond the sweeping wick
 #  3 CONFIRM - daily gives the BIAS (which side of zero), 4h gives the
 #              SIGNAL (crossover or divergence), 1h gives the TRIGGER (the
 #              histogram flipping). Any disagreement = no trade.
-MACD_MODE = True                   # True switches the engine to this
+MACD_MODE = False                  # True switches the engine to this
 MACD_FAST, MACD_SLOW, MACD_SIG = 12, 26, 9
 
 # ---- THE THRESHOLD. His spec says "above +0.5 / below -0.5". MACD is in
