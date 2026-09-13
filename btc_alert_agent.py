@@ -499,7 +499,12 @@ FVG_BTC_EMA = 50                   # bars for that EMA - 25 hours on 30m
 # both directions and was turned off when the five-trade pattern behind it
 # reversed. A bear regime blocking longs is a more defensible claim than a
 # 50-EMA cross blocking either side.
-FVG_BTC_LONG_GATE = True
+BTC_LONG_GATE = True               # 12 Sep: ENGINE-WIDE. No crypto LONGS
+                                   # while BTC's last closed bar is under its
+                                   # 200 EMA. It used to live inside the FVG
+                                   # signal only, so switching engines
+                                   # silently dropped it.
+FVG_BTC_LONG_GATE = BTC_LONG_GATE  # old name, kept so the FVG paths resolve
 FVG_BTC_LONG_EMA = 200             # 100 hours on 30m
 # ---- INVERSION FVG. A gap that price CLOSED THROUGH flips polarity: a
 # violated bullish gap becomes resistance, a violated bearish gap becomes
@@ -7289,6 +7294,12 @@ def process_candle(asset, ast, candles, ha, i):
         if not side:
             return False
         want_long = side == "LONG"
+        # ENGINE-WIDE BTC GATE. Whatever produced the signal, a crypto
+        # long needs BTC above its 200 EMA.
+        if want_long and not btc_allows(sym, True):
+            log(f"{sym}: LONG blocked - BTC is under its "
+                f"{FVG_BTC_LONG_EMA} EMA")
+            return False
         if not ALLOW_SHORTS and not want_long:
             return False
         entry = c["c"]
