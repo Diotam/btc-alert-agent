@@ -3622,6 +3622,9 @@ def lg_gate(ast, candles, i, sym=None):
     hi, lo = lg_pivots(candles, last - LG_PIVOT)
     hi = [(k, p) for (k, p) in hi if last - k <= LG_MAX_AGE and p > px]
     lo = [(k, p) for (k, p) in lo if last - k <= LG_MAX_AGE and p < px]
+    # a sellside grab is a LONG, so drop those when the BTC gate is shut
+    if not btc_allows(sym or ast.get("sym", "?"), True):
+        lo = []
     best = side = None
     if hi and (not lo or (hi[-1][1] - px) < (px - lo[-1][1])):
         best, side = hi[-1], "SHORT"
@@ -3682,6 +3685,10 @@ def macd_div_gate(ast, candles, i, sym=None):
         return None
     side = macd_divergence(w)
     if not side:
+        return None
+    # the panel should only show what could actually fire - a long that the
+    # BTC gate would refuse is not a pending setup
+    if side == "LONG" and not btc_allows(sym or ast.get("sym", "?"), True):
         return None
     c = w[-1]
     down = c["c"] < c["o"]
