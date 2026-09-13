@@ -499,7 +499,16 @@ FVG_BTC_EMA = 50                   # bars for that EMA - 25 hours on 30m
 # both directions and was turned off when the five-trade pattern behind it
 # reversed. A bear regime blocking longs is a more defensible claim than a
 # 50-EMA cross blocking either side.
-BTC_LONG_GATE = True               # 12 Sep: ENGINE-WIDE. No crypto LONGS
+BTC_GATE_XYZ = True                # 12 Sep: the xyz: synthetics obey the BTC
+                                   # gate too, at his call. They were exempt
+                                   # on the reasoning that equities follow
+                                   # their own market - but the 148-trade FVG
+                                   # sample had equity SHORTS at -4.65R over
+                                   # 35 and equity LONGS at -9.72R over 22,
+                                   # so the exemption was not earning its
+                                   # keep either way.
+                                   # False restores the exemption.
+BTC_LONG_GATE = True               # 12 Sep: ENGINE-WIDE. No LONGS
                                    # while BTC's last closed bar is under its
                                    # 200 EMA. It used to live inside the FVG
                                    # signal only, so switching engines
@@ -3412,8 +3421,9 @@ def btc_above_200():
 
 
 def btc_allows(sym, want_long):
-    """Crypto trades WITH bitcoin. xyz: synthetics are exempt."""
-    if str(sym).startswith("xyz:"):
+    """Longs need BTC above its 200 EMA. With BTC_GATE_XYZ the synthetics
+    obey it as well; without it they are exempt."""
+    if str(sym).startswith("xyz:") and not BTC_GATE_XYZ:
         return True
     # one-way: no crypto longs under the 200 EMA
     if FVG_BTC_LONG_GATE and want_long:
