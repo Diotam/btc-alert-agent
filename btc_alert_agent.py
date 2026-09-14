@@ -3655,31 +3655,54 @@ def smma_signal(ast, candles, i):
 
 
 def smma_gate(ast, candles, i, sym=None):
-    """Watchlist: how far price sits from each line, nearest first."""
+    """Watchlist: which lines price has already cleared, and which are left.
+
+    The engine fires when a close clears ALL THREE, so what matters is how
+    many are ARMED - already on the right side - and which one is still in
+    the way. Rendered as a bar, longest line first:
+
+        [+ + -]  2 of 3 above  |  200 -0.31%  50 +0.18%  21 +0.42%
+    """
     w = candles[:i]
     if len(w) < max(SMMA_LENGTHS) + 3:
         return None
     cl = [x["c"] for x in w]
     px = cl[-1]
+    sep = abs(px) * SMMA_MIN_SEP_PCT / 100.0
     rows = []
-    for n in SMMA_LENGTHS:
+    for n in sorted(SMMA_LENGTHS, reverse=True):
         m = smma_series(cl, n)
         if not m:
-            continue
-        d = (px - m[-1]) / px * 100.0
-        rows.append((abs(d), n, d, m[-1]))
-    if not rows:
-        return None
-    rows.sort()
-    dist, n, signed, ma = rows[0]
-    side = "SHORT" if signed > 0 else "LONG"
-    where = " \u00b7 ".join(
-        f"{x[1]}: {x[2]:+.2f}%" for x in sorted(rows, key=lambda z: -z[1]))
-    return {"sym": sym, "dir": side, "run": 0, "age": 0,
-            "stage": "ready" if dist <= 0.25 else "waiting",
-            "trend": "above the SMMAs" if signed > 0 else "below the SMMAs",
-            "detail": (f"nearest is the {n} SMMA at {fmt_px(ma)}, "
-                       f"{dist:.2f}% away \u00b7 {where}")}
+            return None
+        ma = m[-1]
+        rows.append({"n": n, "ma": ma, "pct": (px - ma) / px * 100.0,
+                     "above": px > ma + sep, "below": px < ma - sep})
+    n_above = sum(1 for r in rows if r["above"])
+    n_below = sum(1 for r in rows if r["below"])
+    total = len(rows)
+
+    # the side price is closer to completing
+    side = "LONG" if n_above >= n_below else "SHORT"
+    armed = n_above if side == "LONG" else n_below
+    # a filled bar, one segment per line, longest first. Full blocks are
+    # lines price has cleared; light blocks are the ones still in the way.
+    seg = 4                            # characters per line
+    bar = "".join(("\u2588" if (r["above"] if side == "LONG" else r["below"])
+                   else "\u2591") * seg for r in rows)
+    missing = [r for r in rows
+               if not (r["above"] if side == "LONG" else r["below"])]
+    if missing:
+        nearest = min(missing, key=lambda r: abs(r["pct"]))
+        need = (f"needs the {nearest['n']} ({nearest['pct']:+.2f}%) to fire "
+                f"{side}")
+    else:
+        need = f"all three cleared - a close here is a {side}"
+    levels = "  ".join(f"{r['n']} {r['pct']:+.2f}%" for r in rows)
+    return {"sym": sym, "dir": side, "run": armed, "age": 0,
+            "stage": "ready" if armed >= total - 1 else "waiting",
+            "trend": f"{armed} of {total} {'above' if side == 'LONG' else 'below'}",
+            "detail": (f"{bar}  {armed}/{total}  \u00b7  {need}"
+                       f"  \u00b7  {levels}")}
 
 
 def lg_pivots(candles, upto):
