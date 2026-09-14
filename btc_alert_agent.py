@@ -141,16 +141,18 @@ MAX_ASSETS = 110
 ASSETS = [                         # used when DISCOVER_ALL = False, or when
     {"symbol": "BTC", "label": "BTC-PERP", "hl_coin": "BTC",   # discovery fails
      "fallbacks": ["binance:BTCUSDT", "kraken:XBTUSD"]},
+    {"symbol": "PONS", "label": "PONS-PERP", "hl_coin": "PONS",
+     "fallbacks": []},
 ]
 
 # --- strategy dials -------------------------------------------------------
-TF = "5m"                          # execution timeframe. 15m -> 30m on
+TF = "1m"                          # execution timeframe. 15m -> 30m on
                                    # 9 Aug: a 50 EMA on 15m was too fast
                                    # for these markets, so price crossed
                                    # it constantly without going
                                    # anywhere - PUMP moved 0.48% between
                                    # crosses at 15m and 1.16% at 30m
-SCAN_EVERY = "5m"                   # how often the loop wakes. Aligning it to
+SCAN_EVERY = "1m"                   # how often the loop wakes. Aligning it to
                                    # TF means one scan per candle. A shorter
                                    # pulse costs API calls but reacts sooner:
                                    # symbols with no open trade are skipped
@@ -1938,9 +1940,11 @@ ORDERS_LOG = Path(__file__).parent / "orders.log"
 TIMEZONE = "America/Chicago"
 LOCAL_TZ = ZoneInfo(TIMEZONE)
 
-MS = {"5m": 300_000, "10m": 600_000, "15m": 900_000, "30m": 1_800_000,
+MS = {"1m": 60_000, "5m": 300_000, "10m": 600_000,
+      "15m": 900_000, "30m": 1_800_000,
       "1h": 3_600_000, "4h": 14_400_000}
-_TF_ALIASES = {"5min": "5m", "10min": "10m", "15min": "15m", "30min": "30m",
+_TF_ALIASES = {"1min": "1m", "5min": "5m", "10min": "10m",
+               "15min": "15m", "30min": "30m",
                "60m": "1h", "60min": "1h", "1hr": "1h"}
 TF = _TF_ALIASES.get(TF.strip().lower(), TF.strip().lower())
 SCAN_EVERY = _TF_ALIASES.get(SCAN_EVERY.strip().lower(),
@@ -1964,7 +1968,10 @@ for _n, _v in (("TF", TF), ("SCAN_EVERY", SCAN_EVERY)):
 # still carrying its seed; the same problem the 200 EMA had in August, where
 # a short fetch put the line 4.5% off and took a trade that should not have
 # fired. 900 bars is 75 hours on 5m.
-LOOKBACK = {"5m": 900, "10m": 300, "15m": 750, "30m": 750, "1h": 500,
+# 12 Sep: 1m added at 900 bars - 15 hours. The 200 SMMA needs ~3x its period
+# to shed the seed, so 600 is the floor and 900 leaves headroom.
+LOOKBACK = {"1m": 900, "5m": 900, "10m": 300, "15m": 750, "30m": 750,
+            "1h": 500,
             "4h": 300}
 
 REQUEST_TIMEOUT_S = 8              # fail fast: a throttled API must not burn 20s
