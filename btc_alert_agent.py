@@ -348,6 +348,13 @@ CROSS_SLOPE_BARS = 5               # bars per slope window. 5 on 30m = 2.5h.
 SMMA_MODE = True                   # 12 Sep: LIVE. This is the engine now.
 SMMA_LENGTHS = (21, 50, 200)       # longest is reported first when several
                                    # cross on the same bar
+SMMA_ALL_THREE = True              # 12 Sep: the close must clear ALL THREE
+                                   # lines, having been on the other side of
+                                   # at least one of them on the bar before.
+                                   # A cross of the 21 alone is noise on 5m;
+                                   # clearing 21, 50 AND 200 together is the
+                                   # whole stack flipping.
+                                   # False restores single-line crosses.
 SMMA_PRIORITY_LONGEST = True       # the 200 outranks the 50 outranks the 21
 SMMA_MIN_SEP_PCT = 0.05            # the close must clear the line by this %
                                    # of price. Without it a close sitting on
@@ -3570,11 +3577,14 @@ def inverted_fvgs(candles):
 
 
 def smma_cross_state(candles):
-    """[(length, side, ma_now)] for every SMMA crossed on the last CLOSED bar.
+    """[(length, side, ma_now)] for the lines the last CLOSED bar crossed.
 
-    side is "LONG" when price closed back above the line having been below
-    it, "SHORT" for the reverse. A wick through does not count - the close
-    has to clear the line by SMMA_MIN_SEP_PCT.
+    With SMMA_ALL_THREE the bar must close beyond EVERY line, and must have
+    been on the other side of at least one of them on the previous bar - so
+    a bar already above all three does not keep firing.
+
+    A wick through never counts: the close has to clear each line by
+    SMMA_MIN_SEP_PCT.
     """
     out = []
     if not candles or len(candles) < max(SMMA_LENGTHS) + 3:
@@ -3582,11 +3592,28 @@ def smma_cross_state(candles):
     cl = [x["c"] for x in candles]
     px = cl[-1]
     sep = abs(px) * SMMA_MIN_SEP_PCT / 100.0
+    mas = {}
     for n in SMMA_LENGTHS:
         m = smma_series(cl, n)
         if not m or len(m) < 3:
-            continue
-        now, prev = m[-1], m[-2]
+            return out                      # cannot judge without them all
+        mas[n] = (m[-1], m[-2])
+
+    if SMMA_ALL_THREE:
+        above_all = all(cl[-1] > now + sep for (now, _) in mas.values())
+        below_all = all(cl[-1] < now - sep for (now, _) in mas.values())
+        was_below_any = any(cl[-2] <= prev for (_, prev) in mas.values())
+        was_above_any = any(cl[-2] >= prev for (_, prev) in mas.values())
+        if above_all and was_below_any:
+            return [(n, "LONG", mas[n][0]) for n in sorted(SMMA_LENGTHS,
+                                                           reverse=True)]
+        if below_all and was_above_any:
+            return [(n, "SHORT", mas[n][0]) for n in sorted(SMMA_LENGTHS,
+                                                            reverse=True)]
+        return out
+
+    for n in SMMA_LENGTHS:
+        now, prev = mas[n]
         if cl[-2] <= prev and cl[-1] > now + sep:
             out.append((n, "LONG", now))
         elif cl[-2] >= prev and cl[-1] < now - sep:
@@ -3607,10 +3634,16 @@ def smma_signal(ast, candles, i):
     ast["smma"] = {"len": n, "side": side, "ma": ma,
                    "also": [x[0] for x in crossed[1:]]}
     ast["im_path"] = "smma"
-    ast["im_why"] = (
-        f"price closed {'above' if side == 'LONG' else 'below'} the "
-        f"{n} SMMA at {fmt_px(ma)}"
-        + (f" (also the {', '.join(others)})" if others else ""))
+    if SMMA_ALL_THREE:
+        lv = ", ".join(f"{x[0]} {fmt_px(x[2])}" for x in crossed)
+        ast["im_why"] = (
+            f"price closed {'above' if side == 'LONG' else 'below'} ALL "
+            f"THREE SMMAs - {lv}")
+    else:
+        ast["im_why"] = (
+            f"price closed {'above' if side == 'LONG' else 'below'} the "
+            f"{n} SMMA at {fmt_px(ma)}"
+            + (f" (also the {', '.join(others)})" if others else ""))
     return side
 
 
