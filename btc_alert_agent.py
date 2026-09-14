@@ -68,7 +68,11 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 # --- asset universe -------------------------------------------------------
-DISCOVER_ALL = True
+DISCOVER_ALL = False               # 12 Sep: BTC ONLY. Discovery is off, so
+                                   # the universe is the ASSETS list below -
+                                   # which already held just BTC. One symbol,
+                                   # one chart, divergence measured on it
+                                   # alone. True restores the ~95 markets.
 DISCOVER_DEXES = True              # scan HIP-3 builder venues. ON as of
                                    # 2 Aug: with EXEC_BUILDER_DEXES empty
                                    # they could only ever alert, never trade,
@@ -140,7 +144,7 @@ ASSETS = [                         # used when DISCOVER_ALL = False, or when
 ]
 
 # --- strategy dials -------------------------------------------------------
-TF = "30m"                         # execution timeframe. 15m -> 30m on
+TF = "5m"                          # execution timeframe. 15m -> 30m on
                                    # 9 Aug: a 50 EMA on 15m was too fast
                                    # for these markets, so price crossed
                                    # it constantly without going
@@ -334,6 +338,23 @@ CROSS_SLOPE_BARS = 5               # bars per slope window. 5 on 30m = 2.5h.
 
 
 
+
+# ==================== SMMA CROSS (reversal alerts) ====================
+# Price crossing a smoothed moving average. A close back above the line is a
+# bullish reversal, a close below it bearish. Three lengths, each treated as
+# its own level - the 200 is the most significant, the 21 the fastest.
+# The cross must be a CLOSE through the line, not a wick, so an intrabar poke
+# does not fire.
+SMMA_MODE = True                   # 12 Sep: LIVE. This is the engine now.
+SMMA_LENGTHS = (21, 50, 200)       # longest is reported first when several
+                                   # cross on the same bar
+SMMA_PRIORITY_LONGEST = True       # the 200 outranks the 50 outranks the 21
+SMMA_MIN_SEP_PCT = 0.05            # the close must clear the line by this %
+                                   # of price. Without it a close sitting on
+                                   # the line fires on rounding.
+SMMA_RR = 1.5
+SMMA_SWING_BARS = 20               # stop at this swing high/low
+
 # ==================== LIQUIDITY GRABS (Flux Charts) ====================
 # A pivot is a candle with the highest/lowest WICK of the LG_PIVOT bars
 # either side of it - that is where resting orders sit. A later candle that
@@ -370,7 +391,7 @@ LG_STOP_PAD_PCT = 0.05             # stop this far beyond the sweeping wick
 #  3 CONFIRM - daily gives the BIAS (which side of zero), 4h gives the
 #              SIGNAL (crossover or divergence), 1h gives the TRIGGER (the
 #              histogram flipping). Any disagreement = no trade.
-MACD_MODE = True                   # 11 Sep: LIVE. This is the engine now.
+MACD_MODE = False                  # True switches the engine to this
 MACD_FAST, MACD_SLOW, MACD_SIG = 12, 26, 9
 
 # ---- THE THRESHOLD. His spec says "above +0.5 / below -0.5". MACD is in
@@ -1932,7 +1953,11 @@ for _n, _v in (("TF", TF), ("SCAN_EVERY", SCAN_EVERY)):
 # window needs IM_BAND_DAYS of bars; at 400 a "14 day" band silently became
 # a 4-day one. 750 bars is ~7.8 days on 15m, so IM_BAND_DAYS was cut to 7 to
 # match rather than raising the fetch further and reviving the 429 storms.
-LOOKBACK = {"5m": 300, "10m": 300, "15m": 750, "30m": 750, "1h": 500,
+# 12 Sep: 5m raised 300 -> 900. A 200-period SMMA seeded on 300 bars is
+# still carrying its seed; the same problem the 200 EMA had in August, where
+# a short fetch put the line 4.5% off and took a trade that should not have
+# fired. 900 bars is 75 hours on 5m.
+LOOKBACK = {"5m": 900, "10m": 300, "15m": 750, "30m": 750, "1h": 500,
             "4h": 300}
 
 REQUEST_TIMEOUT_S = 8              # fail fast: a throttled API must not burn 20s
@@ -2054,6 +2079,8 @@ def fetch_hyperliquid(coin, interval, lookback):
 
 def engine_label():
     """What the alerts should call the running engine."""
+    if SMMA_MODE:
+        return f"SMMA cross {'/'.join(str(x) for x in SMMA_LENGTHS)}"
     if LG_MODE:
         return "Liquidity Grabs"
     if MACD_MODE:
@@ -3540,6 +3567,79 @@ def inverted_fvgs(candles):
     bear = sorted([x for x in out if x["kind"] == "inv_bear"],
                   key=lambda x: -x["bot"])
     return bull, bear
+
+
+def smma_cross_state(candles):
+    """[(length, side, ma_now)] for every SMMA crossed on the last CLOSED bar.
+
+    side is "LONG" when price closed back above the line having been below
+    it, "SHORT" for the reverse. A wick through does not count - the close
+    has to clear the line by SMMA_MIN_SEP_PCT.
+    """
+    out = []
+    if not candles or len(candles) < max(SMMA_LENGTHS) + 3:
+        return out
+    cl = [x["c"] for x in candles]
+    px = cl[-1]
+    sep = abs(px) * SMMA_MIN_SEP_PCT / 100.0
+    for n in SMMA_LENGTHS:
+        m = smma_series(cl, n)
+        if not m or len(m) < 3:
+            continue
+        now, prev = m[-1], m[-2]
+        if cl[-2] <= prev and cl[-1] > now + sep:
+            out.append((n, "LONG", now))
+        elif cl[-2] >= prev and cl[-1] < now - sep:
+            out.append((n, "SHORT", now))
+    if SMMA_PRIORITY_LONGEST:
+        out.sort(key=lambda x: -x[0])
+    return out
+
+
+def smma_signal(ast, candles, i):
+    """Reversal on a close through an SMMA. "LONG"/"SHORT" or None."""
+    w = candles[:i]
+    crossed = smma_cross_state(w)
+    if not crossed:
+        return None
+    n, side, ma = crossed[0]
+    others = [f"{x[0]}" for x in crossed[1:]]
+    ast["smma"] = {"len": n, "side": side, "ma": ma,
+                   "also": [x[0] for x in crossed[1:]]}
+    ast["im_path"] = "smma"
+    ast["im_why"] = (
+        f"price closed {'above' if side == 'LONG' else 'below'} the "
+        f"{n} SMMA at {fmt_px(ma)}"
+        + (f" (also the {', '.join(others)})" if others else ""))
+    return side
+
+
+def smma_gate(ast, candles, i, sym=None):
+    """Watchlist: how far price sits from each line, nearest first."""
+    w = candles[:i]
+    if len(w) < max(SMMA_LENGTHS) + 3:
+        return None
+    cl = [x["c"] for x in w]
+    px = cl[-1]
+    rows = []
+    for n in SMMA_LENGTHS:
+        m = smma_series(cl, n)
+        if not m:
+            continue
+        d = (px - m[-1]) / px * 100.0
+        rows.append((abs(d), n, d, m[-1]))
+    if not rows:
+        return None
+    rows.sort()
+    dist, n, signed, ma = rows[0]
+    side = "SHORT" if signed > 0 else "LONG"
+    where = " \u00b7 ".join(
+        f"{x[1]}: {x[2]:+.2f}%" for x in sorted(rows, key=lambda z: -z[1]))
+    return {"sym": sym, "dir": side, "run": 0, "age": 0,
+            "stage": "ready" if dist <= 0.25 else "waiting",
+            "trend": "above the SMMAs" if signed > 0 else "below the SMMAs",
+            "detail": (f"nearest is the {n} SMMA at {fmt_px(ma)}, "
+                       f"{dist:.2f}% away \u00b7 {where}")}
 
 
 def lg_pivots(candles, upto):
@@ -7287,15 +7387,17 @@ def process_candle(asset, ast, candles, ha, i):
     # BTC vote - the cross IS the trend read, so layering the old filters on
     # top would refuse the very setups it exists to take.
     # ---------------- IMPULSE MACD ENGINE (LazyBear, his 20 Aug spec) ------
-    if IM_MODE or FVG_MODE or MACD_MODE or LG_MODE:
+    if IM_MODE or FVG_MODE or MACD_MODE or LG_MODE or SMMA_MODE:
         ast["sym"] = sym
         ast["_asset"] = asset
-        side = (lg_signal(ast, candles, i) if LG_MODE
+        side = (smma_signal(ast, candles, i) if SMMA_MODE
+                else lg_signal(ast, candles, i) if LG_MODE
                 else macd_div_signal(ast, candles, i) if MACD_MODE
                 else fvg_signal(ast, candles, i) if FVG_MODE
                 else im_signal(ast, candles, i))
         try:
-            _g = (lg_gate(ast, candles, i, sym) if LG_MODE
+            _g = (smma_gate(ast, candles, i, sym) if SMMA_MODE
+                  else lg_gate(ast, candles, i, sym) if LG_MODE
                   else macd_div_gate(ast, candles, i, sym) if MACD_MODE
                   else fvg_gate_status(ast, candles, i, sym) if FVG_MODE
                   else im_gate_status(ast, candles, i, sym))
@@ -7330,7 +7432,19 @@ def process_candle(asset, ast, candles, ha, i):
         rr = IM_P2_RR if path == "breakout" else IM_P1_RR
         stop = None
         stop_src = ""
-        if LG_MODE and ast.get("lg"):
+        if SMMA_MODE:
+            _lo = max(0, i - SMMA_SWING_BARS)
+            _win = candles[_lo:i]
+            if not _win:
+                return False
+            stop = (min(x["l"] for x in _win) if want_long
+                    else max(x["h"] for x in _win))
+            risk_t = abs(entry - stop)
+            rr = SMMA_RR
+            stop_src = f"{SMMA_SWING_BARS}-bar swing"
+            if risk_t <= 0:
+                return False
+        elif LG_MODE and ast.get("lg"):
             # beyond the wick that did the sweeping. If price trades back
             # through it the rejection failed and the idea is wrong.
             _z = ast["lg"]
