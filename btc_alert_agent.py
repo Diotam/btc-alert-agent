@@ -3746,8 +3746,12 @@ def smma_gate(ast, candles, i, sym=None):
         if not m:
             return None
         ma = m[-1]
+        # PLAIN comparison for the panel. SMMA_MIN_SEP_PCT is a buffer on
+        # the FIRING test so a close sitting on the line does not trigger on
+        # rounding - but applying it here meant a row could read "21 +0.03%"
+        # and still count the 21 as unreclaimed, which reads as a bug.
         rows.append({"n": n, "ma": ma, "pct": (px - ma) / px * 100.0,
-                     "above": px > ma + sep, "below": px < ma - sep})
+                     "above": px > ma, "below": px < ma})
     n_above = sum(1 for r in rows if r["above"])
     n_below = sum(1 for r in rows if r["below"])
     total = len(rows)
