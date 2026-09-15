@@ -3719,42 +3719,33 @@ def smma_gate(ast, candles, i, sym=None):
     n_below = sum(1 for r in rows if r["below"])
     total = len(rows)
 
-    # Under REVERSAL the trade is against where price sits: stretched below
-    # the stack is a LONG waiting to happen, not a short.
+    # Which trade is being waited for. Under REVERSAL, price stretched BELOW
+    # the stack is a LONG in waiting; stretched above is a SHORT.
     if SMMA_REVERSAL:
         side = "LONG" if n_below >= n_above else "SHORT"
-        armed_rows = [r for r in rows
-                      if (r["below"] if side == "LONG" else r["above"])]
     else:
         side = "LONG" if n_above >= n_below else "SHORT"
-        armed_rows = None
-    if SMMA_REVERSAL:
-        armed = len(armed_rows)
-    else:
-        armed = n_above if side == "LONG" else n_below
-    # a filled bar, one segment per line, longest first. Full blocks are
-    # lines price has cleared; light blocks are the ones still in the way.
-    seg = 4                            # characters per line
-    _lit = (lambda r: r["below"]) if (SMMA_REVERSAL and side == "LONG") \
-        else (lambda r: r["above"]) if (SMMA_REVERSAL and side == "SHORT") \
-        else (lambda r: r["above"] if side == "LONG" else r["below"])
+
+    # PROGRESS TOWARD THE TRADE, not toward being stretched. A long fires on
+    # a close above all three, so a line counts once price has RECLAIMED it.
+    # Stretched below the whole stack is 0 of 3: the 21, then the 50, then
+    # the 200 all have to be taken back.
+    _lit = (lambda r: r["above"]) if side == "LONG" else (lambda r: r["below"])
+    armed = sum(1 for r in rows if _lit(r))
+    seg = 4
     bar = "".join(("\u2588" if _lit(r) else "\u2591") * seg for r in rows)
+
     missing = [r for r in rows if not _lit(r)]
     if missing:
         nearest = min(missing, key=lambda r: abs(r["pct"]))
-        need = (f"needs the {nearest['n']} ({nearest['pct']:+.2f}%) to be "
-                f"stretched" if SMMA_REVERSAL else
-                f"needs the {nearest['n']} ({nearest['pct']:+.2f}%) to fire "
-                f"{side}")
+        need = (f"needs the {nearest['n']} ({nearest['pct']:+.2f}%) "
+                f"to fire {side}")
     else:
-        need = (f"stretched past all three - a close back through fires "
-                f"{side}" if SMMA_REVERSAL else
-                f"all three cleared - a close here is a {side}")
+        need = f"all three reclaimed - a close here fires {side}"
     levels = "  ".join(f"{r['n']} {r['pct']:+.2f}%" for r in rows)
     return {"sym": sym, "dir": side, "run": armed, "age": 0,
             "stage": "ready" if armed >= total - 1 else "waiting",
-            "trend": (f"{armed} of {total} "
-                      f"{'below' if (SMMA_REVERSAL and side == 'LONG') or (not SMMA_REVERSAL and side == 'SHORT') else 'above'}"),
+            "trend": f"{armed} of {total} reclaimed",
             "detail": (f"{bar}  {armed}/{total}  \u00b7  {need}"
                        f"  \u00b7  {levels}")}
 
