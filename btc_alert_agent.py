@@ -350,7 +350,17 @@ CROSS_SLOPE_BARS = 5               # bars per slope window. 5 on 30m = 2.5h.
 SMMA_MODE = True                   # 12 Sep: LIVE. This is the engine now.
 SMMA_LENGTHS = (21, 50, 200)       # longest is reported first when several
                                    # cross on the same bar
-SMMA_REVERSAL = True               # 12 Sep: REVERSAL, not momentum. Price
+SMMA_REVERSAL = False              # 14 Sep: OFF. PONS 19:30 is the case -
+                                   # price was already under the 21 and 50
+                                   # and broke the 200, the last line left.
+                                   # The reversal rule wants price above ALL
+                                   # THREE for SMMA_EXTENDED_BARS first, so
+                                   # it correctly refused. Momentum only asks
+                                   # that price was above at least ONE line on
+                                   # the previous bar, which fires exactly
+                                   # that break.
+                                   # True restores: REVERSAL, not momentum.
+                                   # Price
                                    # must first be EXTENDED - beyond all
                                    # three lines - and the trade is the close
                                    # back THROUGH all three the other way.
