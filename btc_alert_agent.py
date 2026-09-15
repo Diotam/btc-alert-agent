@@ -573,7 +573,18 @@ BTC_GATE_XYZ = True                # 12 Sep: the xyz: synthetics obey the BTC
                                    # so the exemption was not earning its
                                    # keep either way.
                                    # False restores the exemption.
-BTC_LONG_GATE = True               # 12 Sep: ENGINE-WIDE. No LONGS
+BTC_LONG_GATE = False              # 14 Sep: OFF. Built on 30m, where 200
+                                   # bars was four days and genuinely read as
+                                   # a regime. The engine is on 1m now, so the
+                                   # same 200 EMA spans 3.3 HOURS - an
+                                   # intraday line BTC crosses constantly,
+                                   # which made the gate flicker rather than
+                                   # describe a trend.
+                                   # PONS 14 Sep 23:21: a clean recovery
+                                   # through all three SMMAs was refused
+                                   # because BTC happened to be under a
+                                   # 3-hour average.
+                                   # True restores: ENGINE-WIDE, no LONGS
                                    # while BTC's last closed bar is under its
                                    # 200 EMA. It used to live inside the FVG
                                    # signal only, so switching engines
