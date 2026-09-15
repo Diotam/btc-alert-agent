@@ -350,7 +350,8 @@ CROSS_SLOPE_BARS = 5               # bars per slope window. 5 on 30m = 2.5h.
 SMMA_MODE = True                   # 12 Sep: LIVE. This is the engine now.
 SMMA_LENGTHS = (21, 50, 200)       # longest is reported first when several
                                    # cross on the same bar
-SMMA_REVERSAL = False              # 14 Sep: OFF. PONS 19:30 is the case -
+SMMA_REVERSAL = True               # 14 Sep: ON, rebuilt as a STATE
+                                   # MACHINE - see below. was OFF: PONS 19:30 is the case -
                                    # price was already under the 21 and 50
                                    # and broke the 200, the last line left.
                                    # The reversal rule wants price above ALL
@@ -370,8 +371,20 @@ SMMA_REVERSAL = False              # 14 Sep: OFF. PONS 19:30 is the case -
                                    # what is wanted is the recovery, so the
                                    # same state now reads LONG.
                                    # False restores the momentum reading.
-SMMA_EXTENDED_BARS = 3             # bars price must have spent beyond all
-                                   # three before a recovery counts
+SMMA_ARM_LOOKBACK = 400            # 14 Sep: how far back the ARMED state may
+                                   # sit. Price beyond all three ARMS the
+                                   # opposite direction, and that arming
+                                   # PERSISTS until price closes through to
+                                   # the other side - the two do not have to
+                                   # be adjacent.
+                                   # PONS 14 Sep: price was above all three
+                                   # near 18:00, drifted under the 21 and 50
+                                   # for an hour, then broke the 200 at 19:30.
+                                   # The old rule wanted the extension in the
+                                   # three bars just before the break, so it
+                                   # refused. The arm was an hour old.
+SMMA_EXTENDED_BARS = 1             # bars price must hold beyond all three to
+                                   # count as armed
 SMMA_ALL_THREE = True              # 12 Sep: the close must clear ALL THREE
                                    # lines, having been on the other side of
                                    # at least one of them on the bar before.
@@ -3633,26 +3646,36 @@ def smma_cross_state(candles):
         below_all = all(cl[-1] < now - sep for (now, _) in mas.values())
 
         if SMMA_REVERSAL:
-            # price must have been EXTENDED the other way first, for
-            # SMMA_EXTENDED_BARS in a row. The trade is the recovery back
-            # through the whole stack.
-            def _beyond(k, want_above):
+            # STATE MACHINE. Price beyond all three ARMS the opposite
+            # direction and that state PERSISTS - it does not have to sit
+            # next to the trigger. Walk back to the most recent bar where
+            # price was fully beyond the stack; if that was the other side,
+            # this close completes the reversal.
+            if not (above_all or below_all):
+                return out
+            armed = None
+            for k in range(1, min(SMMA_ARM_LOOKBACK, len(cl) - 2)):
+                px_k = cl[-1 - k]
+                up = dn = True
                 for n in SMMA_LENGTHS:
                     m = smma_series(cl[:len(cl) - k], n)
                     if not m:
-                        return False
-                    if want_above and cl[-1 - k] <= m[-1]:
-                        return False
-                    if not want_above and cl[-1 - k] >= m[-1]:
-                        return False
-                return True
-            need = max(1, SMMA_EXTENDED_BARS)
-            if above_all and all(_beyond(k, False)
-                                 for k in range(1, need + 1)):
+                        up = dn = False
+                        break
+                    if px_k <= m[-1]:
+                        up = False
+                    if px_k >= m[-1]:
+                        dn = False
+                if up:
+                    armed = "above"
+                    break
+                if dn:
+                    armed = "below"
+                    break
+            if armed == "below" and above_all:
                 return [(n, "LONG", mas[n][0])
                         for n in sorted(SMMA_LENGTHS, reverse=True)]
-            if below_all and all(_beyond(k, True)
-                                 for k in range(1, need + 1)):
+            if armed == "above" and below_all:
                 return [(n, "SHORT", mas[n][0])
                         for n in sorted(SMMA_LENGTHS, reverse=True)]
             return out
