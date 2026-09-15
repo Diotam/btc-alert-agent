@@ -3790,65 +3790,67 @@ def smma_signal(ast, candles, i):
 
 
 def smma_gate(ast, candles, i, sym=None):
-    """Watchlist: which lines price has already cleared, and which are left.
+    """Watchlist for STACK mode: the structure, whether an arm is live, and
+    how far price sits from the 200 that would fire it.
 
-    The engine fires when a close clears ALL THREE, so what matters is how
-    many are ARMED - already on the right side - and which one is still in
-    the way. Rendered as a bar, longest line first:
-
-        [+ + -]  2 of 3 above  |  200 -0.31%  50 +0.18%  21 +0.42%
+        LONG armed   ███░░░░  21 crossed the 50 62 bars ago
+                     needs a close above the 200 (+0.26% away)
     """
     w = candles[:i]
-    if len(w) < max(SMMA_LENGTHS) + 3:
+    if len(w) < 210:
         return None
     cl = [x["c"] for x in w]
     px = cl[-1]
-    sep = abs(px) * SMMA_MIN_SEP_PCT / 100.0
-    rows = []
-    for n in sorted(SMMA_LENGTHS, reverse=True):
-        m = smma_series(cl, n)
-        if not m:
-            return None
-        ma = m[-1]
-        # PLAIN comparison for the panel. SMMA_MIN_SEP_PCT is a buffer on
-        # the FIRING test so a close sitting on the line does not trigger on
-        # rounding - but applying it here meant a row could read "21 +0.03%"
-        # and still count the 21 as unreclaimed, which reads as a bug.
-        rows.append({"n": n, "ma": ma, "pct": (px - ma) / px * 100.0,
-                     "above": px > ma, "below": px < ma})
-    n_above = sum(1 for r in rows if r["above"])
-    n_below = sum(1 for r in rows if r["below"])
-    total = len(rows)
+    m21, m50, m200 = (smma_series(cl, 21), smma_series(cl, 50),
+                      smma_series(cl, 200))
+    if not (m21 and m50 and m200):
+        return None
+    if m21[-1] is None or m50[-1] is None or m200[-1] is None:
+        return None
 
-    # Which trade is being waited for. Under REVERSAL, price stretched BELOW
-    # the stack is a LONG in waiting; stretched above is a SHORT.
-    if SMMA_REVERSAL:
-        side = "LONG" if n_below >= n_above else "SHORT"
+    down = m200[-1] > m50[-1]              # the bearish stack order
+    # which way the fast line sits, and when it last crossed
+    fast_up = m21[-1] > m50[-1]
+    ago = None
+    ok = lambda k: (m21[k] is not None and m50[k] is not None)
+    for k in range(len(m21) - 1, max(0, len(m21) - SMMA_STACK_LOOKBACK), -1):
+        if not (ok(k) and ok(k - 1)):
+            break
+        if (m21[k] > m50[k]) != (m21[k - 1] > m50[k - 1]):
+            ago = len(m21) - 1 - k
+            break
+
+    # an arm is live when the fast line has turned INTO the trade, against
+    # the prevailing structure
+    if down and fast_up:
+        side, armed = "LONG", True
+    elif (not down) and (not fast_up):
+        side, armed = "SHORT", True
     else:
-        side = "LONG" if n_above >= n_below else "SHORT"
+        side, armed = ("SHORT" if down else "LONG"), False
 
-    # PROGRESS TOWARD THE TRADE, not toward being stretched. A long fires on
-    # a close above all three, so a line counts once price has RECLAIMED it.
-    # Stretched below the whole stack is 0 of 3: the 21, then the 50, then
-    # the 200 all have to be taken back.
-    _lit = (lambda r: r["above"]) if side == "LONG" else (lambda r: r["below"])
-    armed = sum(1 for r in rows if _lit(r))
+    trig = m200[-1]
+    dist = (trig - px) / px * 100.0 if side == "LONG" else (px - trig) / px * 100.0
     seg = 4
-    bar = "".join(("\u2588" if _lit(r) else "\u2591") * seg for r in rows)
-
-    missing = [r for r in rows if not _lit(r)]
-    if missing:
-        nearest = min(missing, key=lambda r: abs(r["pct"]))
-        need = (f"needs the {nearest['n']} ({nearest['pct']:+.2f}%) "
-                f"to fire {side}")
+    lit = 2 if armed else 1                # structure, then the arm
+    if armed and ((px > trig) if side == "LONG" else (px < trig)):
+        lit = 3
+    bar = "".join(("\u2588" if k < lit else "\u2591") * seg for k in range(3))
+    struct = "200 over 50" if down else "50 over 200"
+    if armed:
+        note = (f"21 crossed {'above' if fast_up else 'below'} the 50"
+                + (f" {ago} bars ago" if ago is not None else "")
+                + f" \u00b7 needs a close {'above' if side == 'LONG' else 'below'}"
+                  f" the 200 ({dist:+.2f}% away)")
     else:
-        need = f"all three reclaimed - a close here fires {side}"
-    levels = "  ".join(f"{r['n']} {r['pct']:+.2f}%" for r in rows)
-    return {"sym": sym, "dir": side, "run": armed, "age": 0,
-            "stage": "ready" if armed >= total - 1 else "waiting",
-            "trend": f"{armed} of {total} reclaimed",
-            "detail": (f"{bar}  {armed}/{total}  \u00b7  {need}"
-                       f"  \u00b7  {levels}")}
+        note = (f"no arm - the 21 is {'above' if fast_up else 'below'} the 50 "
+                f"and the structure agrees")
+    return {"sym": sym, "dir": side, "run": lit, "age": ago or 0,
+            "stage": "ready" if armed and abs(dist) <= 0.3 else "waiting",
+            "trend": (f"{side.lower()} armed" if armed else "no arm"),
+            "detail": (f"{bar}  {struct}  \u00b7  {note}  \u00b7  "
+                       f"200 {fmt_px(m200[-1])}  50 {fmt_px(m50[-1])}  "
+                       f"21 {fmt_px(m21[-1])}")}
 
 
 def lg_pivots(candles, upto):
