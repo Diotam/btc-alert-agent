@@ -957,6 +957,23 @@ function render(d){
                return m?Math.abs(parseFloat(m[1])):999;};
   const gr=g=>(g.trend==='coiled'? -1000-(g.run||0)
                : (g.stage==='ready'? -500 : 0) + gd(g));
+  // COLOUR THE PROGRESS BAR. The filled blocks take the trade's colour -
+  // green when a long is being assembled, red for a short - while the empty
+  // ones stay grey. Everything after the bar is left muted so the numbers do
+  // not compete with it.
+  const bars=g=>{
+    const t=g.detail||'';
+    const m=/^([\u2588\u2591]+)/.exec(t);
+    if(!m) return t;
+    const col=g.dir==='LONG'?'#3fb950':'#f85149';
+    // per character - the filled blocks are not always contiguous at the
+    // front. The bar fills RIGHT to left as price reclaims each line, so
+    // splitting on the first run of empties put the colour on the wrong end.
+    const out=[...m[1]].map(ch=>ch==='\u2588'
+      ? `<span style="color:${col}">\u2588</span>`
+      : `<span style="color:#30363d">\u2591</span>`).join('');
+    return out+t.slice(m[1].length);
+  };
   document.getElementById('gates').innerHTML=G.length?G.slice()
     .sort((a,b)=>gr(a)-gr(b)).map(g=>{
     const cls=g.dir==='LONG'?'long':(g.dir==='SHORT'?'short':'muted');
@@ -967,7 +984,7 @@ function render(d){
       +`<span class=${cls}>${g.dir||''}</span></span>
       <span class="muted"${near?' style="color:#c9d1d9"':''}>${g.trend||''}</span>
       </div><div class=row>
-      <span class=muted>${g.detail||''}</span></div></div>`;
+      <span class=muted>${bars(g)}</span></div></div>`;
   }).join(''):'<div class="card muted">nothing set up</div>';
   step('r-gates');
   const cut=Date.now()-DAYS[PERIOD]*86400000;
