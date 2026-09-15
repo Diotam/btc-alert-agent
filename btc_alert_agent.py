@@ -350,6 +350,18 @@ CROSS_SLOPE_BARS = 5               # bars per slope window. 5 on 30m = 2.5h.
 SMMA_MODE = True                   # 12 Sep: LIVE. This is the engine now.
 SMMA_LENGTHS = (21, 50, 200)       # longest is reported first when several
                                    # cross on the same bar
+SMMA_REVERSAL = True               # 12 Sep: REVERSAL, not momentum. Price
+                                   # must first be EXTENDED - beyond all
+                                   # three lines - and the trade is the close
+                                   # back THROUGH all three the other way.
+                                   # Under momentum, a break down through the
+                                   # stack was a SHORT. Under reversal, price
+                                   # already under the stack is stretched and
+                                   # what is wanted is the recovery, so the
+                                   # same state now reads LONG.
+                                   # False restores the momentum reading.
+SMMA_EXTENDED_BARS = 3             # bars price must have spent beyond all
+                                   # three before a recovery counts
 SMMA_ALL_THREE = True              # 12 Sep: the close must clear ALL THREE
                                    # lines, having been on the other side of
                                    # at least one of them on the bar before.
@@ -3609,6 +3621,32 @@ def smma_cross_state(candles):
     if SMMA_ALL_THREE:
         above_all = all(cl[-1] > now + sep for (now, _) in mas.values())
         below_all = all(cl[-1] < now - sep for (now, _) in mas.values())
+
+        if SMMA_REVERSAL:
+            # price must have been EXTENDED the other way first, for
+            # SMMA_EXTENDED_BARS in a row. The trade is the recovery back
+            # through the whole stack.
+            def _beyond(k, want_above):
+                for n in SMMA_LENGTHS:
+                    m = smma_series(cl[:len(cl) - k], n)
+                    if not m:
+                        return False
+                    if want_above and cl[-1 - k] <= m[-1]:
+                        return False
+                    if not want_above and cl[-1 - k] >= m[-1]:
+                        return False
+                return True
+            need = max(1, SMMA_EXTENDED_BARS)
+            if above_all and all(_beyond(k, False)
+                                 for k in range(1, need + 1)):
+                return [(n, "LONG", mas[n][0])
+                        for n in sorted(SMMA_LENGTHS, reverse=True)]
+            if below_all and all(_beyond(k, True)
+                                 for k in range(1, need + 1)):
+                return [(n, "SHORT", mas[n][0])
+                        for n in sorted(SMMA_LENGTHS, reverse=True)]
+            return out
+
         was_below_any = any(cl[-2] <= prev for (_, prev) in mas.values())
         was_above_any = any(cl[-2] >= prev for (_, prev) in mas.values())
         if above_all and was_below_any:
@@ -3681,26 +3719,42 @@ def smma_gate(ast, candles, i, sym=None):
     n_below = sum(1 for r in rows if r["below"])
     total = len(rows)
 
-    # the side price is closer to completing
-    side = "LONG" if n_above >= n_below else "SHORT"
-    armed = n_above if side == "LONG" else n_below
+    # Under REVERSAL the trade is against where price sits: stretched below
+    # the stack is a LONG waiting to happen, not a short.
+    if SMMA_REVERSAL:
+        side = "LONG" if n_below >= n_above else "SHORT"
+        armed_rows = [r for r in rows
+                      if (r["below"] if side == "LONG" else r["above"])]
+    else:
+        side = "LONG" if n_above >= n_below else "SHORT"
+        armed_rows = None
+    if SMMA_REVERSAL:
+        armed = len(armed_rows)
+    else:
+        armed = n_above if side == "LONG" else n_below
     # a filled bar, one segment per line, longest first. Full blocks are
     # lines price has cleared; light blocks are the ones still in the way.
     seg = 4                            # characters per line
-    bar = "".join(("\u2588" if (r["above"] if side == "LONG" else r["below"])
-                   else "\u2591") * seg for r in rows)
-    missing = [r for r in rows
-               if not (r["above"] if side == "LONG" else r["below"])]
+    _lit = (lambda r: r["below"]) if (SMMA_REVERSAL and side == "LONG") \
+        else (lambda r: r["above"]) if (SMMA_REVERSAL and side == "SHORT") \
+        else (lambda r: r["above"] if side == "LONG" else r["below"])
+    bar = "".join(("\u2588" if _lit(r) else "\u2591") * seg for r in rows)
+    missing = [r for r in rows if not _lit(r)]
     if missing:
         nearest = min(missing, key=lambda r: abs(r["pct"]))
-        need = (f"needs the {nearest['n']} ({nearest['pct']:+.2f}%) to fire "
+        need = (f"needs the {nearest['n']} ({nearest['pct']:+.2f}%) to be "
+                f"stretched" if SMMA_REVERSAL else
+                f"needs the {nearest['n']} ({nearest['pct']:+.2f}%) to fire "
                 f"{side}")
     else:
-        need = f"all three cleared - a close here is a {side}"
+        need = (f"stretched past all three - a close back through fires "
+                f"{side}" if SMMA_REVERSAL else
+                f"all three cleared - a close here is a {side}")
     levels = "  ".join(f"{r['n']} {r['pct']:+.2f}%" for r in rows)
     return {"sym": sym, "dir": side, "run": armed, "age": 0,
             "stage": "ready" if armed >= total - 1 else "waiting",
-            "trend": f"{armed} of {total} {'above' if side == 'LONG' else 'below'}",
+            "trend": (f"{armed} of {total} "
+                      f"{'below' if (SMMA_REVERSAL and side == 'LONG') or (not SMMA_REVERSAL and side == 'SHORT') else 'above'}"),
             "detail": (f"{bar}  {armed}/{total}  \u00b7  {need}"
                        f"  \u00b7  {levels}")}
 
