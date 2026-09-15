@@ -350,6 +350,21 @@ CROSS_SLOPE_BARS = 5               # bars per slope window. 5 on 30m = 2.5h.
 SMMA_MODE = True                   # 12 Sep: LIVE. This is the engine now.
 SMMA_LENGTHS = (21, 50, 200)       # longest is reported first when several
                                    # cross on the same bar
+# ---- STACK MODE. Reads how the LINES are ordered against each other, not
+# just where price sits.
+#   DOWNTREND structure: the 200 above the 50, and the 21 below the 50.
+#   ARM a long when the 21 crosses back ABOVE the 50 while that structure
+#     holds - the fast line turning up inside a downtrend.
+#   FIRE the long when price then CLOSES ABOVE THE 200.
+#   Shorts mirror it exactly: 200 below 50 and 21 above 50 is the uptrend
+#     structure, the 21 crossing BELOW the 50 arms, and a close below the
+#     200 fires.
+# The arm persists - the cross and the close do not have to be adjacent -
+# and the close must be the FIRST one through the 200, so one arm gives one
+# trade.
+SMMA_STACK = True                  # 14 Sep: LIVE. Takes precedence over
+                                   # SMMA_REVERSAL and SMMA_ALL_THREE below.
+SMMA_STACK_LOOKBACK = 400          # how far back the arming cross may sit
 SMMA_REVERSAL = True               # 14 Sep: ON, rebuilt as a STATE
                                    # MACHINE - see below. was OFF: PONS 19:30 is the case -
                                    # price was already under the 21 and 50
@@ -3651,6 +3666,44 @@ def smma_cross_state(candles):
         if not m or len(m) < 3:
             return out                      # cannot judge without them all
         mas[n] = (m[-1], m[-2])
+
+    if SMMA_STACK:
+        m21 = smma_series(cl, 21)
+        m50 = smma_series(cl, 50)
+        m200 = smma_series(cl, 200)
+        if not (m21 and m50 and m200) or min(len(m21), len(m50),
+                                             len(m200)) < 5:
+            return out
+        lvl = [(200, m200[-1]), (50, m50[-1]), (21, m21[-1])]
+
+        # the close must be the FIRST through the 200 - one arm, one trade
+        # NO separation buffer on this test. Requiring the close to clear
+        # the 200 by sep AND the previous close to be under it meant that if
+        # the first close through fell inside the buffer, the next bar's
+        # "previous close" was already above and the arm could never fire -
+        # the signal was lost for good. The plain cross is the event.
+        up_now = cl[-1] > m200[-1] and cl[-2] <= m200[-2]
+        dn_now = cl[-1] < m200[-1] and cl[-2] >= m200[-2]
+        if not (up_now or dn_now):
+            return out
+
+        back = min(SMMA_STACK_LOOKBACK, len(m21) - 2)
+        for k in range(1, back):
+            j = len(m21) - 1 - k
+            if j < 1:
+                break
+            if up_now:
+                # the 21 crossing ABOVE the 50, with the 200 on top
+                if m21[j - 1] <= m50[j - 1] and m21[j] > m50[j]:
+                    if m200[j] > m50[j]:
+                        return [(n, "LONG", v) for (n, v) in lvl]
+                    return out              # cross without the structure
+            else:
+                if m21[j - 1] >= m50[j - 1] and m21[j] < m50[j]:
+                    if m200[j] < m50[j]:
+                        return [(n, "SHORT", v) for (n, v) in lvl]
+                    return out
+        return out
 
     if SMMA_ALL_THREE:
         above_all = all(cl[-1] > now + sep for (now, _) in mas.values())
