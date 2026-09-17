@@ -347,7 +347,7 @@ CROSS_SLOPE_BARS = 5               # bars per slope window. 5 on 30m = 2.5h.
 # its own level - the 200 is the most significant, the 21 the fastest.
 # The cross must be a CLOSE through the line, not a wick, so an intrabar poke
 # does not fire.
-SMMA_MODE = True                   # 12 Sep: LIVE. This is the engine now.
+SMMA_MODE = False                  # True switches the engine to this
 SMMA_LENGTHS = (21, 50, 200)       # longest is reported first when several
                                    # cross on the same bar
 # ---- STACK MODE. Reads how the LINES are ordered against each other, not
@@ -450,7 +450,7 @@ LG_STOP_PAD_PCT = 0.05             # stop this far beyond the sweeping wick
 #  3 CONFIRM - daily gives the BIAS (which side of zero), 4h gives the
 #              SIGNAL (crossover or divergence), 1h gives the TRIGGER (the
 #              histogram flipping). Any disagreement = no trade.
-MACD_MODE = False                  # True switches the engine to this
+MACD_MODE = True                   # 15 Sep: LIVE. This is the engine now.
 MACD_FAST, MACD_SLOW, MACD_SIG = 12, 26, 9
 
 # ---- THE THRESHOLD. His spec says "above +0.5 / below -0.5". MACD is in
@@ -468,7 +468,16 @@ MACD_CONFIRM_BARS = 2              # candles the cross must hold (his 2-3).
                                    # which is about swing detection.
 
 MACD_DIVERGENCE = True             # system 2
-MACD_DIV_LOOKBACK = 60             # bars searched for the two swing highs
+MACD_DIV_LOOKBACK = 600            # 15 Sep: 60 -> 600, still on 1m. Bars
+                                   # searched for the two swing highs.
+                                   # At 60 this was a ONE HOUR window on 1m -
+                                   # far too narrow for a pattern that needs
+                                   # two confirmed pivots with price and MACD
+                                   # moving opposite ways. It found zero rows
+                                   # across 95 markets on 30m and would have
+                                   # been quieter still here.
+                                   # 600 bars is 10 hours, which is the scale
+                                   # the rule was designed at.
 MACD_DIV_MIN_GAP = 5               # bars apart the two swings must be
 MACD_DIV_PIVOT = 3                 # bars either side that confirm a pivot. At
                                    # 1 a smooth trend produces NO pivots at
