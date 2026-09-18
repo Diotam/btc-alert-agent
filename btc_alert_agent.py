@@ -473,8 +473,33 @@ SMMA_PRIORITY_LONGEST = True       # the 200 outranks the 50 outranks the 21
 SMMA_MIN_SEP_PCT = 0.05            # the close must clear the line by this %
                                    # of price. Without it a close sitting on
                                    # the line fires on rounding.
-SMMA_RR = 1.5
-SMMA_SWING_BARS = 20               # stop at this swing high/low
+SMMA_RR = 2.0                      # 18 Sep: 1.5 -> 2.0. Breakeven win rate
+                                   # goes 40.0% -> 33.3%, so the rule can be
+                                   # right less often and still pay. The cost
+                                   # is that price has to travel twice the
+                                   # (now wider) risk before it books, so
+                                   # fewer setups reach the target at all.
+SMMA_SWING_BARS = 40               # stop at this swing high/low.
+                                   # 18 Sep: 20 -> 40. A 20-bar swing on 1m is
+                                   # 20 minutes, and closed trades were living
+                                   # 32 min (stops) to 62 min (targets) - the
+                                   # stop was reaching back over a shorter
+                                   # window than the trade actually occupied,
+                                   # so it sat inside the noise the trade had
+                                   # to survive. 40 bars covers the holding
+                                   # period.
+                                   # SIZING, and it is not what it looks like.
+                                   # IM_SIZE_MODE "margin" solves leverage as
+                                   # IM_MAX_LOSS_FRAC / stop%, which at 0.50
+                                   # only bites once the stop is past ~5% of
+                                   # price (on a 10x market). Every stop this
+                                   # engine sets is far tighter, so the MARKET
+                                   # cap binds instead, notional stays put,
+                                   # and a 2x wider stop is simply 2x the
+                                   # dollars lost per stop-out - $4.35 -> $8.75
+                                   # on a $500 notional. It does NOT shrink
+                                   # the position to compensate. Drop
+                                   # IM_MAX_LOSS_FRAC if that should bind.
 
 # ==================== LIQUIDITY GRABS (Flux Charts) ====================
 # A pivot is a candle with the highest/lowest WICK of the LG_PIVOT bars
