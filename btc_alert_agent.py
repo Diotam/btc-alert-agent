@@ -1542,7 +1542,25 @@ REGIME_SLOPE_PCT = 0.0             # how far it must have moved, as a % of the
                                    # NOTHING, as before
 _REGIME = {}                       # per-symbol cache, TTL below
 REGIME_TTL_S = 300                 # one higher-TF fetch per symbol per scan
-ALLOW_SHORTS = True                # 17 Aug, LATER: back ON for the stoch-doji
+ALLOW_SHORTS = False               # 18 Sep: OFF. 203 closed trades on the
+                                   # 50-SMMA solo rule, 09:04-18:38:
+                                   #   LONG   36/79  45.6%   +11.00R
+                                   #   SHORT  25/124 20.2%   -61.50R
+                                   # Fisher exact p = 1.6e-4, and the short
+                                   # win rate's 95% CI is 13.1-27.2% - below
+                                   # breakeven at 1.5R (40%) AND at 2.0R
+                                   # (33.3%), so it does not turn on which
+                                   # multiple was actually running. The whole
+                                   # -50.50R is the short side; longs paid.
+                                   # This is a MEASUREMENT, not a view: 29
+                                   # shorts on 17 Sep were not enough to call
+                                   # (the interval still touched breakeven),
+                                   # 124 are. Re-check it before turning this
+                                   # back on, and re-check it in a DOWNTREND -
+                                   # every one of these was taken in a market
+                                   # that spent the day grinding up, and a
+                                   # close below the line is a dip there.
+                                   # 17 Aug, LATER: back ON for the stoch-doji
                                    # engine, which mirrors the setup - a doji
                                    # ending a GREEN run with two clean red
                                    # candles and %K crossing ABOVE 80 is the
