@@ -68,7 +68,7 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 # --- asset universe -------------------------------------------------------
-DISCOVER_ALL = False               # 12 Sep: BTC ONLY. Discovery is off, so
+DISCOVER_ALL = True                # 15 Sep: OPEN again. was BTC ONLY:
                                    # the universe is the ASSETS list below -
                                    # which already held just BTC. One symbol,
                                    # one chart, divergence measured on it
@@ -347,7 +347,7 @@ CROSS_SLOPE_BARS = 5               # bars per slope window. 5 on 30m = 2.5h.
 # its own level - the 200 is the most significant, the 21 the fastest.
 # The cross must be a CLOSE through the line, not a wick, so an intrabar poke
 # does not fire.
-SMMA_MODE = False                  # True switches the engine to this
+SMMA_MODE = True                   # 15 Sep: LIVE again - the stack rule.
 SMMA_LENGTHS = (21, 50, 200)       # longest is reported first when several
                                    # cross on the same bar
 # ---- STACK MODE. Reads how the LINES are ordered against each other, not
@@ -450,7 +450,7 @@ LG_STOP_PAD_PCT = 0.05             # stop this far beyond the sweeping wick
 #  3 CONFIRM - daily gives the BIAS (which side of zero), 4h gives the
 #              SIGNAL (crossover or divergence), 1h gives the TRIGGER (the
 #              histogram flipping). Any disagreement = no trade.
-MACD_MODE = True                   # 15 Sep: LIVE. This is the engine now.
+MACD_MODE = False                  # True switches the engine to this
 MACD_FAST, MACD_SLOW, MACD_SIG = 12, 26, 9
 
 # ---- THE THRESHOLD. His spec says "above +0.5 / below -0.5". MACD is in
@@ -2038,9 +2038,13 @@ for _n, _v in (("TF", TF), ("SCAN_EVERY", SCAN_EVERY)):
 # still carrying its seed; the same problem the 200 EMA had in August, where
 # a short fetch put the line 4.5% off and took a trade that should not have
 # fired. 900 bars is 75 hours on 5m.
-# 12 Sep: 1m added at 900 bars - 15 hours. The 200 SMMA needs ~3x its period
-# to shed the seed, so 600 is the floor and 900 leaves headroom.
-LOOKBACK = {"1m": 900, "5m": 900, "10m": 300, "15m": 750, "30m": 750,
+# 15 Sep: 1m fetch depth back to 300 at his call. NOTE THE COST: the 200
+# SMMA needs roughly 3x its period - about 600 bars - to shed its seed, and
+# the 200 is the line the stack rule FIRES on. At 300 bars that line still
+# carries initialisation error, so every trigger price is shifted by an
+# unknown amount. This is the same shape as the 200 EMA reading 4.5% off on
+# a short fetch in August, except it moves every entry rather than one.
+LOOKBACK = {"1m": 300, "5m": 900, "10m": 300, "15m": 750, "30m": 750,
             "1h": 500,
             "4h": 300}
 
