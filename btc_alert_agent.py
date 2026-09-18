@@ -402,6 +402,15 @@ SMMA_SOLO_SEP_PCT = 0.0            # how far beyond the line a close must sit
                                    # destroying it, and the buffer is safe to
                                    # turn up.
 SMMA_SOLO_LOOKBACK = 400           # how far back that walk may go
+SMMA_CONFIRM_BARS = 1              # 18 Sep: closes required AFTER the one
+                                   # that crosses the 200, before the trade
+                                   # fires. 1 = his "wait for next candle
+                                   # confirmation": the cross arms, the next
+                                   # close has to hold the same side, and the
+                                   # ENTRY is that confirming close.
+                                   # 0 restores the fire-on-the-cross rule.
+                                   # Costs one bar of entry price; refuses
+                                   # every one-bar poke through the line.
 # ---- STACK MODE. Reads how the LINES are ordered against each other, not
 # just where price sits.
 #   DOWNTREND structure: the 200 above the 50, and the 21 below the 50.
@@ -3724,50 +3733,70 @@ def inverted_fvgs(candles):
 def _smma_solo(cl, px, info=None):
     """SOLO: the close crossing the 200, with nothing else consulted.
 
+    CONFIRMATION (SMMA_CONFIRM_BARS, 18 Sep). The bar that crosses only ARMS
+    the trade; the next close has to stay on the same side before it fires.
+    The entry is that confirming close, not the crossing one. A single spike
+    through the line that snaps straight back no longer trades - which is
+    exactly the VVV 22:13 long (crossed up at 25.2870, back below at 25.2340
+    one minute later, stopped for -1R).
+
     The buffer is a STATE test, not a previous-close test. Asking only
     whether the bar before was on the other side is what cost the stack
     trigger its buffer: a first close landing INSIDE the band left the next
     bar already counting as "above", and the crossing was lost for good.
     Here a bar inside the band simply has no opinion and the walk continues
     past it, so raising SMMA_SOLO_SEP_PCT delays a signal but never deletes
-    one.
+    one. A no-opinion bar cannot confirm either - it is not on the side, so
+    the setup is dropped rather than counted as agreeing.
     """
     out = []
     m = smma_series(cl, SMMA_SOLO_LEN)
     if not m or len(m) < 3 or m[-1] is None:
         return out
     ssep = abs(px) * SMMA_SOLO_SEP_PCT / 100.0
+    n = max(0, SMMA_CONFIRM_BARS)
+    if len(cl) < n + 2 or len(m) < n + 2:
+        return out
 
-    # which side is this close decisively on?
-    now_up = cl[-1] > m[-1] + ssep
-    now_dn = cl[-1] < m[-1] - ssep
-    if not (now_up or now_dn):
+    def side_of(k):
+        """'up' / 'dn' / None for the close at k. None = inside the band."""
+        if k < 0 or k >= len(m) or m[k] is None:
+            return None
+        if cl[k] > m[k] + ssep:
+            return "up"
+        if cl[k] < m[k] - ssep:
+            return "dn"
+        return None
+
+    now = side_of(len(cl) - 1)
+    if now is None:
         return out                          # inside the band - no opinion
 
-    # ...and which side was the last close that HAD an opinion?
+    # the crossing bar, plus every bar since, must hold the SAME side. At
+    # n = 0 this is just the current bar and the rule is the old one.
+    cross = len(cl) - 1 - n
+    for k in range(cross, len(cl)):
+        if side_of(k) != now:
+            return out                      # confirmation failed
+
+    # the last decisive close BEFORE the crossing bar must be the other side,
+    # which is what makes `cross` the bar that crossed
     prev = None
-    for k in range(len(cl) - 2, max(0, len(cl) - 2 - SMMA_SOLO_LOOKBACK), -1):
-        if k >= len(m) or m[k] is None:
-            break
-        if cl[k] > m[k] + ssep:
-            prev = "up"
-            break
-        if cl[k] < m[k] - ssep:
-            prev = "dn"
+    for k in range(cross - 1, max(-1, cross - 1 - SMMA_SOLO_LOOKBACK), -1):
+        s = side_of(k)
+        if s:
+            prev = s
             break
     if prev is None:
         return out                          # nothing to have crossed FROM
-
-    if now_up and prev == "dn":
-        side = "LONG"
-    elif now_dn and prev == "up":
-        side = "SHORT"
-    else:
+    if prev == now:
         return out                          # same side as before, not a cross
 
+    side = "LONG" if now == "up" else "SHORT"
     if info is not None:
         info.update(solo=True, px=cl[-1], m200=m[-1],
-                    length=SMMA_SOLO_LEN, sep=SMMA_SOLO_SEP_PCT)
+                    length=SMMA_SOLO_LEN, sep=SMMA_SOLO_SEP_PCT,
+                    confirm=n, cross_px=cl[cross], cross_ago=n)
     return [(SMMA_SOLO_LEN, side, m[-1])]
 
 
@@ -3940,11 +3969,22 @@ def smma_signal(ast, candles, i):
     if SMMA_SOLO:
         up = side == "LONG"
         _sep = info.get("sep", 0.0)
-        ast["im_why"] = (
-            f"close at {fmt_px(info.get('px', 0.0))} is the first "
-            f"{'above' if up else 'below'} the {info.get('length', SMMA_SOLO_LEN)}"
-            f" SMMA at {fmt_px(ma)}"
-            + (f", clearing it by at least {_sep}%" if _sep else ""))
+        _n = info.get("confirm", 0)
+        if _n:
+            ast["im_why"] = (
+                f"crossed {'above' if up else 'below'} the "
+                f"{info.get('length', SMMA_SOLO_LEN)} SMMA at {fmt_px(ma)} on "
+                f"the close at {fmt_px(info.get('cross_px', 0.0))}, and the "
+                f"next {_n} close{'s' if _n > 1 else ''} held it - confirmed "
+                f"at {fmt_px(info.get('px', 0.0))}"
+                + (f", clearing the line by at least {_sep}%" if _sep else ""))
+        else:
+            ast["im_why"] = (
+                f"close at {fmt_px(info.get('px', 0.0))} is the first "
+                f"{'above' if up else 'below'} the "
+                f"{info.get('length', SMMA_SOLO_LEN)}"
+                f" SMMA at {fmt_px(ma)}"
+                + (f", clearing it by at least {_sep}%" if _sep else ""))
     elif SMMA_STACK:
         # SMMA_STACK is judged BEFORE SMMA_ALL_THREE, exactly as
         # smma_cross_state judges it - the old text described the all-three
@@ -4014,23 +4054,53 @@ def smma_gate(ast, candles, i, sym=None):
             return None
         trig = m[-1]
         above = px > trig
+        ssep = SMMA_SOLO_SEP_PCT
+        _b = abs(px) * ssep / 100.0
+
+        # is a cross ARMED and waiting on confirmation? That is the state the
+        # old row could not show: price already through the line with the
+        # confirming close not yet in.
+        armed = None
+        if SMMA_CONFIRM_BARS:
+            def _s(k):
+                if k < 0 or k >= len(m) or m[k] is None:
+                    return None
+                return ("up" if cl[k] > m[k] + _b
+                        else "dn" if cl[k] < m[k] - _b else None)
+            _now = _s(len(cl) - 1)
+            if _now:
+                _pr = None
+                for k in range(len(cl) - 2,
+                               max(-1, len(cl) - 2 - SMMA_SOLO_LOOKBACK), -1):
+                    if _s(k):
+                        _pr = _s(k)
+                        break
+                if _pr and _pr != _now:
+                    armed = "LONG" if _now == "up" else "SHORT"
+
         side = "SHORT" if above else "LONG"   # the side a cross would fire
         dist = (trig - px) / px * 100.0 if not above else (px - trig) / px * 100.0
-        ssep = SMMA_SOLO_SEP_PCT
-        inband = ssep and abs(px - trig) <= abs(px) * ssep / 100.0
+        inband = ssep and abs(px - trig) <= _b
         lit = 1 if dist > 0.3 else (3 if inband else 2)
+        if armed:
+            lit = 3
         bar = "".join(("█" if k < lit else "░") * 4 for k in range(3))
-        return {"sym": sym, "dir": side, "run": lit, "age": 0,
-                "stage": "ready" if dist <= 0.3 else "waiting",
+        if armed:
+            note = (f"CROSSED {'above' if armed == 'LONG' else 'below'} the "
+                    f"{SMMA_SOLO_LEN} SMMA {fmt_px(trig)} - armed {armed}, "
+                    f"needs {SMMA_CONFIRM_BARS} more close "
+                    f"{'above' if armed == 'LONG' else 'below'} to fire")
+        else:
+            note = (f"price {fmt_px(px)} is {'above' if above else 'below'} "
+                    f"the {SMMA_SOLO_LEN} SMMA {fmt_px(trig)} "
+                    f"({dist:+.2f}% away)  ·  a close "
+                    f"{'below' if above else 'above'} it arms {side}"
+                    + (f"  ·  needs {ssep}% clearance" if ssep else ""))
+        return {"sym": sym, "dir": armed or side, "run": lit, "age": 0,
+                "stage": ("armed" if armed else
+                          "ready" if dist <= 0.3 else "waiting"),
                 "trend": ("above the 200" if above else "below the 200"),
-                "detail": (f"{bar}  price {fmt_px(px)} is "
-                           f"{'above' if above else 'below'} the "
-                           f"{SMMA_SOLO_LEN} SMMA {fmt_px(trig)} "
-                           f"({dist:+.2f}% away)  ·  a close "
-                           f"{'below' if above else 'above'} it fires "
-                           f"{side}"
-                           + (f"  ·  needs {ssep}% clearance"
-                              if ssep else ""))}
+                "detail": f"{bar}  {note}"}
 
     m21, m50, m200 = (smma_series(cl, 21), smma_series(cl, 50),
                       smma_series(cl, 200))
