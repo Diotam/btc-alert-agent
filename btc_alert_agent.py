@@ -349,17 +349,20 @@ CROSS_SLOPE_BARS = 5               # bars per slope window. 5 on 30m = 2.5h.
 # does not fire.
 SMMA_MODE = True                   # 15 Sep: LIVE again - the stack rule.
                                    # 17 Sep: SOLO - the 200 on its own.
-SMMA_LENGTHS = (200,)              # 17 Sep: (21, 50, 200) -> (200,). SOLO
-                                   # never reads the 21 or the 50, and leaving
-                                   # them here built two dead series per
-                                   # symbol per scan.
-SMMA_MIN_BARS = 1000               # 17 Sep: refuse to signal under this many
-                                   # bars. The old guards (203, 210) only
-                                   # asked whether the 200 could be COMPUTED -
-                                   # at 203 bars it is 61% its own seed, which
-                                   # on a new listing is just that market's
-                                   # first 200 bars wearing a 200's name.
-                                   # 1000 puts the seed at 1.8%.
+SMMA_LENGTHS = (50,)               # 18 Sep: (200,) -> (50,), tracking
+                                   # SMMA_SOLO_LEN. SOLO reads nothing else.
+SMMA_MIN_BARS = 300                # refuse to signal under this many bars.
+                                   # A guard on CONVERGENCE, not on whether
+                                   # the line can be COMPUTED - the old guards
+                                   # (203, 210) asked only the latter, and a
+                                   # line built from barely its own period is
+                                   # mostly its seed: on a new listing that is
+                                   # just the market's first N bars wearing
+                                   # the name.
+                                   # 18 Sep: 1000 -> 300 with the switch to
+                                   # the 50. Seed at 300 bars is 0.64% for a
+                                   # 50 against 60.6% for a 200 - which is why
+                                   # the 200 needed 1000 and this does not.
 # ---- SOLO MODE. The only question is which side of the 200 the close is on.
 #   LONG  on the first close ABOVE the 200.
 #   SHORT on the first close BELOW it.
@@ -383,7 +386,19 @@ SMMA_SOLO = True                   # 17 Sep: LIVE. The 200 alone. Takes
                                    # real 200. At LOOKBACK 300 it was 61% its
                                    # own seed and SOLO had nothing else to
                                    # check it against.
-SMMA_SOLO_LEN = 200                # the only line consulted
+SMMA_SOLO_LEN = 50                 # the only line consulted.
+                                   # 18 Sep: 200 -> 50. A 50 on 1m is 50
+                                   # minutes against the 200's 3h20m, so it
+                                   # sits much closer to price and is crossed
+                                   # far more often - expect materially more
+                                   # signals, and lean on SMMA_CONFIRM_BARS
+                                   # to throw out the pokes.
+                                   # Changing this changes what LOOKBACK and
+                                   # SMMA_MIN_BARS below have to be: both are
+                                   # set by how long THIS length takes to
+                                   # converge, and the 50 converges ~4x faster
+                                   # than the 200. Going back to 200 means
+                                   # putting both of them back up.
 SMMA_SOLO_SEP_PCT = 0.0            # how far beyond the line a close must sit
                                    # to count as decisively through it, as a %
                                    # of price. 0.0 = any close through, which
@@ -2131,16 +2146,24 @@ for _n, _v in (("TF", TF), ("SCAN_EVERY", SCAN_EVERY)):
 # carries initialisation error, so every trigger price is shifted by an
 # unknown amount. This is the same shape as the 200 EMA reading 4.5% off on
 # a short fetch in August, except it moves every entry rather than one.
-# 17 Sep: 1m/10m/4h 300 -> 1200. smma_series seeds on SMA(first n) then runs
-# one Wilder step per later bar, so the seed decays as ((n-1)/n)**(bars-n).
-# For n=200: 300 bars -> 60.58% seed, 1200 bars -> 0.67%. At 300 the "200
-# SMMA" was mostly an average of bars 100-300 minutes old - not the line
-# TradingView draws, which is how shorts fired with price above the 200.
-# Also un-truncates MACD_DIV_LOOKBACK (600, was capped at 300).
-# Cost: ~4x candle payload per fetch. Request COUNT unchanged.
-LOOKBACK = {"1m": 1200, "5m": 900, "10m": 1200, "15m": 750, "30m": 750,
+# smma_series seeds on SMA(first n) then runs one Wilder step per later bar,
+# so the seed decays as ((n-1)/n)**(bars-n) and the fetch depth is set by the
+# LONGEST line in use, not by taste.
+#       bars:     300      600     1200
+#   n= 50:      0.64%   0.0015%   0.000%
+#   n=200:     60.58%   13.47%    0.67%
+# 17 Sep: 300 -> 1200, because the 200 at 300 bars was mostly an average of
+# bars 100-300 minutes old - not the line TradingView draws, which is how
+# shorts fired with price above it.
+# 18 Sep: 1200 -> 600 with the switch to the 50, which is converged to
+# 0.0015% there. This is a 2x cut in payload per fetch, and payload is what
+# a 1 vCPU / 512MB box fetching 110 symbols a minute was choking on - the
+# scan gap that silently ate the VVV 22:00 short. 600 also clears
+# SMMA_SOLO_LOOKBACK (400) and MACD_DIV_LOOKBACK (600) with room.
+# Going back to the 200 means putting this back to 1200.
+LOOKBACK = {"1m": 600, "5m": 900, "10m": 600, "15m": 750, "30m": 750,
             "1h": 500,
-            "4h": 1200}
+            "4h": 600}
 
 REQUEST_TIMEOUT_S = 8              # fail fast: a throttled API must not burn 20s
 FETCH_DELAY_S = 0.12
