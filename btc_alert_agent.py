@@ -7835,7 +7835,15 @@ def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger,
                    if isinstance(v, dict) and v.get("trade") and executable(k))
     ast["trade"] = {"verdict": direction, "entry": entry, "stop": stop,
                     "tp": tp, "opened_t": c["t"], "checked_t": c["t"],
-                    "rr": HA_RR, "risk0": risk, "half": False, "left": 1.0,
+                    # the trade's REAL ratio, from its own prices. This was
+                    # HA_RR (1.5) on every trade whatever engine opened it, so
+                    # the dashboard's `t.rr` fallback was permanently 1.5 even
+                    # after SMMA_RR went to 2.0. The card mostly derives from
+                    # tp/risk and so looked right, but any path that fell back
+                    # to this field read the wrong number.
+                    "rr": (round(abs(tp - entry) / risk, 4)
+                           if (risk and tp is not None) else HA_RR),
+                    "risk0": risk, "half": False, "left": 1.0,
                     "engine": engine or ENGINE_TAG,
                     # the strategy that opened it. record_close reads the
                     # TRADE, and im_path lived only on ast - so all 71 rows
