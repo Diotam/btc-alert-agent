@@ -349,13 +349,17 @@ CROSS_SLOPE_BARS = 5               # bars per slope window. 5 on 30m = 2.5h.
 # does not fire.
 SMMA_MODE = True                   # 15 Sep: LIVE again - the stack rule.
                                    # 17 Sep: SOLO - the 200 on its own.
-SMMA_LENGTHS = (200,)              # longest is reported first when several
-                                   # cross on the same bar.
-                                   # 17 Sep: (21, 50, 200) -> (200,). The 21
-                                   # and the 50 are not consulted by SOLO, and
-                                   # leaving them here made smma_cross_state
-                                   # build two extra series per symbol per
-                                   # scan for nothing - 110 symbols on 1m.
+SMMA_LENGTHS = (200,)              # 17 Sep: (21, 50, 200) -> (200,). SOLO
+                                   # never reads the 21 or the 50, and leaving
+                                   # them here built two dead series per
+                                   # symbol per scan.
+SMMA_MIN_BARS = 1000               # 17 Sep: refuse to signal under this many
+                                   # bars. The old guards (203, 210) only
+                                   # asked whether the 200 could be COMPUTED -
+                                   # at 203 bars it is 61% its own seed, which
+                                   # on a new listing is just that market's
+                                   # first 200 bars wearing a 200's name.
+                                   # 1000 puts the seed at 1.8%.
 # ---- SOLO MODE. The only question is which side of the 200 the close is on.
 #   LONG  on the first close ABOVE the 200.
 #   SHORT on the first close BELOW it.
@@ -371,9 +375,14 @@ SMMA_LENGTHS = (200,)              # longest is reported first when several
 # no arm at all. What actually governs chop is SMMA_SOLO_SEP_PCT: on the
 # same series 0.05% -> 113, 0.15% -> 87, 0.30% -> 56, 0.50% -> 4.
 # One synthetic, one noise amplitude - directional, not a forecast.
-SMMA_SOLO = True                   # 17 Sep: LIVE. Takes precedence over
-                                   # SMMA_STACK, SMMA_REVERSAL and
-                                   # SMMA_ALL_THREE. False restores the stack.
+SMMA_SOLO = True                   # 17 Sep: LIVE. The 200 alone. Takes
+                                   # precedence over SMMA_STACK, SMMA_REVERSAL
+                                   # and SMMA_ALL_THREE.
+                                   # Safe only because LOOKBACK and
+                                   # SMMA_MIN_BARS below now make the 200 a
+                                   # real 200. At LOOKBACK 300 it was 61% its
+                                   # own seed and SOLO had nothing else to
+                                   # check it against.
 SMMA_SOLO_LEN = 200                # the only line consulted
 SMMA_SOLO_SEP_PCT = 0.0            # how far beyond the line a close must sit
                                    # to count as decisively through it, as a %
@@ -405,12 +414,9 @@ SMMA_SOLO_LOOKBACK = 400           # how far back that walk may go
 # The arm persists - the cross and the close do not have to be adjacent -
 # and the close must be the FIRST one through the 200, so one arm gives one
 # trade.
-SMMA_STACK = False                 # 14 Sep: LIVE. Takes precedence over
-                                   # SMMA_REVERSAL and SMMA_ALL_THREE below.
-                                   # 17 Sep: OFF - SMMA_SOLO replaces it. The
-                                   # branch below is untouched, so setting this
-                                   # True and SMMA_SOLO False restores the
-                                   # stack rule exactly as it ran.
+SMMA_STACK = False                 # 17 Sep: OFF - SMMA_SOLO replaces it.
+                                   # Branch below is untouched; set this True
+                                   # and SMMA_SOLO False to restore the stack.
 SMMA_STACK_LOOKBACK = 400          # how far back the arming cross may sit
 SMMA_REVERSAL = True               # 14 Sep: ON, rebuilt as a STATE
                                    # MACHINE - see below. was OFF: PONS 19:30 is the case -
@@ -2091,9 +2097,16 @@ for _n, _v in (("TF", TF), ("SCAN_EVERY", SCAN_EVERY)):
 # carries initialisation error, so every trigger price is shifted by an
 # unknown amount. This is the same shape as the 200 EMA reading 4.5% off on
 # a short fetch in August, except it moves every entry rather than one.
-LOOKBACK = {"1m": 300, "5m": 900, "10m": 300, "15m": 750, "30m": 750,
+# 17 Sep: 1m/10m/4h 300 -> 1200. smma_series seeds on SMA(first n) then runs
+# one Wilder step per later bar, so the seed decays as ((n-1)/n)**(bars-n).
+# For n=200: 300 bars -> 60.58% seed, 1200 bars -> 0.67%. At 300 the "200
+# SMMA" was mostly an average of bars 100-300 minutes old - not the line
+# TradingView draws, which is how shorts fired with price above the 200.
+# Also un-truncates MACD_DIV_LOOKBACK (600, was capped at 300).
+# Cost: ~4x candle payload per fetch. Request COUNT unchanged.
+LOOKBACK = {"1m": 1200, "5m": 900, "10m": 1200, "15m": 750, "30m": 750,
             "1h": 500,
-            "4h": 300}
+            "4h": 1200}
 
 REQUEST_TIMEOUT_S = 8              # fail fast: a throttled API must not burn 20s
 FETCH_DELAY_S = 0.12
@@ -3778,7 +3791,10 @@ def smma_cross_state(candles, info=None):
     """
     out = []
     _need = max(SMMA_SOLO_LEN if SMMA_SOLO else 0, max(SMMA_LENGTHS))
-    if not candles or len(candles) < _need + 3:
+    # CONVERGENCE, not just computability. len >= n + 3 is enough to produce
+    # a number and nowhere near enough for that number to be the line. See
+    # SMMA_MIN_BARS.
+    if not candles or len(candles) < max(_need + 3, SMMA_MIN_BARS):
         return out
     cl = [x["c"] for x in candles]
     px = cl[-1]
@@ -3974,6 +3990,20 @@ def smma_gate(ast, candles, i, sym=None):
         return None
     cl = [x["c"] for x in w]
     px = cl[-1]
+
+    if len(w) < SMMA_MIN_BARS:
+        # SAY SO rather than vanishing from the panel. A symbol that silently
+        # drops off the watchlist looks like a feed problem; a symbol that
+        # says it has no usable 200 yet is the engine being honest about a
+        # market too young to have one.
+        _seed = ((200 - 1) / 200.0) ** max(0, len(w) - 200)
+        return {"sym": sym, "dir": "-", "run": 0, "age": 0,
+                "stage": "no history",
+                "trend": "too new",
+                "detail": (f"░" * 12 + f"  only {len(w)} bars - the 200 "
+                           f"would be {_seed * 100:.0f}% its own seed, so it "
+                           f"is not a 200 yet. Needs {SMMA_MIN_BARS}. "
+                           f"No signal will fire on this symbol.")}
 
     if SMMA_SOLO:
         # SOLO has no arm to report, so the row answers the only question
