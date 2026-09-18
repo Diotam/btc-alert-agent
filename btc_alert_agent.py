@@ -348,8 +348,51 @@ CROSS_SLOPE_BARS = 5               # bars per slope window. 5 on 30m = 2.5h.
 # The cross must be a CLOSE through the line, not a wick, so an intrabar poke
 # does not fire.
 SMMA_MODE = True                   # 15 Sep: LIVE again - the stack rule.
-SMMA_LENGTHS = (21, 50, 200)       # longest is reported first when several
-                                   # cross on the same bar
+                                   # 17 Sep: SOLO - the 200 on its own.
+SMMA_LENGTHS = (200,)              # longest is reported first when several
+                                   # cross on the same bar.
+                                   # 17 Sep: (21, 50, 200) -> (200,). The 21
+                                   # and the 50 are not consulted by SOLO, and
+                                   # leaving them here made smma_cross_state
+                                   # build two extra series per symbol per
+                                   # scan for nothing - 110 symbols on 1m.
+# ---- SOLO MODE. The only question is which side of the 200 the close is on.
+#   LONG  on the first close ABOVE the 200.
+#   SHORT on the first close BELOW it.
+# No structure test and NO ARM. Both rules fire at most once per crossing -
+# the trigger is the CROSS, not price being on a side - so the difference is
+# only which crossings get through: the stack wanted an arm behind them, SOLO
+# takes them all. Nothing downstream re-filters, ONE_PER_TREND does not reach
+# this engine (it needs ast["setup"], which the SMMA path never sets).
+# Measured on a synthetic series hovering on the line, 128 real crossings:
+# stack 115 signals, SOLO 133. So the arm was worth little in chop - arms
+# keep re-forming when the 21 and 50 are themselves oscillating - and the
+# gap is much wider in a trend, where the stack refuses crossings that have
+# no arm at all. What actually governs chop is SMMA_SOLO_SEP_PCT: on the
+# same series 0.05% -> 113, 0.15% -> 87, 0.30% -> 56, 0.50% -> 4.
+# One synthetic, one noise amplitude - directional, not a forecast.
+SMMA_SOLO = True                   # 17 Sep: LIVE. Takes precedence over
+                                   # SMMA_STACK, SMMA_REVERSAL and
+                                   # SMMA_ALL_THREE. False restores the stack.
+SMMA_SOLO_LEN = 200                # the only line consulted
+SMMA_SOLO_SEP_PCT = 0.0            # how far beyond the line a close must sit
+                                   # to count as decisively through it, as a %
+                                   # of price. 0.0 = any close through, which
+                                   # is the rule as asked for. Raise it to
+                                   # refuse chop.
+                                   # This is NOT SMMA_MIN_SEP_PCT's test. That
+                                   # one asks whether the PREVIOUS close was on
+                                   # the other side, so a first close landing
+                                   # INSIDE the band left the next bar already
+                                   # counting as "above" and the signal was
+                                   # lost for good - the same trap the stack
+                                   # trigger had to drop its buffer to escape.
+                                   # This walks back to the last close that was
+                                   # decisively on one side, so a bar inside
+                                   # the band DEFERS the decision instead of
+                                   # destroying it, and the buffer is safe to
+                                   # turn up.
+SMMA_SOLO_LOOKBACK = 400           # how far back that walk may go
 # ---- STACK MODE. Reads how the LINES are ordered against each other, not
 # just where price sits.
 #   DOWNTREND structure: the 200 above the 50, and the 21 below the 50.
@@ -362,8 +405,12 @@ SMMA_LENGTHS = (21, 50, 200)       # longest is reported first when several
 # The arm persists - the cross and the close do not have to be adjacent -
 # and the close must be the FIRST one through the 200, so one arm gives one
 # trade.
-SMMA_STACK = True                  # 14 Sep: LIVE. Takes precedence over
+SMMA_STACK = False                 # 14 Sep: LIVE. Takes precedence over
                                    # SMMA_REVERSAL and SMMA_ALL_THREE below.
+                                   # 17 Sep: OFF - SMMA_SOLO replaces it. The
+                                   # branch below is untouched, so setting this
+                                   # True and SMMA_SOLO False restores the
+                                   # stack rule exactly as it ran.
 SMMA_STACK_LOOKBACK = 400          # how far back the arming cross may sit
 SMMA_REVERSAL = True               # 14 Sep: ON, rebuilt as a STATE
                                    # MACHINE - see below. was OFF: PONS 19:30 is the case -
@@ -2168,6 +2215,10 @@ def fetch_hyperliquid(coin, interval, lookback):
 def engine_label():
     """What the alerts should call the running engine."""
     if SMMA_MODE:
+        if SMMA_SOLO:
+            return f"SMMA {SMMA_SOLO_LEN} cross"
+        if SMMA_STACK:
+            return "SMMA stack 21/50/200"
         return f"SMMA cross {'/'.join(str(x) for x in SMMA_LENGTHS)}"
     if LG_MODE:
         return "Liquidity Grabs"
@@ -3657,8 +3708,66 @@ def inverted_fvgs(candles):
     return bull, bear
 
 
-def smma_cross_state(candles):
+def _smma_solo(cl, px, info=None):
+    """SOLO: the close crossing the 200, with nothing else consulted.
+
+    The buffer is a STATE test, not a previous-close test. Asking only
+    whether the bar before was on the other side is what cost the stack
+    trigger its buffer: a first close landing INSIDE the band left the next
+    bar already counting as "above", and the crossing was lost for good.
+    Here a bar inside the band simply has no opinion and the walk continues
+    past it, so raising SMMA_SOLO_SEP_PCT delays a signal but never deletes
+    one.
+    """
+    out = []
+    m = smma_series(cl, SMMA_SOLO_LEN)
+    if not m or len(m) < 3 or m[-1] is None:
+        return out
+    ssep = abs(px) * SMMA_SOLO_SEP_PCT / 100.0
+
+    # which side is this close decisively on?
+    now_up = cl[-1] > m[-1] + ssep
+    now_dn = cl[-1] < m[-1] - ssep
+    if not (now_up or now_dn):
+        return out                          # inside the band - no opinion
+
+    # ...and which side was the last close that HAD an opinion?
+    prev = None
+    for k in range(len(cl) - 2, max(0, len(cl) - 2 - SMMA_SOLO_LOOKBACK), -1):
+        if k >= len(m) or m[k] is None:
+            break
+        if cl[k] > m[k] + ssep:
+            prev = "up"
+            break
+        if cl[k] < m[k] - ssep:
+            prev = "dn"
+            break
+    if prev is None:
+        return out                          # nothing to have crossed FROM
+
+    if now_up and prev == "dn":
+        side = "LONG"
+    elif now_dn and prev == "up":
+        side = "SHORT"
+    else:
+        return out                          # same side as before, not a cross
+
+    if info is not None:
+        info.update(solo=True, px=cl[-1], m200=m[-1],
+                    length=SMMA_SOLO_LEN, sep=SMMA_SOLO_SEP_PCT)
+    return [(SMMA_SOLO_LEN, side, m[-1])]
+
+
+def smma_cross_state(candles, info=None):
     """[(length, side, ma_now)] for the lines the last CLOSED bar crossed.
+
+    `info`, when a dict is passed, is filled with the detail behind a STACK
+    or SOLO signal - the line values, the close that triggered it and (stack
+    only) how far back the arming 21/50 cross sits - so the alert can
+    describe the rule that actually fired instead of re-deriving it.
+
+    SMMA_SOLO short-circuits everything below it: only the 200 is built, and
+    the 21 and the 50 are never computed at all.
 
     With SMMA_ALL_THREE the bar must close beyond EVERY line, and must have
     been on the other side of at least one of them on the previous bar - so
@@ -3668,10 +3777,15 @@ def smma_cross_state(candles):
     SMMA_MIN_SEP_PCT.
     """
     out = []
-    if not candles or len(candles) < max(SMMA_LENGTHS) + 3:
+    _need = max(SMMA_SOLO_LEN if SMMA_SOLO else 0, max(SMMA_LENGTHS))
+    if not candles or len(candles) < _need + 3:
         return out
     cl = [x["c"] for x in candles]
     px = cl[-1]
+
+    if SMMA_SOLO:
+        return _smma_solo(cl, px, info)
+
     sep = abs(px) * SMMA_MIN_SEP_PCT / 100.0
     mas = {}
     for n in SMMA_LENGTHS:
@@ -3709,11 +3823,17 @@ def smma_cross_state(candles):
                 # the 21 crossing ABOVE the 50, with the 200 on top
                 if m21[j - 1] <= m50[j - 1] and m21[j] > m50[j]:
                     if m200[j] > m50[j]:
+                        if info is not None:
+                            info.update(arm_ago=k, px=cl[-1], m21=m21[-1],
+                                        m50=m50[-1], m200=m200[-1])
                         return [(n, "LONG", v) for (n, v) in lvl]
                     return out              # cross without the structure
             else:
                 if m21[j - 1] >= m50[j - 1] and m21[j] < m50[j]:
                     if m200[j] < m50[j]:
+                        if info is not None:
+                            info.update(arm_ago=k, px=cl[-1], m21=m21[-1],
+                                        m50=m50[-1], m200=m200[-1])
                         return [(n, "SHORT", v) for (n, v) in lvl]
                     return out
         return out
@@ -3779,9 +3899,21 @@ def smma_cross_state(candles):
 
 
 def smma_signal(ast, candles, i):
-    """Reversal on a close through an SMMA. "LONG"/"SHORT" or None."""
-    w = candles[:i]
-    crossed = smma_cross_state(w)
+    """Reversal on a close through an SMMA. "LONG"/"SHORT" or None.
+
+    The window ENDS AT i INCLUSIVE. Bar i is the bar the rule is judged on
+    and the bar process_candle prices the entry from (entry = c["c"], and
+    c is candles[i]) - those have to be the same bar. They were not: the
+    window was candles[:i], so the cross was detected on bar i-1 while the
+    fill was read off bar i, one whole candle later. PONS on 17 Sep entered
+    0.66962 on a SHORT whose 200 sat at 0.66589 - already through the line,
+    giving away ~0.5% of a ~1.9% stop. Bar i is always closed here
+    (last_eval = len(cs) - 2 with ENTRY_AT_OPEN off), so including it never
+    reads the forming candle.
+    """
+    w = candles[:i + 1]
+    info = {}
+    crossed = smma_cross_state(w, info)
     if not crossed:
         return None
     n, side, ma = crossed[0]
@@ -3789,7 +3921,31 @@ def smma_signal(ast, candles, i):
     ast["smma"] = {"len": n, "side": side, "ma": ma,
                    "also": [x[0] for x in crossed[1:]]}
     ast["im_path"] = "smma"
-    if SMMA_ALL_THREE:
+    if SMMA_SOLO:
+        up = side == "LONG"
+        _sep = info.get("sep", 0.0)
+        ast["im_why"] = (
+            f"close at {fmt_px(info.get('px', 0.0))} is the first "
+            f"{'above' if up else 'below'} the {info.get('length', SMMA_SOLO_LEN)}"
+            f" SMMA at {fmt_px(ma)}"
+            + (f", clearing it by at least {_sep}%" if _sep else ""))
+    elif SMMA_STACK:
+        # SMMA_STACK is judged BEFORE SMMA_ALL_THREE, exactly as
+        # smma_cross_state judges it - the old text described the all-three
+        # rule the stack replaced, so every stack alert explained a rule the
+        # engine was no longer running.
+        up = side == "LONG"
+        ago = info.get("arm_ago")
+        ast["im_why"] = (
+            f"{'downtrend' if up else 'uptrend'} stack "
+            f"({'200 over 50' if up else '50 over 200'} - "
+            f"200 {fmt_px(info.get('m200', ma))}, "
+            f"50 {fmt_px(info.get('m50', 0.0))}), the 21 crossed "
+            f"{'above' if up else 'below'} the 50"
+            + (f" {ago} bars ago" if ago is not None else "")
+            + f", and this close at {fmt_px(info.get('px', 0.0))} is the "
+              f"first {'above' if up else 'below'} the 200 at {fmt_px(ma)}")
+    elif SMMA_ALL_THREE:
         lv = ", ".join(f"{x[0]} {fmt_px(x[2])}" for x in crossed)
         ast["im_why"] = (
             f"price closed {'above' if side == 'LONG' else 'below'} ALL "
@@ -3808,12 +3964,44 @@ def smma_gate(ast, candles, i, sym=None):
 
         LONG armed   ███░░░░  21 crossed the 50 62 bars ago
                      needs a close above the 200 (+0.26% away)
+
+    Window ends at i INCLUSIVE, to match smma_signal - a row describing a
+    different bar from the one the signal judged is how the watchlist came
+    to show "waiting" beside an alert that had already fired.
     """
-    w = candles[:i]
+    w = candles[:i + 1]
     if len(w) < 210:
         return None
     cl = [x["c"] for x in w]
     px = cl[-1]
+
+    if SMMA_SOLO:
+        # SOLO has no arm to report, so the row answers the only question
+        # there is: which side of the line price is on, and therefore which
+        # way the next close through it would fire.
+        m = smma_series(cl, SMMA_SOLO_LEN)
+        if not m or m[-1] is None:
+            return None
+        trig = m[-1]
+        above = px > trig
+        side = "SHORT" if above else "LONG"   # the side a cross would fire
+        dist = (trig - px) / px * 100.0 if not above else (px - trig) / px * 100.0
+        ssep = SMMA_SOLO_SEP_PCT
+        inband = ssep and abs(px - trig) <= abs(px) * ssep / 100.0
+        lit = 1 if dist > 0.3 else (3 if inband else 2)
+        bar = "".join(("█" if k < lit else "░") * 4 for k in range(3))
+        return {"sym": sym, "dir": side, "run": lit, "age": 0,
+                "stage": "ready" if dist <= 0.3 else "waiting",
+                "trend": ("above the 200" if above else "below the 200"),
+                "detail": (f"{bar}  price {fmt_px(px)} is "
+                           f"{'above' if above else 'below'} the "
+                           f"{SMMA_SOLO_LEN} SMMA {fmt_px(trig)} "
+                           f"({dist:+.2f}% away)  ·  a close "
+                           f"{'below' if above else 'above'} it fires "
+                           f"{side}"
+                           + (f"  ·  needs {ssep}% clearance"
+                              if ssep else ""))}
+
     m21, m50, m200 = (smma_series(cl, 21), smma_series(cl, 50),
                       smma_series(cl, 200))
     if not (m21 and m50 and m200):
@@ -3840,7 +4028,13 @@ def smma_gate(ast, candles, i, sym=None):
     elif (not down) and (not fast_up):
         side, armed = "SHORT", True
     else:
-        side, armed = ("SHORT" if down else "LONG"), False
+        # NOT armed: the side is the one this structure can still PRODUCE,
+        # not the way the structure points. Under the stack rule a 200-over-50
+        # downtrend arms a LONG when the 21 crosses up, so a down structure
+        # with the 21 still below the 50 is a LONG in waiting. This read
+        # "SHORT if down", which named the opposite side and then measured
+        # `dist` to the 200 from the wrong direction.
+        side, armed = ("LONG" if down else "SHORT"), False
 
     trig = m200[-1]
     dist = (trig - px) / px * 100.0 if side == "LONG" else (px - trig) / px * 100.0
@@ -7630,7 +7824,8 @@ def process_candle(asset, ast, candles, ha, i):
                 # of discovery on a 429 is never re-evaluated, and its row
                 # sat on the dashboard looking current - xyz:UNITREE showed
                 # "flat 38 bars" for 36 HOURS on 22-23 Aug.
-                _g["t"] = candles[i - 1]["t"]
+                # SMMA reads through bar i, the other gates stop at i-1.
+                _g["t"] = candles[i if SMMA_MODE else i - 1]["t"]
             ast["gate"] = _g
         except Exception as e:
             log(f"{sym}: im_gate_status failed: {type(e).__name__}: {e}")
@@ -7657,8 +7852,14 @@ def process_candle(asset, ast, candles, ha, i):
         stop = None
         stop_src = ""
         if SMMA_MODE:
-            _lo = max(0, i - SMMA_SWING_BARS)
-            _win = candles[_lo:i]
+            # the swing ENDS on the signal bar, inclusive. That was already
+            # true before the window fix (signal bar i-1, window [..:i]) and
+            # stays true now the signal bar is i - otherwise moving the
+            # signal forward would have quietly dropped the trigger candle
+            # out of its own stop, and the trigger candle is the one whose
+            # low the stop is meant to sit under.
+            _lo = max(0, i + 1 - SMMA_SWING_BARS)
+            _win = candles[_lo:i + 1]
             if not _win:
                 return False
             stop = (min(x["l"] for x in _win) if want_long
