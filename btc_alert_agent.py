@@ -417,15 +417,17 @@ SMMA_SOLO_SEP_PCT = 0.0            # how far beyond the line a close must sit
                                    # destroying it, and the buffer is safe to
                                    # turn up.
 SMMA_SOLO_LOOKBACK = 400           # how far back that walk may go
-SMMA_CONFIRM_BARS = 1              # 18 Sep: closes required AFTER the one
-                                   # that crosses the 200, before the trade
-                                   # fires. 1 = his "wait for next candle
-                                   # confirmation": the cross arms, the next
-                                   # close has to hold the same side, and the
-                                   # ENTRY is that confirming close.
-                                   # 0 restores the fire-on-the-cross rule.
-                                   # Costs one bar of entry price; refuses
-                                   # every one-bar poke through the line.
+SMMA_CONFIRM_BARS = 2              # closes required AFTER the one that
+                                   # crosses the line, before the trade fires.
+                                   # The cross arms; every bar after it has to
+                                   # hold the same side; the ENTRY is the last
+                                   # of them. 0 restores fire-on-the-cross.
+                                   # 18 Sep: 0 -> 1 -> 2. Each extra bar buys
+                                   # a stricter filter with a later, worse
+                                   # entry, and the stop does NOT move with it
+                                   # - SMMA_SWING_BARS is measured from the
+                                   # signal bar, so a later entry sits closer
+                                   # to its own stop and risk% grows.
 # ---- STACK MODE. Reads how the LINES are ordered against each other, not
 # just where price sits.
 #   DOWNTREND structure: the 200 above the 50, and the 21 below the 50.
@@ -4108,7 +4110,7 @@ def smma_gate(ast, candles, i, sym=None):
         # is a cross ARMED and waiting on confirmation? That is the state the
         # old row could not show: price already through the line with the
         # confirming close not yet in.
-        armed = None
+        armed, need = None, 0
         if SMMA_CONFIRM_BARS:
             def _s(k):
                 if k < 0 or k >= len(m) or m[k] is None:
@@ -4117,14 +4119,27 @@ def smma_gate(ast, candles, i, sym=None):
                         else "dn" if cl[k] < m[k] - _b else None)
             _now = _s(len(cl) - 1)
             if _now:
-                _pr = None
+                # walk back to the last bar on the OTHER side; the bar after
+                # it is the one that crossed. Counting from there is what lets
+                # the row track confirmation IN PROGRESS - the old version only
+                # asked "is this bar the first on a new side", so at
+                # SMMA_CONFIRM_BARS = 2 it showed "armed" on the crossing bar
+                # and then fell back to "waiting" while the setup was still
+                # very much alive.
+                _cross = None
                 for k in range(len(cl) - 2,
                                max(-1, len(cl) - 2 - SMMA_SOLO_LOOKBACK), -1):
-                    if _s(k):
-                        _pr = _s(k)
+                    _sk = _s(k)
+                    if _sk and _sk != _now:
+                        _cross = k + 1
                         break
-                if _pr and _pr != _now:
-                    armed = "LONG" if _now == "up" else "SHORT"
+                    if _sk == _now:
+                        _cross = k          # still on this side, keep walking
+                if _cross is not None:
+                    held = len(cl) - _cross          # bars on this side incl.
+                    need = (SMMA_CONFIRM_BARS + 1) - held
+                    if need > 0:
+                        armed = "LONG" if _now == "up" else "SHORT"
 
         side = "SHORT" if above else "LONG"   # the side a cross would fire
         dist = (trig - px) / px * 100.0 if not above else (px - trig) / px * 100.0
@@ -4134,9 +4149,11 @@ def smma_gate(ast, candles, i, sym=None):
             lit = 3
         bar = "".join(("█" if k < lit else "░") * 4 for k in range(3))
         if armed:
+            _held = SMMA_CONFIRM_BARS + 1 - need
             note = (f"CROSSED {'above' if armed == 'LONG' else 'below'} the "
                     f"{SMMA_SOLO_LEN} SMMA {fmt_px(trig)} - armed {armed}, "
-                    f"needs {SMMA_CONFIRM_BARS} more close "
+                    f"held {_held}/{SMMA_CONFIRM_BARS + 1}, needs {need} more "
+                    f"close{'s' if need > 1 else ''} "
                     f"{'above' if armed == 'LONG' else 'below'} to fire")
         else:
             note = (f"price {fmt_px(px)} is {'above' if above else 'below'} "
