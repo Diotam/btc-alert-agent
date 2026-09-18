@@ -9028,6 +9028,14 @@ def check_once():
                               # it unconditionally left 4h cards reading
                               # "just now" for four hours.
                               entry_on_close=not bool(ENTRY_AT_OPEN),
+                              # the R multiple actually in force, so the
+                              # dashboard stops carrying its own hardcoded
+                              # copy. Its RREF was still 1.5 after SMMA_RR
+                              # went to 2.0 and nothing said so.
+                              rr=(SMMA_RR if SMMA_MODE else
+                                  LG_RR if LG_MODE else
+                                  MACD_RR if MACD_MODE else
+                                  FVG_RR if FVG_MODE else HA_RR),
                               tz=TIMEZONE,
                               last_scan_utc=datetime.now(timezone.utc)
                               .isoformat(timespec="seconds"))
