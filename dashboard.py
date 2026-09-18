@@ -370,6 +370,19 @@ def scan_age_s(state, mtime):
 
 STALE_GATE_BARS = 3        # gate rows older than this many bars are dropped
 
+# ONE timeframe table, used by every lookup below. There were three separate
+# copies, and all three were missing "1m" and "10m" - so a 1m agent silently
+# fell through to each one's default. Three different symptoms, one cause:
+#   tf_ms       -> 15m, so the card age subtracted 15 minutes and every
+#                  trade under 15 minutes old read "just now"
+#   tv_interval -> "15", so cards opened a 15m chart of a 1m trade
+#   gate span   -> 30m, so stale watchlist rows lived 90 minutes
+# Anything not listed still falls back, but the traded timeframes are here.
+TF_MS = {"1m": 60_000, "5m": 300_000, "10m": 600_000, "15m": 900_000,
+         "30m": 1_800_000, "1h": 3_600_000, "4h": 14_400_000}
+TV_INT = {"1m": "1", "5m": "5", "10m": "10", "15m": "15", "30m": "30",
+          "1h": "60", "4h": "240"}
+
 
 def build_data():
     state, mtime = read_state()
@@ -393,9 +406,12 @@ def build_data():
             # symbol has not been evaluated since - a failed fetch, or it
             # fell out of discovery - and the row describes the past.
             # xyz:UNITREE showed "flat 38 bars" for 36 HOURS on 22-23 Aug.
-            _span = {"5m": 300_000, "15m": 900_000, "30m": 1_800_000,
-                     "1h": 3_600_000, "4h": 14_400_000}.get(
-                         (state.get("_meta") or {}).get("tf", "30m"), 1_800_000)
+            # 18 Sep: "1m" and "10m" were MISSING from this map, so a 1m
+            # agent fell through to the 30m default and gate rows were kept
+            # for 3 x 30min = 90 MINUTES instead of 3 minutes. Stale
+            # watchlist rows are exactly what STALE_GATE_BARS exists to stop.
+            _span = TF_MS.get((state.get("_meta") or {}).get("tf", "30m"),
+                              1_800_000)
             if (time.time() * 1000 - g["t"]) / _span > STALE_GATE_BARS:
                 g = None
         if g and not tr:
@@ -432,7 +448,13 @@ def build_data():
     # closest to firing first for the pipeline; for trades, highest R at the
     # top, so the one nearest its target leads and the one nearest its stop
     # sits last. Rebuilt on every SSE tick, so the order re-shuffles live
-    _ORDER = {"ready": 0, "no-wick bar forming": 1, "flipped": 2,
+    # "armed" outranks everything: the cross has already happened and only the
+    # confirming close is missing, so it is one bar from firing. It was not in
+    # this table at all, fell through to 9, and sorted BELOW rows that were
+    # still waiting for a cross. "no history" sorts last - it can never fire.
+    _ORDER = {"armed": -1,
+              "ready": 0, "no-wick bar forming": 1, "flipped": 2,
+              "waiting": 3.6, "no history": 99,
               "waiting for a cross": 2.5,
               "too far from EMA": 3, "range - EMA is flat": 3.5,
               "BTC disagrees": 3.7, "shorts are off": 3.8, "4h trend disagrees": 3.9, "run was on the wrong side": 3.95, "trend already taken": 3.97, "too late in the trend": 3.98, "30-day downtrend": 3.985, "flat - MA going nowhere": 3.99, "waiting for a colour flip": 2.4, "MA disagrees": 3.96, "wrong side of EMA": 4, "wick too long": 5,
@@ -453,11 +475,9 @@ def build_data():
             "tz": (state.get("_meta") or {}).get("tz", "America/Chicago"),
             # opened_t is the candle's OPEN time but the entry happens at its
             # CLOSE, so the age needs one candle added to be honest
-            "tf_ms": {"5m": 300_000, "15m": 900_000, "30m": 1_800_000,
-                      "1h": 3_600_000, "4h": 14_400_000}.get(
-                (state.get("_meta") or {}).get("tf", "15m"), 900_000),
-            "tv_interval": {"5m": "5", "15m": "15", "30m": "30",
-                            "1h": "60", "4h": "240"}.get(
+            "tf_ms": TF_MS.get((state.get("_meta") or {}).get("tf", "15m"),
+                               900_000),
+            "tv_interval": TV_INT.get(
                 (state.get("_meta") or {}).get("tf", "15m"), "15"),
             # the agent publishes its own pulse, so the staleness threshold
             # follows SCAN_EVERY instead of assuming the old 5m loop. Two
@@ -636,10 +656,13 @@ let TVINT='15';   // replaced from _meta.tf on the first poll
 let TZ='America/Chicago';   // replaced from _meta.tz on the first poll
 const TVLAYOUT=__TV_LAYOUT__;
 // a saved layout carries its indicators; a bare /chart/ does not
-// ONE reference for both the card bar and the graph. They were hardcoded
-// to 3 separately, which is where the scale came from when the flip engine
-// had no target at all.
-const RREF=1.5;
+// ONE reference for both the card bar and the graph, used ONLY when a trade
+// has no real target to be a fraction of (a parked TP). Hardcoding it meant
+// it went stale every time the engine's R multiple changed - it was 3, then
+// 1.5, and the 1.5 survived the move to 2.0 on 18 Sep. Now it follows the
+// agent's own SMMA_RR through _meta.rr, so changing the multiple in the
+// agent needs no dashboard edit at all.
+let RREF=2;
 const TVBASE='https://www.tradingview.com/chart/'+(TVLAYOUT?TVLAYOUT+'/':'')+'?symbol=';
 // inline onclick handlers run in GLOBAL scope, so these must live at the top
 // level - defined inside a render function they are invisible to the cards.
@@ -776,7 +799,8 @@ function render(d){
     const prog=t=>{
       const parked=t.tp!=null&&t.entry&&(t.tp/t.entry>2||t.tp/t.entry<0.5);
       if(parked) return Math.min(100,Math.abs(t.r||0)/RREF*100);
-      const rrt=(t.tp!=null&&t.risk)?Math.abs((t.tp-t.entry)/t.risk):(t.rr||1.5);
+      const rrt=(t.tp!=null&&t.risk)?Math.abs((t.tp-t.entry)/t.risk)
+                                    :(t.rr||RREF);
       return t.r>=0?Math.min(100,t.r/rrt*100):Math.min(100,-t.r*100);
     };
     box.className='ob';
@@ -801,6 +825,8 @@ function render(d){
   if(d.tv_interval) TVINT=d.tv_interval;
   if(d.tz) TZ=d.tz;
   if(d.tf_ms) window.__tfms=d.tf_ms;
+  // the R multiple the agent is actually running, for parked-target bars
+  if(d._meta&&d._meta.rr) RREF=d._meta.rr;
   const limit=d.stale_after_s||480;
   const fresh=d.state_age_s!=null&&d.state_age_s<limit;
   st.textContent=fresh?'LIVE':'STALE '+(d.state_age_s==null?'':Math.round(d.state_age_s/60)+'m');
@@ -938,7 +964,19 @@ function render(d){
   const _g=document.getElementById('gsub');
   if(_g){
     const cnt=t=>G.filter(x=>x.trend===t).length;
+    const stg=s=>G.filter(x=>x.stage===s).length;
     const bits=[];
+    // SMMA SOLO states first - these are what the engine actually emits now.
+    // This block counted only FVG and impulse states, none of which the solo
+    // gate produces, so every count was 0 and the sub-label rendered BLANK.
+    const nar=stg('armed');
+    const nab=cnt('above the 200'), nbl=cnt('below the 200');
+    const nnew=stg('no history');
+    if(nar)  bits.push(nar+' armed');
+    if(nab)  bits.push(nab+' above');
+    if(nbl)  bits.push(nbl+' below');
+    if(nnew) bits.push(nnew+' too new');
+    // legacy engines, kept so rolling FVG or IM back keeps the panel readable
     const nbu=cnt('bullish FVG'), nbe=cnt('bearish FVG');
     if(nbu) bits.push(nbu+' bullish');
     if(nbe) bits.push(nbe+' bearish');
