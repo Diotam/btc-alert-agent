@@ -146,13 +146,20 @@ ASSETS = [                         # used when DISCOVER_ALL = False, or when
 ]
 
 # --- strategy dials -------------------------------------------------------
-TF = "1m"                          # execution timeframe. 15m -> 30m on
+TF = "5m"                          # 19 Sep: 1m -> 5m for the reversal
+                                   # engine - trendlines and double tops need
+                                   # real swings, and on 1m they form out of
+                                   # noise. LOOKBACK["5m"] is 900 bars.
+                                   # execution timeframe. 15m -> 30m on
                                    # 9 Aug: a 50 EMA on 15m was too fast
                                    # for these markets, so price crossed
                                    # it constantly without going
                                    # anywhere - PUMP moved 0.48% between
                                    # crosses at 15m and 1.16% at 30m
-SCAN_EVERY = "1m"                   # how often the loop wakes. Aligning it to
+SCAN_EVERY = "5m"                   # 19 Sep: 1m -> 5m, one scan per candle.
+                                   # Also a fifth of the fetch load on the
+                                   # 512MB box that was dropping 1m scans.
+                                   # how often the loop wakes. Aligning it to
                                    # TF means one scan per candle. A shorter
                                    # pulse costs API calls but reacts sooner:
                                    # symbols with no open trade are skipped
@@ -347,7 +354,8 @@ CROSS_SLOPE_BARS = 5               # bars per slope window. 5 on 30m = 2.5h.
 # its own level - the 200 is the most significant, the 21 the fastest.
 # The cross must be a CLOSE through the line, not a wick, so an intrabar poke
 # does not fire.
-SMMA_MODE = True                   # 15 Sep: LIVE again - the stack rule.
+SMMA_MODE = False                  # 19 Sep: OFF - REV_MODE replaces it.
+                                   # 15 Sep: LIVE again - the stack rule.
                                    # 17 Sep: SOLO - the 200 on its own.
 SMMA_LENGTHS = (50,)               # 18 Sep: (200,) -> (50,), tracking
                                    # SMMA_SOLO_LEN. SOLO reads nothing else.
@@ -1542,7 +1550,12 @@ REGIME_SLOPE_PCT = 0.0             # how far it must have moved, as a % of the
                                    # NOTHING, as before
 _REGIME = {}                       # per-symbol cache, TTL below
 REGIME_TTL_S = 300                 # one higher-TF fetch per symbol per scan
-ALLOW_SHORTS = False               # 18 Sep: OFF. 203 closed trades on the
+ALLOW_SHORTS = True                # 19 Sep: back ON for REV_MODE, whose spec
+                                   # is written as a short. The 18 Sep
+                                   # measurement below was the SMMA rule's
+                                   # short side and does not transfer to a
+                                   # different engine - watch the split.
+                                   # 18 Sep: OFF. 203 closed trades on the
                                    # 50-SMMA solo rule, 09:04-18:38:
                                    #   LONG   36/79  45.6%   +11.00R
                                    #   SHORT  25/124 20.2%   -61.50R
@@ -2304,6 +2317,8 @@ def fetch_hyperliquid(coin, interval, lookback):
 
 def engine_label():
     """What the alerts should call the running engine."""
+    if REV_MODE:
+        return "Reversal: BOS / key level / EMA 10-20"
     if SMMA_MODE:
         if SMMA_SOLO:
             return f"SMMA {SMMA_SOLO_LEN} cross"
@@ -7920,6 +7935,275 @@ def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger,
 
 
 # --------------------------- the strategy ----------------------------------
+
+# ==================== REVERSAL ENGINE (his 19 Sep spec) ====================
+# Three setups, and ANY ONE of them is a trade (his choice). Each is tagged
+# with its own path in the ledger - rev_bos / rev_level / rev_ema - so the
+# three can be judged separately instead of blurring into one number.
+#
+#   1. BREAK OF STRUCTURE. A trend you can draw a line under (two rising
+#      swing lows) or over (two falling swing highs). Price CLOSES through
+#      that line, and AFTER the break a double top (or bottom) forms - the
+#      second peak failing at the first is the momentum loss. Fires on the
+#      bar the second peak is confirmed as a pivot.
+#   2. KEY LEVEL + STOCHASTIC. The key level is a prior swing high/low - the
+#      first peak of a double top. Price comes back to it, and the 14,3,3
+#      stochastic %K crosses DOWN through 80 (short) or UP through 20 (long).
+#   3. EMA CROSS. The 10 EMA crosses the 20 EMA in the trade's direction.
+#
+# Shorts are the spec as written; longs are the exact mirror.
+# Every setup is judged on bar i INCLUSIVE, and bar i is always closed here.
+REV_MODE = True                    # 19 Sep: LIVE. Replaces SMMA_MODE.
+REV_SETUPS = ("bos", "level", "ema")   # drop one to switch that setup off
+REV_PIVOT = 8                      # bars either side that make a swing.
+                                   # 3 -> 8 before going live: at 3 almost any
+                                   # wiggle was a swing, and on a RANDOM walk
+                                   # the BOS setup fired 26x/symbol/day. At 8
+                                   # (40 min each side on 5m) it is 2.4x.
+                                   # bars either side that make a swing
+                                   # pivot. A pivot is only KNOWN this many
+                                   # bars after it prints - that lag is real
+                                   # and is where every entry below waits.
+REV_TREND_LOOKBACK = 120           # bars searched for the two trendline
+                                   # pivots (10h on 5m)
+REV_BREAK_WINDOW = 60              # the double top must complete within this
+                                   # many bars of the trendline break
+REV_DT_TOL_PCT = 0.15              # 0.30 -> 0.15, same reason.
+                                   # the two peaks must sit within this % of
+                                   # each other to count as a double top
+REV_LEVEL_LOOKBACK = 150           # how far back a key level may sit
+REV_LEVEL_MIN_GAP = 8              # a retest must come at least this many
+                                   # bars after the level formed - otherwise
+                                   # it is the same swing, not a return to it
+REV_LEVEL_TOL_PCT = 0.15           # "hit the level" = a wick within this %
+                                   # 0.25 -> 0.15, same reason.
+REV_LEVEL_TOUCH_BARS = 5           # the touch may lead the stoch cross by
+                                   # this many bars. %K lags price: on a
+                                   # clean retest the peak printed at bar 80
+                                   # and 14,3,3 %K only crossed 80 at bar 83
+                                   # (87 -> 74) - the two 3-bar smoothings.
+                                   # At 3 the touch had already left the
+                                   # window and the setup could not fire.
+REV_STOCH = (14, 3, 3)             # %K length, %K smoothing, %D - his spec
+REV_STOCH_HIGH = 80.0
+REV_STOCH_LOW = 20.0
+REV_EMA_FAST = 10
+REV_EMA_SLOW = 20
+REV_SWING_BARS = 20                # stop for the EMA setup: this swing
+REV_STOP_PAD_PCT = 0.05            # stops sit this % beyond the structure
+REV_RR = 2.0                       # target multiple, all three setups
+
+
+def rev_stoch_k(candles, upto):
+    """[%K] of the SLOW 14,3,3 stochastic for bars 0..upto, None where it
+    cannot be computed yet. Its own function because stoch_kd is the FAST
+    14,1,3 and other engines depend on that."""
+    n, sk, _ = REV_STOCH
+    raw = [None] * (upto + 1)
+    for j in range(n - 1, upto + 1):
+        w = candles[j - n + 1:j + 1]
+        hh = max(x["h"] for x in w)
+        ll = min(x["l"] for x in w)
+        raw[j] = 50.0 if hh <= ll else (candles[j]["c"] - ll) / (hh - ll) * 100
+    k = [None] * (upto + 1)
+    for j in range(upto + 1):
+        seg = raw[max(0, j - sk + 1):j + 1]
+        if len(seg) == sk and None not in seg:
+            k[j] = sum(seg) / sk
+    return k
+
+
+def rev_pivots(candles, upto):
+    """(highs, lows) as [(index, price)], confirmed by bar `upto` - so the
+    newest pivot is at most upto - REV_PIVOT."""
+    n = REV_PIVOT
+    hi, lo = [], []
+    for k in range(n, upto - n + 1):
+        seg = range(k - n, k + n + 1)
+        if all(candles[k]["h"] >= candles[m]["h"] for m in seg if m != k):
+            hi.append((k, candles[k]["h"]))
+        if all(candles[k]["l"] <= candles[m]["l"] for m in seg if m != k):
+            lo.append((k, candles[k]["l"]))
+    return hi, lo
+
+
+def _rev_bos(candles, i, hi, lo, want_short):
+    """Setup 1. Returns (stop, why) or None."""
+    n = REV_PIVOT
+    # the double top's SECOND peak must be the pivot confirmed on this very
+    # bar, so the setup fires exactly once
+    peaks = hi if want_short else lo
+    if not peaks or peaks[-1][0] != i - n or len(peaks) < 2:
+        return None
+    p2i, p2 = peaks[-1]
+    # the trend line. Walk back through CONSECUTIVE pairs of the other pivot
+    # kind - rising lows for a short, falling highs for a long - and take the
+    # most recent line that price actually CLOSED through before the second
+    # peak. Taking simply "the last two lows" drew the line through the
+    # double top's own middle trough, i.e. through the pattern instead of the
+    # trend that preceded it, and never found a break.
+    base = [q for q in (lo if want_short else hi)
+            if i - REV_TREND_LOOKBACK <= q[0] < p2i]
+    found = None
+    for x in range(len(base) - 1, 0, -1):
+        (ai, av), (bi, bv) = base[x - 1], base[x]
+        if want_short and not bv > av:
+            continue                         # not an uptrend line
+        if (not want_short) and not bv < av:
+            continue                         # not a downtrend line
+        slope = (bv - av) / (bi - ai)
+        for j in range(bi + 1, p2i):
+            ln = av + slope * (j - ai)
+            c = candles[j]["c"]
+            if (c < ln) if want_short else (c > ln):
+                found = (ai, j)
+                break
+        if found:
+            break
+    if not found:
+        return None
+    ai, brk = found
+    if p2i - brk > REV_BREAK_WINDOW:
+        return None
+    # the first peak: the previous pivot of the same kind, within tolerance
+    for p1i, p1 in reversed(peaks[:-1]):
+        if p1i < ai:
+            break
+        if abs(p2 - p1) / p1 * 100 <= REV_DT_TOL_PCT:
+            px = candles[i]["c"]
+            ext = max(p1, p2) if want_short else min(p1, p2)
+            if (px >= ext) if want_short else (px <= ext):
+                return None                  # price already back through it
+            pad = ext * REV_STOP_PAD_PCT / 100
+            stop = ext + pad if want_short else ext - pad
+            why = (f"{'up' if want_short else 'down'}trend line broken, then "
+                   f"a double {'top' if want_short else 'bottom'} at "
+                   f"{fmt_px(p1)} / {fmt_px(p2)} "
+                   f"({abs(p2 - p1) / p1 * 100:.2f}% apart)")
+            return stop, why
+    return None
+
+
+def _rev_level(candles, i, hi, lo, k, want_short):
+    """Setup 2. Returns (stop, why) or None."""
+    kn, kp = k[i], k[i - 1] if i >= 1 else None
+    if kn is None or kp is None:
+        return None
+    if want_short and not (kp >= REV_STOCH_HIGH and kn < REV_STOCH_HIGH):
+        return None
+    if (not want_short) and not (kp <= REV_STOCH_LOW and kn > REV_STOCH_LOW):
+        return None
+    levels = hi if want_short else lo
+    t0 = i - REV_LEVEL_TOUCH_BARS + 1
+    touch = candles[t0:i + 1]
+    ext = (max(x["h"] for x in touch) if want_short
+           else min(x["l"] for x in touch))
+    for li, lv in reversed(levels):
+        if li < i - REV_LEVEL_LOOKBACK:
+            break
+        if li > t0 - REV_LEVEL_MIN_GAP:
+            continue                          # too recent - same swing
+        tol = lv * REV_LEVEL_TOL_PCT / 100
+        if abs(ext - lv) <= tol:
+            top = max(ext, lv) if want_short else min(ext, lv)
+            pad = top * REV_STOP_PAD_PCT / 100
+            stop = top + pad if want_short else top - pad
+            px = candles[i]["c"]
+            if (px >= stop) if want_short else (px <= stop):
+                return None
+            why = (f"back at the {fmt_px(lv)} key level (swing "
+                   f"{'high' if want_short else 'low'} {i - li} bars ago), "
+                   f"stoch %K crossed {'below 80' if want_short else 'above 20'}"
+                   f" ({kp:.0f} -> {kn:.0f})")
+            return stop, why
+    return None
+
+
+def _rev_ema(candles, i, ef, es, want_short):
+    """Setup 3. Returns (stop, why) or None."""
+    if i < 1:
+        return None
+    was, now = ef[i - 1] - es[i - 1], ef[i] - es[i]
+    if want_short and not (was >= 0 and now < 0):
+        return None
+    if (not want_short) and not (was <= 0 and now > 0):
+        return None
+    w = candles[max(0, i + 1 - REV_SWING_BARS):i + 1]
+    ext = max(x["h"] for x in w) if want_short else min(x["l"] for x in w)
+    pad = ext * REV_STOP_PAD_PCT / 100
+    stop = ext + pad if want_short else ext - pad
+    why = (f"{REV_EMA_FAST} EMA crossed {'below' if want_short else 'above'} "
+           f"the {REV_EMA_SLOW} EMA ({fmt_px(ef[i])} vs {fmt_px(es[i])})")
+    return stop, why
+
+
+def rev_signal(ast, candles, i):
+    """"LONG" / "SHORT" / None. Leaves the stop in ast["rev"]["stop"]."""
+    need = max(REV_EMA_SLOW * 3, sum(REV_STOCH) + 2, 2 * REV_PIVOT + 5)
+    if i < need or i >= len(candles):
+        return None
+    hi, lo = rev_pivots(candles, i)
+    k = rev_stoch_k(candles, i)
+    cl = [x["c"] for x in candles[:i + 1]]
+    ef, es = ema(cl, REV_EMA_FAST), ema(cl, REV_EMA_SLOW)
+    hits = []
+    for want_short in (True, False):
+        for name in REV_SETUPS:
+            r = (_rev_bos(candles, i, hi, lo, want_short) if name == "bos"
+                 else _rev_level(candles, i, hi, lo, k, want_short)
+                 if name == "level"
+                 else _rev_ema(candles, i, ef, es, want_short))
+            if r:
+                hits.append((name, "SHORT" if want_short else "LONG") + r)
+    if not hits:
+        return None
+    sides = {h[1] for h in hits}
+    if len(sides) > 1:
+        return None                     # both ways on one bar - no trade
+    # structure outranks the level, the level outranks the EMA cross - the
+    # higher one's stop and reason are the ones used
+    rank = {"bos": 0, "level": 1, "ema": 2}
+    hits.sort(key=lambda h: rank[h[0]])
+    name, side, stop, why = hits[0]
+    also = [h[0] for h in hits[1:]]
+    ast["rev"] = {"setup": name, "stop": stop, "also": also}
+    ast["im_path"] = f"rev_{name}"
+    ast["im_why"] = why + (f" (also: {', '.join(also)})" if also else "")
+    return side
+
+
+def rev_gate(ast, candles, i, sym=None):
+    """Watchlist row: the nearest key level, where the stochastic sits, and
+    which way the EMAs point."""
+    if i < REV_EMA_SLOW * 3:
+        return None
+    hi, lo = rev_pivots(candles, i)
+    k = rev_stoch_k(candles, i)
+    cl = [x["c"] for x in candles[:i + 1]]
+    ef, es = ema(cl, REV_EMA_FAST), ema(cl, REV_EMA_SLOW)
+    px = cl[-1]
+    lvls = [("SHORT", v) for j, v in hi if j >= i - REV_LEVEL_LOOKBACK] + \
+           [("LONG", v) for j, v in lo if j >= i - REV_LEVEL_LOOKBACK]
+    if not lvls:
+        return None
+    side, lv = min(lvls, key=lambda x: abs(x[1] - px))
+    dist = abs(lv - px) / px * 100
+    kn = k[i]
+    near = dist <= REV_LEVEL_TOL_PCT
+    hot = kn is not None and (kn >= REV_STOCH_HIGH if side == "SHORT"
+                              else kn <= REV_STOCH_LOW)
+    lit = 1 + int(near) + int(hot)
+    bar = "".join(("█" if j < lit else "░") * 4 for j in range(3))
+    up = ef[-1] > es[-1]
+    return {"sym": sym, "dir": side, "run": lit, "age": 0,
+            "stage": "ready" if (near and hot) else "waiting",
+            "trend": "EMA10 above 20" if up else "EMA10 below 20",
+            "detail": (f"{bar}  {'swing high' if side == 'SHORT' else 'swing low'}"
+                       f" key level {fmt_px(lv)} ({dist:+.2f}% away)  ·  "
+                       f"stoch %K {kn:.0f}" if kn is not None else
+                       f"{bar}  key level {fmt_px(lv)} ({dist:+.2f}% away)")}
+
+
 def process_candle(asset, ast, candles, ha, i):
     """A visible trend, then a DOJI - an HA body small against that trend.
     The doji is the turn, and the trade is taken on it. No pullback, no
@@ -7996,16 +8280,18 @@ def process_candle(asset, ast, candles, ha, i):
     # BTC vote - the cross IS the trend read, so layering the old filters on
     # top would refuse the very setups it exists to take.
     # ---------------- IMPULSE MACD ENGINE (LazyBear, his 20 Aug spec) ------
-    if IM_MODE or FVG_MODE or MACD_MODE or LG_MODE or SMMA_MODE:
+    if IM_MODE or FVG_MODE or MACD_MODE or LG_MODE or SMMA_MODE or REV_MODE:
         ast["sym"] = sym
         ast["_asset"] = asset
-        side = (smma_signal(ast, candles, i) if SMMA_MODE
+        side = (rev_signal(ast, candles, i) if REV_MODE
+                else smma_signal(ast, candles, i) if SMMA_MODE
                 else lg_signal(ast, candles, i) if LG_MODE
                 else macd_div_signal(ast, candles, i) if MACD_MODE
                 else fvg_signal(ast, candles, i) if FVG_MODE
                 else im_signal(ast, candles, i))
         try:
-            _g = (smma_gate(ast, candles, i, sym) if SMMA_MODE
+            _g = (rev_gate(ast, candles, i, sym) if REV_MODE
+                  else smma_gate(ast, candles, i, sym) if SMMA_MODE
                   else lg_gate(ast, candles, i, sym) if LG_MODE
                   else macd_div_gate(ast, candles, i, sym) if MACD_MODE
                   else fvg_gate_status(ast, candles, i, sym) if FVG_MODE
@@ -8016,7 +8302,7 @@ def process_candle(asset, ast, candles, ha, i):
                 # sat on the dashboard looking current - xyz:UNITREE showed
                 # "flat 38 bars" for 36 HOURS on 22-23 Aug.
                 # SMMA reads through bar i, the other gates stop at i-1.
-                _g["t"] = candles[i if SMMA_MODE else i - 1]["t"]
+                _g["t"] = candles[i if (SMMA_MODE or REV_MODE) else i - 1]["t"]
             ast["gate"] = _g
         except Exception as e:
             log(f"{sym}: im_gate_status failed: {type(e).__name__}: {e}")
@@ -8042,7 +8328,20 @@ def process_candle(asset, ast, candles, ha, i):
         rr = IM_P2_RR if path == "breakout" else IM_P1_RR
         stop = None
         stop_src = ""
-        if SMMA_MODE:
+        if REV_MODE and ast.get("rev"):
+            # each setup placed its own structural stop
+            stop = ast["rev"]["stop"]
+            risk_t = abs(entry - stop)
+            rr = REV_RR
+            stop_src = {"bos": "double-top extreme" if not want_long
+                        else "double-bottom extreme",
+                        "level": "key level",
+                        "ema": f"{REV_SWING_BARS}-bar swing"}.get(
+                            ast["rev"]["setup"], "structure")
+            if risk_t <= 0 or ((stop >= entry) if want_long
+                               else (stop <= entry)):
+                return False
+        elif SMMA_MODE:
             # the swing ENDS on the signal bar, inclusive. That was already
             # true before the window fix (signal bar i-1, window [..:i]) and
             # stays true now the signal bar is i - otherwise moving the
@@ -9082,7 +9381,8 @@ def check_once():
                               # dashboard stops carrying its own hardcoded
                               # copy. Its RREF was still 1.5 after SMMA_RR
                               # went to 2.0 and nothing said so.
-                              rr=(SMMA_RR if SMMA_MODE else
+                              rr=(REV_RR if REV_MODE else
+                                  SMMA_RR if SMMA_MODE else
                                   LG_RR if LG_MODE else
                                   MACD_RR if MACD_MODE else
                                   FVG_RR if FVG_MODE else HA_RR),
