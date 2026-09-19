@@ -417,12 +417,12 @@ SMMA_SOLO_SEP_PCT = 0.0            # how far beyond the line a close must sit
                                    # destroying it, and the buffer is safe to
                                    # turn up.
 SMMA_SOLO_LOOKBACK = 400           # how far back that walk may go
-SMMA_CONFIRM_BARS = 2              # closes required AFTER the one that
+SMMA_CONFIRM_BARS = 3              # closes required AFTER the one that
                                    # crosses the line, before the trade fires.
                                    # The cross arms; every bar after it has to
                                    # hold the same side; the ENTRY is the last
                                    # of them. 0 restores fire-on-the-cross.
-                                   # 18 Sep: 0 -> 1 -> 2. Each extra bar buys
+                                   # 18 Sep: 0 -> 1 -> 2; 19 Sep: -> 3. Each extra bar buys
                                    # a stricter filter with a later, worse
                                    # entry, and the stop does NOT move with it
                                    # - SMMA_SWING_BARS is measured from the
