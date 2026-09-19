@@ -976,6 +976,11 @@ function render(d){
     if(nab)  bits.push(nab+' above');
     if(nbl)  bits.push(nbl+' below');
     if(nnew) bits.push(nnew+' too new');
+    // REVERSAL engine rows: how many sit at a key level with the stochastic
+    // already stretched (stage ready), and which way the 10/20 EMAs point
+    const nrdy=stg('ready'), neu=cnt('EMA10 above 20'), ned=cnt('EMA10 below 20');
+    if(neu||ned){ if(nrdy) bits.push(nrdy+' at level');
+                  bits.push(neu+' EMA up'); bits.push(ned+' EMA down'); }
     // legacy engines, kept so rolling FVG or IM back keeps the panel readable
     const nbu=cnt('bullish FVG'), nbe=cnt('bearish FVG');
     if(nbu) bits.push(nbu+' bullish');
