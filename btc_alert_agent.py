@@ -8098,7 +8098,14 @@ def process_candle(asset, ast, candles, ha, i):
             stop_src = "far edge of the gap"
             if (stop >= entry) if want_long else (stop <= entry):
                 return False
-        if IM_DOLLAR_MODE and not (FVG_MODE and ast.get("fvg")):
+        # 18 Sep: gated on IM_MODE. The cash ratio is the IMPULSE engine's
+        # target; every other engine in this branch sets its own rr above
+        # (SMMA_RR, LG_RR, MACD_RR, FVG_RR). The 7 Sep fix excluded only FVG,
+        # so this went on silently replacing SMMA_RR with 15/10 = 1.5 - every
+        # SMMA trade was booked at 1.5R while _meta and the config both said
+        # 2.0. IM_DOLLAR_MODE still governs the stop floor and SIZE below;
+        # only the target multiple is taken back from it.
+        if IM_DOLLAR_MODE and IM_MODE and not (FVG_MODE and ast.get("fvg")):
             # the R multiple is the cash ratio; the STOP is still structural
             # and is set below. Size is derived from it afterwards.
             # 7 Sep: this used to run unconditionally and silently overwrote
