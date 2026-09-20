@@ -142,10 +142,15 @@ MAX_ASSETS = 110
 ASSETS = [                         # used when DISCOVER_ALL = False, or when
     {"symbol": "BTC", "label": "BTC-PERP", "hl_coin": "BTC",   # discovery fails
      "fallbacks": ["binance:BTCUSDT", "kraken:XBTUSD"]},
+    # 20 Sep: CASHCAT added. Hyperliquid-only, so no fallback feeds - if HL
+    # fails for it the symbol is simply skipped that scan.
+    {"symbol": "CASHCAT", "label": "CASHCAT-PERP", "hl_coin": "CASHCAT",
+     "fallbacks": []},
 ]                                  # 19 Sep: PONS removed - BTC only.
 
 # --- strategy dials -------------------------------------------------------
-TF = "5m"                          # 19 Sep: 1m -> 5m for the reversal
+TF = "1m"                          # 20 Sep: back to 1m.
+                                   # 19 Sep: 1m -> 5m for the reversal
                                    # engine - trendlines and double tops need
                                    # real swings, and on 1m they form out of
                                    # noise. LOOKBACK["5m"] is 900 bars.
@@ -155,7 +160,8 @@ TF = "5m"                          # 19 Sep: 1m -> 5m for the reversal
                                    # it constantly without going
                                    # anywhere - PUMP moved 0.48% between
                                    # crosses at 15m and 1.16% at 30m
-SCAN_EVERY = "5m"                   # 19 Sep: 1m -> 5m, one scan per candle.
+SCAN_EVERY = "1m"                   # 20 Sep: back to 1m with TF.
+                                   # 19 Sep: 1m -> 5m, one scan per candle.
                                    # Also a fifth of the fetch load on the
                                    # 512MB box that was dropping 1m scans.
                                    # how often the loop wakes. Aligning it to
@@ -428,6 +434,18 @@ SMMA_SOLO_SEP_PCT = 0.0            # how far beyond the line a close must sit
                                    # destroying it, and the buffer is safe to
                                    # turn up.
 SMMA_SOLO_LOOKBACK = 400           # how far back that walk may go
+SMMA_CONFIRM_DIRECTIONAL = True    # 20 Sep: the confirming candle must also
+                                   # CLOSE IN THE TRADE'S DIRECTION - green
+                                   # (close > open) for a long, red for a
+                                   # short - not merely finish on the right
+                                   # side of the line. A bar that gaps above
+                                   # the 200 and then bleeds down all session
+                                   # still closes above it; it confirms
+                                   # nothing about direction. With
+                                   # SMMA_CONFIRM_BARS = 0 there is no
+                                   # confirming bar, so the test falls to the
+                                   # CROSSING bar instead - otherwise the
+                                   # flag would silently do nothing.
 SMMA_CONFIRM_BARS = 3              # closes required AFTER the one that
                                    # crosses the line, before the trade fires.
                                    # The cross arms; every bar after it has to
@@ -2199,7 +2217,7 @@ for _n, _v in (("TF", TF), ("SCAN_EVERY", SCAN_EVERY)):
 # Going back to the 200 means putting this back to 1200.
 # 19 Sep evening: 5m 900 -> 1200 for the 200 SMMA on 5m (0.67% seed;
 # at 900 it was 3.0%). One symbol now, so the payload is trivial.
-LOOKBACK = {"1m": 600, "5m": 1200, "10m": 600, "15m": 750, "30m": 750,
+LOOKBACK = {"1m": 1200, "5m": 1200, "10m": 600, "15m": 750, "30m": 750,
             "1h": 500,
             "4h": 600}
 
@@ -3818,7 +3836,7 @@ def inverted_fvgs(candles):
     return bull, bear
 
 
-def _smma_solo(cl, px, info=None):
+def _smma_solo(cl, px, info=None, candles=None):
     """SOLO: the close crossing the 200, with nothing else consulted.
 
     CONFIRMATION (SMMA_CONFIRM_BARS, 18 Sep). The bar that crosses only ARMS
@@ -3866,6 +3884,20 @@ def _smma_solo(cl, px, info=None):
     for k in range(cross, len(cl)):
         if side_of(k) != now:
             return out                      # confirmation failed
+
+    # ...and the confirming candles must CLOSE IN THE DIRECTION, not just on
+    # the correct side of the line. With no confirming bar the crossing bar
+    # itself has to carry it.
+    if SMMA_CONFIRM_DIRECTIONAL and candles is not None:
+        rng = range(cross + 1, len(cl)) if n else range(cross, cross + 1)
+        for k in rng:
+            if k >= len(candles):
+                return out
+            o, c = candles[k].get("o"), candles[k]["c"]
+            if o is None:
+                continue
+            if (c <= o) if now == "up" else (c >= o):
+                return out                  # not a directional candle
 
     # the last decisive close BEFORE the crossing bar must be the other side,
     # which is what makes `cross` the bar that crossed
@@ -3917,7 +3949,7 @@ def smma_cross_state(candles, info=None):
     px = cl[-1]
 
     if SMMA_SOLO:
-        return _smma_solo(cl, px, info)
+        return _smma_solo(cl, px, info, candles)
 
     sep = abs(px) * SMMA_MIN_SEP_PCT / 100.0
     mas = {}
@@ -4188,10 +4220,11 @@ def smma_gate(ast, candles, i, sym=None):
         bar = "".join(("█" if k < lit else "░") * 4 for k in range(3))
         if armed:
             _held = SMMA_CONFIRM_BARS + 1 - need
+            _dirw = "directional " if SMMA_CONFIRM_DIRECTIONAL else ""
             note = (f"CROSSED {'above' if armed == 'LONG' else 'below'} the "
                     f"{SMMA_SOLO_LEN} SMMA {fmt_px(trig)} - armed {armed}, "
                     f"held {_held}/{SMMA_CONFIRM_BARS + 1}, needs {need} more "
-                    f"close{'s' if need > 1 else ''} "
+                    f"{_dirw}close{'s' if need > 1 else ''} "
                     f"{'above' if armed == 'LONG' else 'below'} to fire")
         else:
             note = (f"price {fmt_px(px)} is {'above' if above else 'below'} "
