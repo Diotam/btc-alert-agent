@@ -68,7 +68,8 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 # --- asset universe -------------------------------------------------------
-DISCOVER_ALL = True                # 15 Sep: OPEN again. was BTC ONLY:
+DISCOVER_ALL = False               # 19 Sep: BTC ONLY again - the ASSETS
+                                   # list below. 15 Sep: OPEN again. was BTC ONLY:
                                    # the universe is the ASSETS list below -
                                    # which already held just BTC. One symbol,
                                    # one chart, divergence measured on it
@@ -141,9 +142,7 @@ MAX_ASSETS = 110
 ASSETS = [                         # used when DISCOVER_ALL = False, or when
     {"symbol": "BTC", "label": "BTC-PERP", "hl_coin": "BTC",   # discovery fails
      "fallbacks": ["binance:BTCUSDT", "kraken:XBTUSD"]},
-    {"symbol": "PONS", "label": "PONS-PERP", "hl_coin": "PONS",
-     "fallbacks": []},
-]
+]                                  # 19 Sep: PONS removed - BTC only.
 
 # --- strategy dials -------------------------------------------------------
 TF = "5m"                          # 19 Sep: 1m -> 5m for the reversal
@@ -354,12 +353,15 @@ CROSS_SLOPE_BARS = 5               # bars per slope window. 5 on 30m = 2.5h.
 # its own level - the 200 is the most significant, the 21 the fastest.
 # The cross must be a CLOSE through the line, not a wick, so an intrabar poke
 # does not fire.
-SMMA_MODE = False                  # 19 Sep: OFF - REV_MODE replaces it.
+SMMA_MODE = True                   # 19 Sep evening: ON - 200 cross, BTC,
+                                   # 5m. 19 Sep: OFF - REV_MODE replaced it.
                                    # 15 Sep: LIVE again - the stack rule.
                                    # 17 Sep: SOLO - the 200 on its own.
-SMMA_LENGTHS = (50,)               # 18 Sep: (200,) -> (50,), tracking
+SMMA_LENGTHS = (200,)              # 19 Sep evening: tracks SMMA_SOLO_LEN.
+                                   # was (50,):              # 18 Sep: (200,) -> (50,), tracking
                                    # SMMA_SOLO_LEN. SOLO reads nothing else.
-SMMA_MIN_BARS = 300                # refuse to signal under this many bars.
+SMMA_MIN_BARS = 1000               # 19 Sep evening: 300 -> 1000, back on
+                                   # the 200 (1.8% seed at 1000). was 300:               # refuse to signal under this many bars.
                                    # A guard on CONVERGENCE, not on whether
                                    # the line can be COMPUTED - the old guards
                                    # (203, 210) asked only the latter, and a
@@ -394,7 +396,8 @@ SMMA_SOLO = True                   # 17 Sep: LIVE. The 200 alone. Takes
                                    # real 200. At LOOKBACK 300 it was 61% its
                                    # own seed and SOLO had nothing else to
                                    # check it against.
-SMMA_SOLO_LEN = 50                 # the only line consulted.
+SMMA_SOLO_LEN = 200                # 19 Sep evening: 50 -> 200 on BTC 5m.
+                                   # was 50:                # the only line consulted.
                                    # 18 Sep: 200 -> 50. A 50 on 1m is 50
                                    # minutes against the 200's 3h20m, so it
                                    # sits much closer to price and is crossed
@@ -2194,7 +2197,9 @@ for _n, _v in (("TF", TF), ("SCAN_EVERY", SCAN_EVERY)):
 # scan gap that silently ate the VVV 22:00 short. 600 also clears
 # SMMA_SOLO_LOOKBACK (400) and MACD_DIV_LOOKBACK (600) with room.
 # Going back to the 200 means putting this back to 1200.
-LOOKBACK = {"1m": 600, "5m": 900, "10m": 600, "15m": 750, "30m": 750,
+# 19 Sep evening: 5m 900 -> 1200 for the 200 SMMA on 5m (0.67% seed;
+# at 900 it was 3.0%). One symbol now, so the payload is trivial.
+LOOKBACK = {"1m": 600, "5m": 1200, "10m": 600, "15m": 750, "30m": 750,
             "1h": 500,
             "4h": 600}
 
@@ -7953,7 +7958,8 @@ def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger,
 #
 # Shorts are the spec as written; longs are the exact mirror.
 # Every setup is judged on bar i INCLUSIVE, and bar i is always closed here.
-REV_MODE = True                    # 19 Sep: LIVE. Replaces SMMA_MODE.
+REV_MODE = False                   # 19 Sep evening: OFF - back to the SMMA
+                                   # 200 cross on BTC. 19 Sep: LIVE.
 REV_SETUPS = ("bos", "level", "ema")   # drop one to switch that setup off
 REV_PIVOT = 8                      # bars either side that make a swing.
                                    # 3 -> 8 before going live: at 3 almost any
