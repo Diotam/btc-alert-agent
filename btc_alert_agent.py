@@ -526,7 +526,9 @@ SMMA_PRIORITY_LONGEST = True       # the 200 outranks the 50 outranks the 21
 SMMA_MIN_SEP_PCT = 0.05            # the close must clear the line by this %
                                    # of price. Without it a close sitting on
                                    # the line fires on rounding.
-SMMA_RR = 2.0                      # 18 Sep: 1.5 -> 2.0. Breakeven win rate
+SMMA_RR = 1.5                      # 20 Sep 22:33: 2.0 -> 1.5. Breakeven win
+                                   # rate back to 40.0%.
+                                   # was 2.0:                     # 18 Sep: 1.5 -> 2.0. Breakeven win rate
                                    # goes 40.0% -> 33.3%, so the rule can be
                                    # right less often and still pay. The cost
                                    # is that price has to travel twice the
