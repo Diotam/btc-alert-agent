@@ -434,7 +434,11 @@ SMMA_SOLO_SEP_PCT = 0.0            # how far beyond the line a close must sit
                                    # destroying it, and the buffer is safe to
                                    # turn up.
 SMMA_SOLO_LOOKBACK = 400           # how far back that walk may go
-SMMA_CONFIRM_DIRECTIONAL = True    # 20 Sep: the confirming candle must also
+SMMA_CONFIRM_DIRECTIONAL = False   # 20 Sep 21:31: OFF with the confirmation
+                                   # bars - at 0 it would still demand the
+                                   # crossing candle's colour, which is not
+                                   # part of "first close through".
+                                   # was True:   # 20 Sep: the confirming candle must also
                                    # CLOSE IN THE TRADE'S DIRECTION - green
                                    # (close > open) for a long, red for a
                                    # short - not merely finish on the right
@@ -446,7 +450,10 @@ SMMA_CONFIRM_DIRECTIONAL = True    # 20 Sep: the confirming candle must also
                                    # confirming bar, so the test falls to the
                                    # CROSSING bar instead - otherwise the
                                    # flag would silently do nothing.
-SMMA_CONFIRM_BARS = 3              # closes required AFTER the one that
+SMMA_CONFIRM_BARS = 0              # 20 Sep 21:31: 3 -> 0. His rule: the
+                                   # FIRST candle to close through the 200
+                                   # fires. No hold bars.
+                                   # was 3:             # closes required AFTER the one that
                                    # crosses the line, before the trade fires.
                                    # The cross arms; every bar after it has to
                                    # hold the same side; the ENTRY is the last
