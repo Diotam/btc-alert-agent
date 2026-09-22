@@ -146,6 +146,9 @@ ASSETS = [                         # used when DISCOVER_ALL = False, or when
     # fails for it the symbol is simply skipped that scan.
     {"symbol": "CASHCAT", "label": "CASHCAT-PERP", "hl_coin": "CASHCAT",
      "fallbacks": []},
+    # 22 Sep: VVV added. Hyperliquid-only, like CASHCAT.
+    {"symbol": "VVV", "label": "VVV-PERP", "hl_coin": "VVV",
+     "fallbacks": []},
 ]                                  # 19 Sep: PONS removed - BTC only.
 
 # --- strategy dials -------------------------------------------------------
