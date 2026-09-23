@@ -1583,6 +1583,14 @@ REGIME_SLOPE_PCT = 0.0             # how far it must have moved, as a % of the
                                    # NOTHING, as before
 _REGIME = {}                       # per-symbol cache, TTL below
 REGIME_TTL_S = 300                 # one higher-TF fetch per symbol per scan
+REVERSE_ON_OPPOSITE = True         # 23 Sep: an OPPOSITE signal while a trade
+                                   # is open CLOSES it and opens the new one.
+                                   # Same-direction signals are still ignored,
+                                   # so a symbol never holds two positions -
+                                   # which also keeps it compatible with
+                                   # Hyperliquid, where a coin is one-way and
+                                   # a long and a short would simply net out.
+                                   # False restores "ignore while in a trade".
 ALLOW_SHORTS = True                # 19 Sep: back ON for REV_MODE, whose spec
                                    # is written as a short. The 18 Sep
                                    # measurement below was the SMMA rule's
@@ -7884,12 +7892,29 @@ def fire_entry(asset, ast, direction, c, stop, hi, lo, source, trigger,
     plan = {"entry": entry, "stop": stop, "tp": tp}
     event_t = c["t"] + MS[TF]
 
-    # overrides are gone: check_asset never evaluates a symbol that already
-    # holds a trade, so fire_entry is only ever reached flat
+    # A trade is already open. Same direction -> nothing to do. OPPOSITE, and
+    # REVERSE_ON_OPPOSITE -> book the close at THIS bar's close and flip, so
+    # the ledger holds both halves and the exchange is flattened by the same
+    # helper every other close uses.
     if ast.get("trade"):
-        log(f"{sym}: {direction} signal ignored - a trade is already open")
-        ast["setup"] = None
-        return False
+        _cur = ast["trade"]
+        if not (REVERSE_ON_OPPOSITE and _cur.get("verdict") != direction):
+            log(f"{sym}: {direction} signal ignored - a trade is already open")
+            ast["setup"] = None
+            return False
+        log(f"{sym}: REVERSE - {_cur.get('verdict')} closing at "
+            f"${fmt_px(entry)} to open {direction}")
+        if EXEC_LIVE and executable(sym) and _cur.get("size"):
+            try:
+                close_position_live(asset, _cur)
+            except Exception as e:
+                log(f"{sym}: reverse close failed "
+                    f"({type(e).__name__}: {e}) - NOT opening the other side")
+                return False
+        _close_trade(asset, _cur, entry, "REVERSE", event_t,
+                     note=f"opposite {direction} signal")
+        ast["trade"] = None
+        ast["phase"] = "SCAN"
 
     # count BEFORE recording the new trade: ast is the same object STATE_VIEW
     # holds, so counting afterwards makes the trade count itself and a cap of
@@ -9224,7 +9249,11 @@ def check_asset(asset, state):
             update_flip_arm(ast, smoothed_ha(cs), len(cs) - 1)
         # exits win over overrides (the watch ran first). Fall through to the
         # candle walk when the trade just closed, or when overrides are on.
-        if ast["trade"]:
+        # With REVERSE_ON_OPPOSITE the scan must CONTINUE while a trade is
+        # open - otherwise the opposite signal is never computed and the
+        # reverse could not fire. fire_entry still refuses a same-direction
+        # signal, so this cannot stack positions.
+        if ast["trade"] and not REVERSE_ON_OPPOSITE:
             RUN_STATUS.append(f"{sym} IN_TRADE")
             state[sym] = ast
             return changed
