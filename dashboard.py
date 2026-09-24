@@ -981,6 +981,15 @@ function render(d){
     const nrdy=stg('ready'), neu=cnt('EMA10 above 20'), ned=cnt('EMA10 below 20');
     if(neu||ned){ if(nrdy) bits.push(nrdy+' at level');
                   bits.push(neu+' EMA up'); bits.push(ned+' EMA down'); }
+    // TREND LEVELS [ChartPrime]: the trend each symbol is latched into, and
+    // how many sit within a whisker of the level that would flip them.
+    const ntu=cnt('trend UP'), ntd=cnt('trend DOWN'), ntn=cnt('no trend yet');
+    if(ntu||ntd||ntn){
+      if(ntu) bits.push(ntu+' trend up');
+      if(ntd) bits.push(ntd+' trend down');
+      if(nrdy) bits.push(nrdy+' near a flip');
+      if(ntn) bits.push(ntn+' no trend yet');
+    }
     // legacy engines, kept so rolling FVG or IM back keeps the panel readable
     const nbu=cnt('bullish FVG'), nbe=cnt('bearish FVG');
     if(nbu) bits.push(nbu+' bullish');
