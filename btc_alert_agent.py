@@ -148,7 +148,8 @@ ASSETS = [                         # used when DISCOVER_ALL = False, or when
                                    # BTC only again.                                  # 19 Sep: PONS removed - BTC only.
 
 # --- strategy dials -------------------------------------------------------
-TF = "1m"                          # 20 Sep: back to 1m.
+TF = "15m"                         # 24 Sep: 1m -> 15m for Trend Levels.
+                                   # was 1m:                         # 20 Sep: back to 1m.
                                    # 19 Sep: 1m -> 5m for the reversal
                                    # engine - trendlines and double tops need
                                    # real swings, and on 1m they form out of
@@ -159,7 +160,8 @@ TF = "1m"                          # 20 Sep: back to 1m.
                                    # it constantly without going
                                    # anywhere - PUMP moved 0.48% between
                                    # crosses at 15m and 1.16% at 30m
-SCAN_EVERY = "1m"                   # 20 Sep: back to 1m with TF.
+SCAN_EVERY = "15m"                  # 24 Sep: matches TF - one scan a candle.
+                                   # was 1m:                  # 20 Sep: back to 1m with TF.
                                    # 19 Sep: 1m -> 5m, one scan per candle.
                                    # Also a fifth of the fetch load on the
                                    # 512MB box that was dropping 1m scans.
@@ -358,7 +360,8 @@ CROSS_SLOPE_BARS = 5               # bars per slope window. 5 on 30m = 2.5h.
 # its own level - the 200 is the most significant, the 21 the fastest.
 # The cross must be a CLOSE through the line, not a wick, so an intrabar poke
 # does not fire.
-SMMA_MODE = True                   # 19 Sep evening: ON - 200 cross, BTC,
+SMMA_MODE = False                  # 24 Sep: OFF - TL_MODE replaces it.
+                                   # 19 Sep evening: ON - 200 cross, BTC,
                                    # 5m. 19 Sep: OFF - REV_MODE replaced it.
                                    # 15 Sep: LIVE again - the stack rule.
                                    # 17 Sep: SOLO - the 200 on its own.
@@ -1579,7 +1582,10 @@ REGIME_SLOPE_PCT = 0.0             # how far it must have moved, as a % of the
                                    # NOTHING, as before
 _REGIME = {}                       # per-symbol cache, TTL below
 REGIME_TTL_S = 300                 # one higher-TF fetch per symbol per scan
-REVERSE_ON_OPPOSITE = True         # 23 Sep: an OPPOSITE signal while a trade
+REVERSE_ON_OPPOSITE = False        # 24 Sep: OFF. An opposite arrow while a
+                                   # trade is open is IGNORED again; the
+                                   # position runs to its own stop or target.
+                                   # was True:        # 23 Sep: an OPPOSITE signal while a trade
                                    # is open CLOSES it and opens the new one.
                                    # Same-direction signals are still ignored,
                                    # so a symbol never holds two positions -
@@ -2356,6 +2362,8 @@ def fetch_hyperliquid(coin, interval, lookback):
 
 def engine_label():
     """What the alerts should call the running engine."""
+    if TL_MODE:
+        return f"Trend Levels [ChartPrime] {TL_LEN}"
     if REV_MODE:
         return "Reversal: BOS / key level / EMA 10-20"
     if SMMA_MODE:
@@ -8276,6 +8284,109 @@ def rev_gate(ast, candles, i, sym=None):
                        f"{bar}  key level {fmt_px(lv)} ({dist:+.2f}% away)")}
 
 
+
+# ================ TREND LEVELS [ChartPrime] (his 24 Sep spec) ==============
+# The indicator's own description of the flip:
+#   "When high is == to highest it will change trend to up, when low == lowest
+#    value it will be shift to down trend."
+# So the trend is a latch, not an oscillator: a bar that makes a NEW EXTREME
+# of the lookback sets the trend that way, and any bar that makes neither
+# leaves it where it was. Arrows print on each FLIP, and the flip is what
+# this engine trades - one trade per arrow, both directions.
+#
+# TL_LEN is the one number I could not read off the published script (the
+# page shows the description and the flip rule, not the full body). 20 is the
+# usual default for this family. Set it to whatever the chart is using -
+# every arrow's position depends on it.
+TL_MODE = True                     # 24 Sep: LIVE. Replaces the SMMA cross.
+TL_LEN = 20                        # lookback for the highest high / lowest low
+TL_STOP_PAD_PCT = 0.05             # the stop sits this % beyond the level
+TL_RR = 1.5                        # target multiple
+
+
+def tl_trend(candles, upto):
+    """[trend] for bars 0..upto: +1 up, -1 down, 0 before the first extreme.
+
+    Latched exactly as the indicator describes - a bar that makes neither
+    extreme inherits the previous bar's trend.
+    """
+    n = max(1, TL_LEN)
+    out = [0] * (upto + 1)
+    cur = 0
+    for i in range(upto + 1):
+        if i >= n - 1:
+            w = candles[i - n + 1:i + 1]
+            hh = max(x["h"] for x in w)
+            ll = min(x["l"] for x in w)
+            if candles[i]["h"] >= hh:
+                cur = 1
+            elif candles[i]["l"] <= ll:
+                cur = -1
+        out[i] = cur
+    return out
+
+
+def tl_signal(ast, candles, i):
+    """An ARROW - the bar the trend flips on. "LONG"/"SHORT" or None."""
+    n = max(1, TL_LEN)
+    if i < n + 1 or i >= len(candles):
+        return None
+    tr = tl_trend(candles, i)
+    now, prev = tr[i], tr[i - 1]
+    if now == 0 or now == prev:
+        return None                     # no arrow on this bar
+    side = "LONG" if now > 0 else "SHORT"
+    w = candles[i - n + 1:i + 1]
+    hh = max(x["h"] for x in w)
+    ll = min(x["l"] for x in w)
+    # the stop goes beyond the OPPOSITE level - the one that would flip the
+    # trend back. That is the price at which this arrow is simply wrong.
+    lvl = ll if side == "LONG" else hh
+    pad = abs(lvl) * TL_STOP_PAD_PCT / 100.0
+    stop = lvl - pad if side == "LONG" else lvl + pad
+    entry = candles[i]["c"]
+    if (stop >= entry) if side == "LONG" else (stop <= entry):
+        return None                     # level already through price
+    ast["tl"] = {"stop": stop, "level": lvl, "hh": hh, "ll": ll}
+    ast["im_path"] = "trendlevels"
+    ast["im_why"] = (
+        f"Trend Levels arrow {'UP' if side == 'LONG' else 'DOWN'} - the bar "
+        f"{'took out the' if side == 'LONG' else 'broke the'} "
+        f"{TL_LEN}-bar {'high' if side == 'LONG' else 'low'} at "
+        f"{fmt_px(hh if side == 'LONG' else ll)}, flipping the trend "
+        f"{'up' if side == 'LONG' else 'down'}")
+    return side
+
+
+def tl_gate(ast, candles, i, sym=None):
+    """Watchlist: which way the trend is latched, and how far price sits from
+    the level that would flip it."""
+    n = max(1, TL_LEN)
+    if i < n + 1:
+        return None
+    tr = tl_trend(candles, i)
+    now = tr[i]
+    w = candles[i - n + 1:i + 1]
+    hh = max(x["h"] for x in w)
+    ll = min(x["l"] for x in w)
+    px = candles[i]["c"]
+    # an UP trend flips DOWN on a new low, and vice versa
+    flip_to = "SHORT" if now > 0 else "LONG"
+    lvl = ll if now > 0 else hh
+    dist = abs(px - lvl) / px * 100.0
+    lit = 3 if dist <= 0.15 else 2 if dist <= 0.5 else 1
+    bar = "".join(("█" if k < lit else "░") * 4 for k in range(3))
+    return {"sym": sym, "dir": flip_to, "run": lit, "age": 0,
+            "stage": "ready" if dist <= 0.15 else "waiting",
+            "trend": ("trend UP" if now > 0 else
+                      "trend DOWN" if now < 0 else "no trend yet"),
+            "detail": (f"{bar}  trend {'UP' if now > 0 else 'DOWN'} · "
+                       f"flips {flip_to} on a "
+                       f"{'new low below' if now > 0 else 'new high above'} "
+                       f"{fmt_px(lvl)} ({dist:.2f}% away)  ·  "
+                       f"{TL_LEN}-bar range {fmt_px(ll)} - {fmt_px(hh)}")}
+
+
 def process_candle(asset, ast, candles, ha, i):
     """A visible trend, then a DOJI - an HA body small against that trend.
     The doji is the turn, and the trade is taken on it. No pullback, no
@@ -8352,17 +8463,20 @@ def process_candle(asset, ast, candles, ha, i):
     # BTC vote - the cross IS the trend read, so layering the old filters on
     # top would refuse the very setups it exists to take.
     # ---------------- IMPULSE MACD ENGINE (LazyBear, his 20 Aug spec) ------
-    if IM_MODE or FVG_MODE or MACD_MODE or LG_MODE or SMMA_MODE or REV_MODE:
+    if (IM_MODE or FVG_MODE or MACD_MODE or LG_MODE or SMMA_MODE or REV_MODE
+            or TL_MODE):
         ast["sym"] = sym
         ast["_asset"] = asset
-        side = (rev_signal(ast, candles, i) if REV_MODE
+        side = (tl_signal(ast, candles, i) if TL_MODE
+                else rev_signal(ast, candles, i) if REV_MODE
                 else smma_signal(ast, candles, i) if SMMA_MODE
                 else lg_signal(ast, candles, i) if LG_MODE
                 else macd_div_signal(ast, candles, i) if MACD_MODE
                 else fvg_signal(ast, candles, i) if FVG_MODE
                 else im_signal(ast, candles, i))
         try:
-            _g = (rev_gate(ast, candles, i, sym) if REV_MODE
+            _g = (tl_gate(ast, candles, i, sym) if TL_MODE
+                  else rev_gate(ast, candles, i, sym) if REV_MODE
                   else smma_gate(ast, candles, i, sym) if SMMA_MODE
                   else lg_gate(ast, candles, i, sym) if LG_MODE
                   else macd_div_gate(ast, candles, i, sym) if MACD_MODE
@@ -8374,7 +8488,8 @@ def process_candle(asset, ast, candles, ha, i):
                 # sat on the dashboard looking current - xyz:UNITREE showed
                 # "flat 38 bars" for 36 HOURS on 22-23 Aug.
                 # SMMA reads through bar i, the other gates stop at i-1.
-                _g["t"] = candles[i if (SMMA_MODE or REV_MODE) else i - 1]["t"]
+                _g["t"] = candles[i if (SMMA_MODE or REV_MODE or TL_MODE)
+                                  else i - 1]["t"]
             ast["gate"] = _g
         except Exception as e:
             log(f"{sym}: im_gate_status failed: {type(e).__name__}: {e}")
@@ -8400,7 +8515,14 @@ def process_candle(asset, ast, candles, ha, i):
         rr = IM_P2_RR if path == "breakout" else IM_P1_RR
         stop = None
         stop_src = ""
-        if REV_MODE and ast.get("rev"):
+        if TL_MODE and ast.get("tl"):
+            stop = ast["tl"]["stop"]
+            risk_t = abs(entry - stop)
+            rr = TL_RR
+            stop_src = f"beyond the {TL_LEN}-bar level"
+            if risk_t <= 0:
+                return False
+        elif REV_MODE and ast.get("rev"):
             # each setup placed its own structural stop
             stop = ast["rev"]["stop"]
             risk_t = abs(entry - stop)
@@ -9457,7 +9579,8 @@ def check_once():
                               # dashboard stops carrying its own hardcoded
                               # copy. Its RREF was still 1.5 after SMMA_RR
                               # went to 2.0 and nothing said so.
-                              rr=(REV_RR if REV_MODE else
+                              rr=(TL_RR if TL_MODE else
+                                  REV_RR if REV_MODE else
                                   SMMA_RR if SMMA_MODE else
                                   LG_RR if LG_MODE else
                                   MACD_RR if MACD_MODE else
