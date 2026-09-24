@@ -68,7 +68,9 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
 # --- asset universe -------------------------------------------------------
-DISCOVER_ALL = False               # 19 Sep: BTC ONLY again - the ASSETS
+DISCOVER_ALL = True                # 24 Sep: OPEN universe again (~95
+                                   # markets, capped by MAX_ASSETS).
+                                   # was False:              # 19 Sep: BTC ONLY again - the ASSETS
                                    # list below. 15 Sep: OPEN again. was BTC ONLY:
                                    # the universe is the ASSETS list below -
                                    # which already held just BTC. One symbol,
@@ -148,7 +150,9 @@ ASSETS = [                         # used when DISCOVER_ALL = False, or when
                                    # BTC only again.                                  # 19 Sep: PONS removed - BTC only.
 
 # --- strategy dials -------------------------------------------------------
-TF = "15m"                         # 24 Sep: 1m -> 15m for Trend Levels.
+TF = "1h"                          # 24 Sep: 30m -> 1h.
+                                   # was 30m:                        # 24 Sep: 15m -> 30m.
+                                   # was 15m:                        # 24 Sep: 1m -> 15m for Trend Levels.
                                    # was 1m:                         # 20 Sep: back to 1m.
                                    # 19 Sep: 1m -> 5m for the reversal
                                    # engine - trendlines and double tops need
@@ -160,7 +164,9 @@ TF = "15m"                         # 24 Sep: 1m -> 15m for Trend Levels.
                                    # it constantly without going
                                    # anywhere - PUMP moved 0.48% between
                                    # crosses at 15m and 1.16% at 30m
-SCAN_EVERY = "15m"                  # 24 Sep: matches TF - one scan a candle.
+SCAN_EVERY = "1h"                   # 24 Sep: matches TF.
+                                   # was 30m:                 # 24 Sep: matches TF.
+                                   # was 15m:                 # 24 Sep: matches TF - one scan a candle.
                                    # was 1m:                  # 20 Sep: back to 1m with TF.
                                    # 19 Sep: 1m -> 5m, one scan per candle.
                                    # Also a fifth of the fetch load on the
