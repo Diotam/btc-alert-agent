@@ -144,12 +144,8 @@ ASSETS = [                         # used when DISCOVER_ALL = False, or when
      "fallbacks": ["binance:BTCUSDT", "kraken:XBTUSD"]},
     # 20 Sep: CASHCAT added. Hyperliquid-only, so no fallback feeds - if HL
     # fails for it the symbol is simply skipped that scan.
-    {"symbol": "CASHCAT", "label": "CASHCAT-PERP", "hl_coin": "CASHCAT",
-     "fallbacks": []},
-    # 22 Sep: VVV added. Hyperliquid-only, like CASHCAT.
-    {"symbol": "VVV", "label": "VVV-PERP", "hl_coin": "VVV",
-     "fallbacks": []},
-]                                  # 19 Sep: PONS removed - BTC only.
+]                                  # 23 Sep: CASHCAT and VVV removed -
+                                   # BTC only again.                                  # 19 Sep: PONS removed - BTC only.
 
 # --- strategy dials -------------------------------------------------------
 TF = "1m"                          # 20 Sep: back to 1m.
