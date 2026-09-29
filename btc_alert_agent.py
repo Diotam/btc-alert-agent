@@ -164,7 +164,13 @@ TF = "1h"                          # 24 Sep: 30m -> 1h.
                                    # it constantly without going
                                    # anywhere - PUMP moved 0.48% between
                                    # crosses at 15m and 1.16% at 30m
-SCAN_EVERY = "1h"                   # 24 Sep: matches TF.
+SCAN_EVERY = "5m"                   # 29 Sep: SHORTER than TF on purpose -
+                                   # TL_INTRABAR needs a pulse inside the
+                                   # candle or the forming bar is judged
+                                   # once and the arrow is seen an hour
+                                   # late. 5m = at most 5 min behind the
+                                   # chart. 1m is closer and ~5x the load.
+                                   # was 1h:                  # 24 Sep: matches TF.
                                    # was 30m:                 # 24 Sep: matches TF.
                                    # was 15m:                 # 24 Sep: matches TF - one scan a candle.
                                    # was 1m:                  # 20 Sep: back to 1m with TF.
@@ -8331,6 +8337,20 @@ TL_STOP_BARS = 5                   # 28 Sep: the stop gets its OWN lookback.
                                    # swing the move must not give back.
                                    # 0 restores the old full-range stop.
 TL_STOP_PAD_PCT = 0.05             # the stop sits this % beyond the level
+TL_INTRABAR = True                 # 29 Sep: judge the FORMING candle, so the
+                                   # entry lands when the arrow appears rather
+                                   # than at the close of the candle that drew
+                                   # it. This matches the indicator: its
+                                   # ta.highest(length) includes the forming
+                                   # bar, so the flip - and the arrow - happen
+                                   # the moment price makes a new extreme,
+                                   # mid-candle. The entry price is that bar's
+                                   # running close, i.e. the live price at the
+                                   # moment of the flip.
+                                   # NOTE: only as timely as SCAN_EVERY. At
+                                   # SCAN_EVERY = TF the forming bar is looked
+                                   # at once and this does nothing - set the
+                                   # scan pulse SHORTER than the timeframe.
 TL_FRESH_ONLY = True               # 28 Sep: only trade an arrow that prints
                                    # AFTER this process started. On a restart
                                    # (or when a symbol first enters the
@@ -8387,7 +8407,10 @@ def tl_signal(ast, candles, i):
     # most recent flip, which may have printed hours ago - taking it enters
     # at today's price on yesterday's signal. Adopt the trend silently and
     # wait for the next arrow instead.
-    if TL_FRESH_ONLY and candles[i]["t"] < AGENT_START_MS:
+    # measured on the bar's END, not its open: the candle in progress when
+    # the agent starts has its open in the past, but a flip inside it happens
+    # on our watch and should count.
+    if TL_FRESH_ONLY and (candles[i]["t"] + MS[TF]) < AGENT_START_MS:
         return None
     tr = tl_trend(candles, i)
     now, prev = tr[i], tr[i - 1]
@@ -9457,7 +9480,8 @@ def check_asset(asset, state):
     # with no open trade has nothing new to say until its next candle closes.
     if (cs is None and not ast["trade"]
             and not (CROSS_MODE and CROSS_INTRABAR and not CROSS_NEEDS_NOWICK)
-            and not (RS_MODE and RS_INTRABAR)):
+            and not (RS_MODE and RS_INTRABAR)
+            and not (TL_MODE and TL_INTRABAR)):
         boundary = (now_ms() // MS[TF]) * MS[TF] - MS[TF]
         if ast["last_candle_t"] >= boundary:
             RUN_STATUS.append(f"{sym} up to date")
@@ -9480,7 +9504,8 @@ def check_asset(asset, state):
     # for the bar to close would enter a full candle after the open the
     # rule names, which on 15m is 15 minutes of drift.
     last_eval = ((len(cs) - 1)
-                 if (ENTRY_AT_OPEN or (RS_MODE and RS_INTRABAR))
+                 if (ENTRY_AT_OPEN or (RS_MODE and RS_INTRABAR)
+                     or (TL_MODE and TL_INTRABAR))
                  else last_closed)
     # The cutoff must sit strictly BEHIND last_eval. With ENTRY_AT_OPEN off
     # last_eval IS last_closed, and a cutoff on that same bar made the loop
@@ -9496,7 +9521,8 @@ def check_asset(asset, state):
         # this the forming bar is evaluated exactly ONCE, on the first pulse
         # after it opens, and a cross twelve minutes into the bar is invisible.
         recheck = (((CROSS_MODE and CROSS_INTRABAR and not CROSS_NEEDS_NOWICK)
-                    or (RS_MODE and RS_INTRABAR))
+                    or (RS_MODE and RS_INTRABAR)
+                    or (TL_MODE and TL_INTRABAR))
                    and i == len(cs) - 1 and not ast["trade"])
         if i > last_eval:
             continue
