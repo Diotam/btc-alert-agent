@@ -6463,6 +6463,10 @@ def save_state(state):
 
 STATE_VIEW = {}
 
+# When this process started. TL_FRESH_ONLY measures arrows against it, so a
+# restart never inherits a flip it did not watch happen.
+AGENT_START_MS = now_ms()
+
 
 # --------------------------- open-trade management -------------------------
 def ensure_flat(asset, trade, kind):
@@ -8327,6 +8331,17 @@ TL_STOP_BARS = 5                   # 28 Sep: the stop gets its OWN lookback.
                                    # swing the move must not give back.
                                    # 0 restores the old full-range stop.
 TL_STOP_PAD_PCT = 0.05             # the stop sits this % beyond the level
+TL_FRESH_ONLY = True               # 28 Sep: only trade an arrow that prints
+                                   # AFTER this process started. On a restart
+                                   # (or when a symbol first enters the
+                                   # universe) the newest bar can still carry
+                                   # a flip that happened hours ago, and
+                                   # entering it means taking a signal at a
+                                   # price the market left long since. With
+                                   # this on the agent adopts the CURRENT
+                                   # trend silently and waits for the NEXT
+                                   # arrow. False restores taking whatever
+                                   # arrow the first scan happens to see.
 TL_RR = 1.5                        # target multiple
 
 
@@ -8367,6 +8382,12 @@ def tl_signal(ast, candles, i):
     """An ARROW - the bar the trend flips on. "LONG"/"SHORT" or None."""
     n = max(1, TL_LEN)
     if i < n + 1 or i >= len(candles):
+        return None
+    # STALE ARROWS. The scan that runs just after a restart still sees the
+    # most recent flip, which may have printed hours ago - taking it enters
+    # at today's price on yesterday's signal. Adopt the trend silently and
+    # wait for the next arrow instead.
+    if TL_FRESH_ONLY and candles[i]["t"] < AGENT_START_MS:
         return None
     tr = tl_trend(candles, i)
     now, prev = tr[i], tr[i - 1]
