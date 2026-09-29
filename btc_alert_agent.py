@@ -1588,7 +1588,9 @@ REGIME_SLOPE_PCT = 0.0             # how far it must have moved, as a % of the
                                    # NOTHING, as before
 _REGIME = {}                       # per-symbol cache, TTL below
 REGIME_TTL_S = 300                 # one higher-TF fetch per symbol per scan
-REVERSE_ON_OPPOSITE = False        # 24 Sep: OFF. An opposite arrow while a
+REVERSE_ON_OPPOSITE = True         # 28 Sep: ON - with no stop, the opposite
+                                   # arrow is the ONLY thing that can end a
+                                   # losing trade. was False:       # 24 Sep: OFF. An opposite arrow while a
                                    # trade is open is IGNORED again; the
                                    # position runs to its own stop or target.
                                    # was True:        # 23 Sep: an OPPOSITE signal while a trade
@@ -1975,7 +1977,13 @@ REVERSE_ALERTS = True              # when the smoothed HA flips against an
                                    # because a reverse skips the doji, the
                                    # confirmation bars and the run-length
                                    # floor that every other entry must clear
-STOP_EXIT = True                   # 17 Aug: back ON. Off since 11 Aug, which
+STOP_EXIT = False                  # 28 Sep: OFF for Trend Levels. The stop
+                                   # LEVEL is still computed - sizing needs
+                                   # the risk distance and the target is
+                                   # TL_RR x it - but price reaching it no
+                                   # longer closes anything. The only exits
+                                   # are the TARGET and the next ARROW,
+                                   # which reverses. was True:                  # 17 Aug: back ON. Off since 11 Aug, which
                                    # meant NO losing exit at all - and made
                                    # every ATR stop, close-confirm and
                                    # disaster-stop path dead code.
@@ -8305,16 +8313,41 @@ def rev_gate(ast, candles, i, sym=None):
 # usual default for this family. Set it to whatever the chart is using -
 # every arrow's position depends on it.
 TL_MODE = True                     # 24 Sep: LIVE. Replaces the SMMA cross.
-TL_LEN = 20                        # lookback for the highest high / lowest low
+TL_LEN = 30                        # lookback for the highest high / lowest low.
+                                   # 28 Sep: 20 -> 30. The published source
+                                   # reads `int length = input.int(30)` - 20
+                                   # was my guess before I had the code, and
+                                   # it made every arrow fire off a shorter
+                                   # range than the indicator's.
+TL_STOP_BARS = 5                   # 28 Sep: the stop gets its OWN lookback.
+                                   # It used to be the opposite end of the
+                                   # TL_LEN range - on 1h that is a 20-HOUR
+                                   # span, so risk was enormous and the 1.5R
+                                   # target sat miles away. This is the recent
+                                   # swing the move must not give back.
+                                   # 0 restores the old full-range stop.
 TL_STOP_PAD_PCT = 0.05             # the stop sits this % beyond the level
 TL_RR = 1.5                        # target multiple
 
 
 def tl_trend(candles, upto):
-    """[trend] for bars 0..upto: +1 up, -1 down, 0 before the first extreme.
+    """[trend] for bars 0..upto: +1 up, -1 down, 0 = na (no trend set yet).
 
-    Latched exactly as the indicator describes - a bar that makes neither
-    extreme inherits the previous bar's trend.
+    Ported from the published source:
+
+        h = ta.highest(length)      // highest HIGH over `length`, incl. this bar
+        l = ta.lowest(length)
+        if h == high
+            trend := true
+        if l == low
+            trend := false
+
+    Two details that matter and are easy to get wrong:
+      * the two tests are SEQUENTIAL, not if/else. A bar that is BOTH the
+        highest high and the lowest low of the window - an outside bar - ends
+        DOWN, because the low test runs second and overwrites.
+      * `trend` starts as na and stays there until the first extreme, so a
+        latch of 0 here is na, not "flat".
     """
     n = max(1, TL_LEN)
     out = [0] * (upto + 1)
@@ -8322,12 +8355,10 @@ def tl_trend(candles, upto):
     for i in range(upto + 1):
         if i >= n - 1:
             w = candles[i - n + 1:i + 1]
-            hh = max(x["h"] for x in w)
-            ll = min(x["l"] for x in w)
-            if candles[i]["h"] >= hh:
+            if candles[i]["h"] >= max(x["h"] for x in w):
                 cur = 1
-            elif candles[i]["l"] <= ll:
-                cur = -1
+            if candles[i]["l"] <= min(x["l"] for x in w):
+                cur = -1                # SECOND: wins on an outside bar
         out[i] = cur
     return out
 
@@ -8339,15 +8370,30 @@ def tl_signal(ast, candles, i):
         return None
     tr = tl_trend(candles, i)
     now, prev = tr[i], tr[i - 1]
-    if now == 0 or now == prev:
+    # The script's own arrow conditions:
+    #     up   if (trend and not trend[1])
+    #     down if (trend[1] and not trend)
+    # In Pine an na bool reads as false, so the FIRST latch out of na prints
+    # an UP arrow but never a DOWN one - `trend[1] and ...` is false while
+    # trend[1] is still na. Mirrored exactly here.
+    if now == 1 and prev != 1:
+        side = "LONG"
+    elif now == -1 and prev == 1:
+        side = "SHORT"
+    else:
         return None                     # no arrow on this bar
-    side = "LONG" if now > 0 else "SHORT"
     w = candles[i - n + 1:i + 1]
     hh = max(x["h"] for x in w)
     ll = min(x["l"] for x in w)
-    # the stop goes beyond the OPPOSITE level - the one that would flip the
-    # trend back. That is the price at which this arrow is simply wrong.
-    lvl = ll if side == "LONG" else hh
+    # The stop. TL_STOP_BARS > 0 uses the RECENT swing - the level the move
+    # should not give back - rather than the opposite end of the whole TL_LEN
+    # range, which on a high timeframe is a stop many hours wide.
+    if TL_STOP_BARS and TL_STOP_BARS < n:
+        sw = candles[i - TL_STOP_BARS + 1:i + 1]
+        lvl = (min(x["l"] for x in sw) if side == "LONG"
+               else max(x["h"] for x in sw))
+    else:
+        lvl = ll if side == "LONG" else hh
     pad = abs(lvl) * TL_STOP_PAD_PCT / 100.0
     stop = lvl - pad if side == "LONG" else lvl + pad
     entry = candles[i]["c"]
@@ -8360,7 +8406,10 @@ def tl_signal(ast, candles, i):
         f"{'took out the' if side == 'LONG' else 'broke the'} "
         f"{TL_LEN}-bar {'high' if side == 'LONG' else 'low'} at "
         f"{fmt_px(hh if side == 'LONG' else ll)}, flipping the trend "
-        f"{'up' if side == 'LONG' else 'down'}")
+        f"{'up' if side == 'LONG' else 'down'}"
+        f" \u00b7 stop beyond the "
+        f"{TL_STOP_BARS if (TL_STOP_BARS and TL_STOP_BARS < n) else TL_LEN}"
+        f"-bar {'low' if side == 'LONG' else 'high'} {fmt_px(lvl)}")
     return side
 
 
@@ -8525,7 +8574,7 @@ def process_candle(asset, ast, candles, ha, i):
             stop = ast["tl"]["stop"]
             risk_t = abs(entry - stop)
             rr = TL_RR
-            stop_src = f"beyond the {TL_LEN}-bar level"
+            stop_src = f"beyond the {TL_STOP_BARS or TL_LEN}-bar level"
             if risk_t <= 0:
                 return False
         elif REV_MODE and ast.get("rev"):
