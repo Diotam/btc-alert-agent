@@ -1054,7 +1054,12 @@ function render(d){
                GONE:'position gone',
                TP_HALF:'target hit', RUNNER:'runner', BE:'breakeven',
                TRAIL:'trailed out', FLIP:'colour flip', STOP:'stopped',
-               EXPIRED:'window expired'};
+               EXPIRED:'window expired',
+               // 28 Sep: the kinds this engine actually books. TP and MANUAL
+               // were never in this map, and REVERSE is new - all three fell
+               // through to the raw ledger string.
+               TP:'target hit', MANUAL:'closed by hand',
+               REVERSE:'reversed on the next arrow'};
   // outcome, not event type: anything closed in profit gets a checkmark.
   // BE keeps its own mark because breakeven is neither.
   const iconFor=c=>c.kind==='BE'?'➡️':(c.pnl_pct>=0?'✅':'❌');
