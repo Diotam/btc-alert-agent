@@ -150,7 +150,9 @@ ASSETS = [                         # used when DISCOVER_ALL = False, or when
                                    # BTC only again.                                  # 19 Sep: PONS removed - BTC only.
 
 # --- strategy dials -------------------------------------------------------
-TF = "1h"                          # 24 Sep: 30m -> 1h.
+TF = "15m"                         # 30 Sep: his volume-profile spec names
+                                   # 15m explicitly.
+                                   # was 1h:                         # 24 Sep: 30m -> 1h.
                                    # was 30m:                        # 24 Sep: 15m -> 30m.
                                    # was 15m:                        # 24 Sep: 1m -> 15m for Trend Levels.
                                    # was 1m:                         # 20 Sep: back to 1m.
@@ -1594,7 +1596,11 @@ REGIME_SLOPE_PCT = 0.0             # how far it must have moved, as a % of the
                                    # NOTHING, as before
 _REGIME = {}                       # per-symbol cache, TTL below
 REGIME_TTL_S = 300                 # one higher-TF fetch per symbol per scan
-REVERSE_ON_OPPOSITE = True         # 28 Sep: ON - with no stop, the opposite
+REVERSE_ON_OPPOSITE = False        # 30 Sep: OFF - the volume-profile
+                                   # setups each carry their own stop and
+                                   # 2R target, so there is nothing for a
+                                   # flip to rescue.
+                                   # was True:          # 28 Sep: ON - with no stop, the opposite
                                    # arrow is the ONLY thing that can end a
                                    # losing trade. was False:       # 24 Sep: OFF. An opposite arrow while a
                                    # trade is open is IGNORED again; the
@@ -1983,7 +1989,11 @@ REVERSE_ALERTS = True              # when the smoothed HA flips against an
                                    # because a reverse skips the doji, the
                                    # confirmation bars and the run-length
                                    # floor that every other entry must clear
-STOP_EXIT = False                  # 28 Sep: OFF for Trend Levels. The stop
+STOP_EXIT = True                   # 30 Sep: back ON. The volume-profile
+                                   # spec places a real stop on every
+                                   # setup, so the level has to close the
+                                   # trade.
+                                   # was False:                 # 28 Sep: OFF for Trend Levels. The stop
                                    # LEVEL is still computed - sizing needs
                                    # the risk distance and the target is
                                    # TL_RR x it - but price reaching it no
@@ -2382,6 +2392,9 @@ def fetch_hyperliquid(coin, interval, lookback):
 
 def engine_label():
     """What the alerts should call the running engine."""
+    if VP_MODE:
+        return ("Volume Profile: "
+                + "/".join(VP_SETUPS))
     if TL_MODE:
         return f"Trend Levels [ChartPrime] {TL_LEN}"
     if REV_MODE:
@@ -6630,8 +6643,11 @@ def _book_partial(asset, trade, px, event_t):
     runner logic would then watch forever."""
     sym = asset["symbol"]
     if HA_PARTIAL >= 1.0:
+        # the TRADE's own multiple. HA_RR is the flip engine's, and this
+        # line printed it for every engine - a 2R volume-profile target
+        # booked with "at 1.5R" in the log.
         log(f"{sym}: target hit at ${fmt_px(px)} - full position booked "
-            f"at {HA_RR:.1f}R, no runner")
+            f"at {float(trade.get('rr') or HA_RR):.1f}R, no runner")
         return _close_trade(asset, trade, px, "TP", event_t)
     # returns None on the PARTIAL path so the caller knows the trade lives on
     record_close(sym, trade, px, "TP_HALF", event_t, frac=HA_PARTIAL)
@@ -8322,7 +8338,8 @@ def rev_gate(ast, candles, i, sym=None):
 # page shows the description and the flip rule, not the full body). 20 is the
 # usual default for this family. Set it to whatever the chart is using -
 # every arrow's position depends on it.
-TL_MODE = True                     # 24 Sep: LIVE. Replaces the SMMA cross.
+TL_MODE = False                    # 30 Sep: OFF - VP_MODE replaces it.
+                                   # was True:   # 24 Sep: LIVE. Replaces the SMMA cross.
 TL_LEN = 30                        # lookback for the highest high / lowest low.
                                    # 28 Sep: 20 -> 30. The published source
                                    # reads `int length = input.int(30)` - 20
@@ -8486,6 +8503,325 @@ def tl_gate(ast, candles, i, sym=None):
                        f"{TL_LEN}-bar range {fmt_px(ll)} - {fmt_px(hh)}")}
 
 
+
+# ============== VOLUME PROFILE (his 30 Sep spec) ==========================
+# The profile is built from the PREVIOUS UTC DAY's candles - first bar to
+# last - and its levels (POC, VAH, VAL) are fixed for the whole of today.
+# Crypto perps trade 24/7, so the UTC day IS the session; there is no open
+# or close to anchor to.
+#
+# A caveat that cannot be engineered away: Hyperliquid gives ONE volume
+# figure per candle, not a breakdown of volume by price within it. Each
+# bar's volume is therefore spread EVENLY across the bins its high-low
+# range covers. That is what the Pine versions do too, but it is an
+# approximation - a tick-level profile would put more volume where price
+# actually traded inside the bar, so the POC can sit a bin or two away
+# from a true one.
+#
+# Three setups, each tagged with its own path in the ledger:
+#   vp_poc      POC BOUNCE. Yesterday closed OUTSIDE the value area. Price
+#               returns to the POC and an ENGULFING candle rejects it.
+#               Stop just beyond the POC.
+#   vp_vareturn VALUE AREA REVERSAL. Yesterday closed INSIDE. Price closes
+#               outside the VA, then a candle closes back INSIDE it.
+#               Stop beyond the excursion's extreme.
+#   vp_breakout BREAKOUT. Price closes decisively beyond the VA, pulls back
+#               to the edge and holds, then breaks the pullback's swing.
+#               Stop beyond the pullback extreme.
+VP_MODE = True                     # 30 Sep: LIVE. Replaces TL_MODE.
+VP_SETUPS = ("poc", "vareturn", "breakout")
+VP_BINS = 50                       # price bins across the session range
+VP_VA_PCT = 0.70                   # value area = this share of the volume
+VP_TOUCH_TOL_PCT = 0.10            # "at" a level means within this % of it
+VP_BREAKOUT_PCT = 0.30             # a "significant" break clears the VA edge
+                                   # by this % of price
+VP_PULLBACK_BARS = 24              # the breakout's pullback and break must
+                                   # complete within this many bars (6h on 15m)
+VP_STOP_PAD_PCT = 0.05             # stops sit this % beyond their level
+VP_RR = 2.0                        # his spec: 2R on all three setups
+VP_DAY_MS = 86_400_000
+VP_MIN_PREV_BARS = 20              # a usable previous session needs this many
+_VP_CACHE = {}                     # (sym, day0) -> levels. The previous day
+                                   # is closed, so its profile cannot change;
+                                   # without this every scan rebuilt it twice
+                                   # per symbol (signal + gate).
+
+
+def _vp_day0(ms):
+    """UTC midnight at or before ms."""
+    return (ms // VP_DAY_MS) * VP_DAY_MS
+
+
+def vp_profile(cands):
+    """{poc, vah, val, hi, lo} from a session's candles, or None.
+
+    Volume is spread evenly across the bins each bar's range touches, then
+    the value area grows out from the POC - taking the heavier neighbour
+    each step, the standard construction - until it holds VP_VA_PCT of the
+    total.
+    """
+    if not cands:
+        return None
+    hi = max(x["h"] for x in cands)
+    lo = min(x["l"] for x in cands)
+    if hi <= lo:
+        return None
+    n = max(8, VP_BINS)
+    w = (hi - lo) / n
+    vol = [0.0] * n
+    for x in cands:
+        v = float(x.get("v") or 0.0)
+        if v <= 0:
+            continue
+        a = int((x["l"] - lo) / w)
+        b = int((x["h"] - lo) / w)
+        a = min(max(a, 0), n - 1)
+        b = min(max(b, 0), n - 1)
+        share = v / (b - a + 1)
+        for k in range(a, b + 1):
+            vol[k] += share
+    total = sum(vol)
+    if total <= 0:
+        return None
+    poc_i = max(range(n), key=lambda k: vol[k])
+    lo_i = hi_i = poc_i
+    got = vol[poc_i]
+    while got < total * VP_VA_PCT and (lo_i > 0 or hi_i < n - 1):
+        down = vol[lo_i - 1] if lo_i > 0 else -1.0
+        up = vol[hi_i + 1] if hi_i < n - 1 else -1.0
+        if up >= down:
+            hi_i += 1
+            got += up
+        else:
+            lo_i -= 1
+            got += down
+    return {"poc": lo + (poc_i + 0.5) * w,
+            "val": lo + lo_i * w,
+            "vah": lo + (hi_i + 1) * w,
+            "hi": hi, "lo": lo}
+
+
+def vp_levels(candles, i, sym=None):
+    """(profile, today_start_ms, prev_session_close) for bar i, or None."""
+    t = candles[i]["t"]
+    d0 = _vp_day0(t)
+    key = (sym, d0)
+    hit = _VP_CACHE.get(key)
+    if hit is not None:
+        return hit
+    prev = [x for x in candles[:i + 1] if d0 - VP_DAY_MS <= x["t"] < d0]
+    if len(prev) < VP_MIN_PREV_BARS:
+        return None                     # not a usable session
+    prof = vp_profile(prev)
+    if not prof:
+        return None
+    out = (prof, d0, prev[-1]["c"])
+    if len(_VP_CACHE) > 4000:
+        _VP_CACHE.clear()
+    _VP_CACHE[key] = out
+    return out
+
+
+def _engulf(candles, i, want_long):
+    """Bar i's body engulfs bar i-1's, in the trade's direction."""
+    if i < 1:
+        return False
+    o0, c0 = candles[i - 1]["o"], candles[i - 1]["c"]
+    o1, c1 = candles[i]["o"], candles[i]["c"]
+    if want_long:
+        return c1 > o1 and c0 < o0 and c1 >= o0 and o1 <= c0
+    return c1 < o1 and c0 > o0 and c1 <= o0 and o1 >= c0
+
+
+def _vp_poc(candles, i, prof, d0, prev_close, tol):
+    """POC BOUNCE. Yesterday closed outside the VA; price comes back to the
+    POC and an engulfing candle rejects it."""
+    poc = prof["poc"]
+    if prev_close > prof["vah"]:
+        want_long = True                # came from above: bounce UP off the POC
+    elif prev_close < prof["val"]:
+        want_long = False
+    else:
+        return None                     # closed inside - not this setup
+    c = candles[i]
+    if not (c["l"] <= poc * (1 + tol) and c["h"] >= poc * (1 - tol)):
+        return None                     # not at the POC
+    if not _engulf(candles, i, want_long):
+        return None
+    pad = poc * VP_STOP_PAD_PCT / 100.0
+    stop = poc - pad if want_long else poc + pad
+    why = (f"previous session closed {'above' if want_long else 'below'} the "
+           f"value area ({fmt_px(prof['val'])}-{fmt_px(prof['vah'])}); price "
+           f"returned to the POC {fmt_px(poc)} and "
+           f"{'bullish' if want_long else 'bearish'} engulfing")
+    return ("LONG" if want_long else "SHORT"), stop, why, "poc"
+
+
+def _vp_vareturn(candles, i, prof, d0, prev_close, tol):
+    """VALUE AREA REVERSAL. Yesterday closed inside; price closes outside the
+    VA and then a candle closes back inside."""
+    if not (prof["val"] <= prev_close <= prof["vah"]):
+        return None
+    vah, val = prof["vah"], prof["val"]
+    c, p = candles[i], candles[i - 1]
+    if not (val <= c["c"] <= vah):
+        return None                     # this bar must close back INSIDE
+    if p["c"] > vah:
+        want_long = False               # broke above and failed
+    elif p["c"] < val:
+        want_long = True
+    else:
+        return None                     # previous bar was not outside
+    # the excursion: the run of bars that closed outside, just ended
+    k = i - 1
+    while k > 0 and not (val <= candles[k]["c"] <= vah):
+        k -= 1
+    run = candles[k + 1:i]
+    if not run:
+        return None
+    ext = (max(x["h"] for x in run) if not want_long
+           else min(x["l"] for x in run))
+    pad = abs(ext) * VP_STOP_PAD_PCT / 100.0
+    stop = ext - pad if want_long else ext + pad
+    why = (f"previous session closed inside the value area; price broke "
+           f"{'above ' + fmt_px(vah) if not want_long else 'below ' + fmt_px(val)}"
+           f" for {len(run)} bar(s) and closed back inside at {fmt_px(c['c'])}")
+    return ("LONG" if want_long else "SHORT"), stop, why, "vareturn"
+
+
+def _vp_breakout(candles, i, prof, d0, prev_close, tol):
+    """BREAKOUT. A decisive close beyond the VA, a pullback that holds the
+    edge, then a close through the pullback's swing."""
+    vah, val = prof["vah"], prof["val"]
+    bp = VP_BREAKOUT_PCT / 100.0
+    first = None
+    for k in range(i, -1, -1):
+        if candles[k]["t"] < d0:
+            break
+        first = k
+    if first is None:
+        return None                     # nothing of today's session yet
+    lo_k = max(first, i - VP_PULLBACK_BARS)
+    # THE RUN. Walk back to the last bar that closed INSIDE the value area;
+    # everything after it is the current excursion. The break is that run's
+    # opening move, not the bar nearest i - after a breakout nearly every
+    # bar is still beyond the edge, so taking the nearest one left no room
+    # for a pullback and the setup could never fire.
+    k = i - 1
+    while k >= lo_k and not (val <= candles[k]["c"] <= vah):
+        k -= 1
+    if k < lo_k:
+        return None                     # the run starts outside the window:
+                                        # this is a trend, not a fresh break
+    start = k + 1
+    if start > i - 1:
+        return None                     # the previous bar closed inside
+    brk = None
+    for k in range(start, i):
+        if candles[k]["c"] > vah * (1 + bp):
+            brk = (k, True)
+            break
+        if candles[k]["c"] < val * (1 - bp):
+            brk = (k, False)
+            break
+    if not brk:
+        return None                     # the run never cleared the edge
+                                        # decisively
+    b, want_long = brk
+    edge = vah if want_long else val
+    # THE PULLBACK: the most recent bar to come back within tol of the edge.
+    # The most recent one, not the first - a second retest makes the first
+    # one's swing irrelevant, and measuring the break of structure from it
+    # would need a move far bigger than the rule asks for.
+    pb = None
+    for k in range(b + 1, i):
+        near = ((candles[k]["l"] <= edge * (1 + tol)) if want_long
+                else (candles[k]["h"] >= edge * (1 - tol)))
+        if near:
+            pb = k
+    if pb is None:
+        return None
+    # break of structure: close beyond the pullback leg's swing
+    leg = candles[pb:i]
+    if not leg:
+        return None
+    swing = (max(x["h"] for x in leg) if want_long
+             else min(x["l"] for x in leg))
+    c = candles[i]
+    if not ((c["c"] > swing) if want_long else (c["c"] < swing)):
+        return None
+    ext = (min(x["l"] for x in leg) if want_long
+           else max(x["h"] for x in leg))
+    pad = abs(ext) * VP_STOP_PAD_PCT / 100.0
+    stop = ext - pad if want_long else ext + pad
+    why = (f"broke {'above ' + fmt_px(vah) if want_long else 'below ' + fmt_px(val)}"
+           f" by more than {VP_BREAKOUT_PCT}%, pulled back to the edge and held,"
+           f" then closed through the pullback swing {fmt_px(swing)}")
+    return ("LONG" if want_long else "SHORT"), stop, why, "breakout"
+
+
+def vp_signal(ast, candles, i):
+    """"LONG"/"SHORT" or None. Leaves the stop in ast["vp"]["stop"]."""
+    if i < 2 or i >= len(candles):
+        return None
+    lv = vp_levels(candles, i, ast.get("sym"))
+    if not lv:
+        return None
+    prof, d0, prev_close = lv
+    if candles[i]["t"] < d0:
+        return None                     # only trade TODAY's session
+    tol = VP_TOUCH_TOL_PCT / 100.0
+    order = {"poc": _vp_poc, "vareturn": _vp_vareturn,
+             "breakout": _vp_breakout}
+    for name in ("poc", "vareturn", "breakout"):
+        if name not in VP_SETUPS:
+            continue
+        try:
+            r = order[name](candles, i, prof, d0, prev_close, tol)
+        except Exception as e:
+            log(f"{ast.get('sym')}: vp_{name} failed: {type(e).__name__}: {e}")
+            continue
+        if not r:
+            continue
+        side, stop, why, tag = r
+        entry = candles[i]["c"]
+        if (stop >= entry) if side == "LONG" else (stop <= entry):
+            continue                    # stop on the wrong side - skip
+        ast["vp"] = {"stop": stop, "setup": tag, "poc": prof["poc"],
+                     "vah": prof["vah"], "val": prof["val"]}
+        ast["im_path"] = f"vp_{tag}"
+        ast["im_why"] = why
+        return side
+    return None
+
+
+def vp_gate(ast, candles, i, sym=None):
+    """Watchlist: yesterday's levels and where price sits against them."""
+    lv = vp_levels(candles, i, sym or ast.get("sym"))
+    if not lv:
+        return None
+    prof, d0, prev_close = lv
+    px = candles[i]["c"]
+    poc, vah, val = prof["poc"], prof["vah"], prof["val"]
+    if px > vah:
+        where, side = "above the VA", "SHORT"
+    elif px < val:
+        where, side = "below the VA", "LONG"
+    else:
+        where, side = "inside the VA", ("SHORT" if px > poc else "LONG")
+    dpoc = (px - poc) / px * 100.0
+    near = abs(dpoc) <= VP_TOUCH_TOL_PCT * 3
+    lit = 3 if near else 2 if where == "inside the VA" else 1
+    bar = "".join(("█" if k < lit else "░") * 4 for k in range(3))
+    return {"sym": sym, "dir": side, "run": lit, "age": 0,
+            "stage": "ready" if near else "waiting",
+            "trend": where,
+            "detail": (f"{bar}  POC {fmt_px(poc)} ({dpoc:+.2f}% away)  ·  "
+                       f"VA {fmt_px(val)} - {fmt_px(vah)}  ·  price "
+                       f"{where}  ·  yesterday closed "
+                       f"{'inside' if (val <= prev_close <= vah) else 'outside'}")}
+
+
 def process_candle(asset, ast, candles, ha, i):
     """A visible trend, then a DOJI - an HA body small against that trend.
     The doji is the turn, and the trade is taken on it. No pullback, no
@@ -8563,10 +8899,11 @@ def process_candle(asset, ast, candles, ha, i):
     # top would refuse the very setups it exists to take.
     # ---------------- IMPULSE MACD ENGINE (LazyBear, his 20 Aug spec) ------
     if (IM_MODE or FVG_MODE or MACD_MODE or LG_MODE or SMMA_MODE or REV_MODE
-            or TL_MODE):
+            or TL_MODE or VP_MODE):
         ast["sym"] = sym
         ast["_asset"] = asset
-        side = (tl_signal(ast, candles, i) if TL_MODE
+        side = (vp_signal(ast, candles, i) if VP_MODE
+                else tl_signal(ast, candles, i) if TL_MODE
                 else rev_signal(ast, candles, i) if REV_MODE
                 else smma_signal(ast, candles, i) if SMMA_MODE
                 else lg_signal(ast, candles, i) if LG_MODE
@@ -8574,7 +8911,8 @@ def process_candle(asset, ast, candles, ha, i):
                 else fvg_signal(ast, candles, i) if FVG_MODE
                 else im_signal(ast, candles, i))
         try:
-            _g = (tl_gate(ast, candles, i, sym) if TL_MODE
+            _g = (vp_gate(ast, candles, i, sym) if VP_MODE
+                  else tl_gate(ast, candles, i, sym) if TL_MODE
                   else rev_gate(ast, candles, i, sym) if REV_MODE
                   else smma_gate(ast, candles, i, sym) if SMMA_MODE
                   else lg_gate(ast, candles, i, sym) if LG_MODE
@@ -8587,7 +8925,8 @@ def process_candle(asset, ast, candles, ha, i):
                 # sat on the dashboard looking current - xyz:UNITREE showed
                 # "flat 38 bars" for 36 HOURS on 22-23 Aug.
                 # SMMA reads through bar i, the other gates stop at i-1.
-                _g["t"] = candles[i if (SMMA_MODE or REV_MODE or TL_MODE)
+                _g["t"] = candles[i if (SMMA_MODE or REV_MODE or TL_MODE
+                                        or VP_MODE)
                                   else i - 1]["t"]
             ast["gate"] = _g
         except Exception as e:
@@ -8614,7 +8953,20 @@ def process_candle(asset, ast, candles, ha, i):
         rr = IM_P2_RR if path == "breakout" else IM_P1_RR
         stop = None
         stop_src = ""
-        if TL_MODE and ast.get("tl"):
+        if VP_MODE and ast.get("vp"):
+            # each setup placed its own stop: just beyond the POC, beyond
+            # the failed excursion, or beyond the pullback extreme
+            stop = ast["vp"]["stop"]
+            risk_t = abs(entry - stop)
+            rr = VP_RR
+            stop_src = {"poc": "far side of the POC",
+                        "vareturn": "far side of the excursion extreme",
+                        "breakout": "far side of the pullback extreme"}.get(
+                            ast["vp"]["setup"], "structure")
+            if risk_t <= 0 or ((stop >= entry) if want_long
+                               else (stop <= entry)):
+                return False
+        elif TL_MODE and ast.get("tl"):
             stop = ast["tl"]["stop"]
             risk_t = abs(entry - stop)
             rr = TL_RR
@@ -9681,7 +10033,8 @@ def check_once():
                               # dashboard stops carrying its own hardcoded
                               # copy. Its RREF was still 1.5 after SMMA_RR
                               # went to 2.0 and nothing said so.
-                              rr=(TL_RR if TL_MODE else
+                              rr=(VP_RR if VP_MODE else
+                                  TL_RR if TL_MODE else
                                   REV_RR if REV_MODE else
                                   SMMA_RR if SMMA_MODE else
                                   LG_RR if LG_MODE else
