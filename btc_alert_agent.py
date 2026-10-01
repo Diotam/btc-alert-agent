@@ -2390,6 +2390,17 @@ def fetch_hyperliquid(coin, interval, lookback):
             for c in data]
 
 
+def setup_name(sym):
+    """Engine and setup in one short phrase, for the terse alert."""
+    p = str(IM_PATH.get(sym) or "")
+    if p.startswith("vp_"):
+        return "Volume Profile \u00b7 " + {
+            "vp_poc": "POC bounce",
+            "vp_vareturn": "Value area reversal",
+            "vp_breakout": "Value area breakout"}.get(p, p[3:])
+    return engine_label() + (f" \u00b7 {p}" if p else "")
+
+
 def engine_label():
     """What the alerts should call the running engine."""
     if VP_MODE:
@@ -6245,15 +6256,19 @@ def entry_message(asset, direction, plan, zhi, zlo, source, t, trigger):
     tpct = (abs(tp - ent) / ent * 100.0) if (tp and ent) else None
     lines = [
         f"{e} <b>{direction} ENTRY \u00b7 {esc(asset['symbol'])}</b>",
-        f"<i>{esc(asset['label'])} \u00b7 {TF} \u00b7 {engine_label()} \u00b7 "
-        f"{esc(fmt_ts(t))}</i>",
+        (f"<i>{esc(asset['label'])} \u00b7 {TF} \u00b7 {esc(fmt_ts(t))}</i>"
+         if ALERT_TERSE else
+         f"<i>{esc(asset['label'])} \u00b7 {TF} \u00b7 {engine_label()} \u00b7 "
+         f"{esc(fmt_ts(t))}</i>"),
         "",
-        f"\U0001F4CA <b>Setup</b>: {esc(trigger)}",
+        (f"\U0001F4CA <b>{esc(setup_name(asset['symbol']))}</b>"
+         if ALERT_TERSE else f"\U0001F4CA <b>Setup</b>: {esc(trigger)}"),
         "",
     ]
     # 7 Sep: this was gated on IM_MODE, so with the FVG engine live it
     # resolved to "" and every indicator block was skipped.
-    pth = (IM_PATH.get(asset["symbol"], "") if (IM_MODE or FVG_MODE) else "")
+    pth = (IM_PATH.get(asset["symbol"], "")
+           if ((IM_MODE or FVG_MODE) and not ALERT_TERSE) else "")
     if pth in ("fvg", "ifvg"):
         z = FVG_INFO.get(asset["symbol"])
         if z:
@@ -6318,8 +6333,27 @@ def entry_message(asset, direction, plan, zhi, zlo, source, t, trigger):
                 f"</i>",
                 "",
             ]
+    elif VP_MODE and VP_INFO.get(asset["symbol"]) and not ALERT_TERSE:
+        z = VP_INFO[asset["symbol"]]
+        poc, vah, val = z["poc"], z["vah"], z["val"]
+        px = z.get("entry") or ent
+        inside = val <= z.get("prev_close", poc) <= vah
+        name = {"poc": "POC bounce", "vareturn": "value area reversal",
+                "breakout": "value area breakout"}.get(z["setup"], z["setup"])
+        lines += [
+            "\U0001F4C8 <b>Volume Profile</b> <i>(previous UTC day)</i>",
+            f"POC:   <code>{fmt_px(poc)}</code>   price "
+            f"<code>{(px - poc) / px * 100:+.2f}%</code> from it",
+            f"Value area: <code>{fmt_px(val)}</code> - "
+            f"<code>{fmt_px(vah)}</code>   "
+            f"<i>session {fmt_px(z['lo'])} - {fmt_px(z['hi'])}</i>",
+            f"<i>{esc(name)} \u00b7 previous session closed "
+            f"{'inside' if inside else 'outside'} the value area</i>",
+            "",
+        ]
     else:
-        lv = IM_LEVELS.get(asset["symbol"]) if IM_MODE else None
+        lv = (IM_LEVELS.get(asset["symbol"])
+              if (IM_MODE and not ALERT_TERSE) else None)
         if lv and lv[2]:
             mdv, sbv, band, shv = lv
             lines += [
@@ -6349,15 +6383,16 @@ def entry_message(asset, direction, plan, zhi, zlo, source, t, trigger):
         + (f" \u00b7 {tpct:.2f}% away)" if tpct else ")" if rr else ""))
     if HA_PARTIAL < 1.0:
         lines.append(f"<i>{HA_PARTIAL:.0%} booked at the target</i>")
-    lines.append(f"<i>data: {esc(source)}</i>")
+    if not ALERT_TERSE:
+        lines.append(f"<i>data: {esc(source)}</i>")
     return "\n".join(lines)
 
 
 def lifecycle_message(asset, kind, trade, exit_px, event_t, note):
     emoji, title, sub = {
         "TP_HALF": ("\U0001F3AF", "TARGET HIT",
-                    f"{HA_RR}R reached \u00b7 {HA_PARTIAL:.0%} booked, "
-                    "stop moved to entry"),
+                    f"{float(trade.get('rr') or HA_RR):.1f}R reached "
+                    f"\u00b7 {HA_PARTIAL:.0%} booked, stop moved to entry"),
         "RUNNER": ("\u2705", "RUNNER CLOSED",
                    "smoothed HA flipped against the trade"),
         "BE": ("\u27a1\ufe0f", "STOPPED AT ENTRY",
@@ -6373,7 +6408,9 @@ def lifecycle_message(asset, kind, trade, exit_px, event_t, note):
         "TP": ("\u2705", "TAKE PROFIT HIT", "target reached"),
         "GONE": ("\u26a0\ufe0f", "POSITION GONE",
                  "tracked here but flat on the exchange"),
-    }[kind]
+        "REVERSE": ("\U0001f501", "REVERSED",
+                    "an opposite signal closed this and flipped the side"),
+    }.get(kind, ("\u2139\ufe0f", kind, "position closed"))
     pnl = pnl_pct(trade, exit_px)
     return "\n".join([
         f"{emoji} <b>{title} \u00b7 {esc(asset['symbol'])} "
@@ -8541,6 +8578,18 @@ VP_STOP_PAD_PCT = 0.05             # stops sit this % beyond their level
 VP_RR = 2.0                        # his spec: 2R on all three setups
 VP_DAY_MS = 86_400_000
 VP_MIN_PREV_BARS = 20              # a usable previous session needs this many
+ALERT_TERSE = True                 # 30 Sep, at his call: the entry alert
+                                   # carries the STRATEGY and the PLAN and
+                                   # nothing else. The reasoning prose, the
+                                   # indicator block and the data footer are
+                                   # dropped - all three are still in
+                                   # trades.log and on the dashboard card, so
+                                   # nothing is lost, only moved.
+VP_INFO = {}                       # sym -> the levels the trade was taken
+                                   # against, for the Telegram alert. Without
+                                   # it the alert printed entry/stop/target and
+                                   # NOT ONE of the three levels the whole
+                                   # strategy is built on.
 _VP_CACHE = {}                     # (sym, day0) -> levels. The previous day
                                    # is closed, so its profile cannot change;
                                    # without this every scan rebuilt it twice
@@ -8788,7 +8837,9 @@ def vp_signal(ast, candles, i):
         if (stop >= entry) if side == "LONG" else (stop <= entry):
             continue                    # stop on the wrong side - skip
         ast["vp"] = {"stop": stop, "setup": tag, "poc": prof["poc"],
-                     "vah": prof["vah"], "val": prof["val"]}
+                     "vah": prof["vah"], "val": prof["val"],
+                     "hi": prof["hi"], "lo": prof["lo"],
+                     "prev_close": prev_close}
         ast["im_path"] = f"vp_{tag}"
         ast["im_why"] = why
         return side
@@ -8820,6 +8871,19 @@ def vp_gate(ast, candles, i, sym=None):
                        f"VA {fmt_px(val)} - {fmt_px(vah)}  ·  price "
                        f"{where}  ·  yesterday closed "
                        f"{'inside' if (val <= prev_close <= vah) else 'outside'}")}
+
+
+def _ENG_TAG():
+    """Short tag for the entry log and the alert footer. It was the literal
+    "IMPULSE" for every engine sharing that branch, so a volume-profile
+    entry logged as IMPULSE-MACD and the alert footer read "data: IMPULSE"."""
+    return ("VOLUME-PROFILE" if VP_MODE else
+            "TREND-LEVELS" if TL_MODE else
+            "REVERSAL" if REV_MODE else
+            "SMMA" if SMMA_MODE else
+            "LIQUIDITY-GRAB" if LG_MODE else
+            "MACD-DIV" if MACD_MODE else
+            "FVG" if FVG_MODE else "IMPULSE-MACD")
 
 
 def process_candle(asset, ast, candles, ha, i):
@@ -8963,6 +9027,7 @@ def process_candle(asset, ast, candles, ha, i):
                         "vareturn": "far side of the excursion extreme",
                         "breakout": "far side of the pullback extreme"}.get(
                             ast["vp"]["setup"], "structure")
+            VP_INFO[sym] = dict(ast["vp"], entry=entry)
             if risk_t <= 0 or ((stop >= entry) if want_long
                                else (stop <= entry)):
                 return False
@@ -9138,7 +9203,7 @@ def process_candle(asset, ast, candles, ha, i):
                          f"${_notional:,.0f} ({_lev_needed:.1f}x)")
         tp = ((entry + rr * risk_t) if want_long
               else (entry - rr * risk_t))
-        log(f"{sym}: IMPULSE-MACD {path.upper()} {side} at ${fmt_px(entry)} - "
+        log(f"{sym}: {_ENG_TAG()} {path.upper()} {side} at ${fmt_px(entry)} - "
             f"{ast.get('im_why','?')}; stop at the {stop_src} "
             f"${fmt_px(stop)} ({risk_t / entry * 100:.2f}%), target "
             f"${fmt_px(tp)} ({rr}R)")
@@ -9147,7 +9212,7 @@ def process_candle(asset, ast, candles, ha, i):
         # multiple - repeating them here said it twice, and said it less
         # precisely the second time.
         return fire_entry(asset, ast, side, dict(c, c=entry), stop,
-                          c["h"], c["l"], "IMPULSE",
+                          c["h"], c["l"], _ENG_TAG(),
                           ast.get("im_why", "?"),
                           live_px=candles[-1]["c"], engine="im",
                           candles=candles, idx=i, tp_override=tp)
