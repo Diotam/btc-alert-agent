@@ -746,6 +746,21 @@ FVG_BTC_EMA = 50                   # bars for that EMA - 25 hours on 30m
 # both directions and was turned off when the five-trade pattern behind it
 # reversed. A bear regime blocking longs is a more defensible claim than a
 # 50-EMA cross blocking either side.
+BTC_DIR_GATE = True                # 1 Oct, at his call: EVERY trade follows
+                                   # BITCOIN's direction - longs only while
+                                   # BTC is above its EMA, shorts only while
+                                   # it is below. One symmetric rule that
+                                   # short-circuits the older one-way long
+                                   # gate and the FVG_BTC_FILTER pair below,
+                                   # so there is a single definition of "BTC
+                                   # direction" instead of two that disagree.
+                                   # BTC itself obeys it too.
+BTC_DIR_EMA = 200                  # bars on TF. 200 on 15m = 50 hours, so
+                                   # this is a two-day read, not an intraday
+                                   # one. It is the SAME EMA the long gate
+                                   # already used (FVG_BTC_LONG_EMA), so
+                                   # nothing about BTC's measurement changed -
+                                   # only that shorts now consult it.
 BTC_GATE_XYZ = True                # 12 Sep: the xyz: synthetics obey the BTC
                                    # gate too, at his call. They were exempt
                                    # on the reasoning that equities follow
@@ -3774,7 +3789,8 @@ def btc_above_200():
             log(f"btc_above_200: only {len(cs) if cs else 0} bars, need "
                 f"{need} - gate not applied")
             return _BTC_200["above"]
-        e = ema([x["c"] for x in cs], FVG_BTC_LONG_EMA)
+        e = ema([x["c"] for x in cs],
+                BTC_DIR_EMA if BTC_DIR_GATE else FVG_BTC_LONG_EMA)
         _BTC_200["above"] = cs[-2]["c"] > e[-1]
         _BTC_200["t"] = now
     except Exception as ex:
@@ -3787,6 +3803,15 @@ def btc_allows(sym, want_long):
     obey it as well; without it they are exempt."""
     if str(sym).startswith("xyz:") and not BTC_GATE_XYZ:
         return True
+    # BTC_DIR_GATE is the whole rule when on: BOTH sides follow BTC. The
+    # gates below it are one-way (longs only), which is why shorts were
+    # never checked at all before 1 Oct.
+    if BTC_DIR_GATE:
+        above = btc_above_200()
+        if above is None:
+            return True                 # unknown - a fetch failure blocks
+                                        # nothing, as everywhere else here
+        return above if want_long else (not above)
     # one-way: no crypto longs under the 200 EMA
     if FVG_BTC_LONG_GATE and want_long:
         above = btc_above_200()
@@ -9000,9 +9025,13 @@ def process_candle(asset, ast, candles, ha, i):
         want_long = side == "LONG"
         # ENGINE-WIDE BTC GATE. Whatever produced the signal, a crypto
         # long needs BTC above its 200 EMA.
-        if want_long and not btc_allows(sym, True):
-            log(f"{sym}: LONG blocked - BTC is under its "
-                f"{FVG_BTC_LONG_EMA} EMA")
+        # BOTH directions. This read "if want_long and ..." - so every
+        # short skipped the BTC gate entirely, whatever the config said.
+        if not btc_allows(sym, want_long):
+            log(f"{sym}: {side} blocked - BTC is "
+                f"{'under' if want_long else 'above'} its "
+                f"{BTC_DIR_EMA if BTC_DIR_GATE else FVG_BTC_LONG_EMA} EMA "
+                f"on the {TF}")
             return False
         if not ALLOW_SHORTS and not want_long:
             return False
