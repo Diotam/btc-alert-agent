@@ -981,6 +981,17 @@ function render(d){
     const nrdy=stg('ready'), neu=cnt('EMA10 above 20'), ned=cnt('EMA10 below 20');
     if(neu||ned){ if(nrdy) bits.push(nrdy+' at level');
                   bits.push(neu+' EMA up'); bits.push(ned+' EMA down'); }
+    // VOLUME PROFILE: where each symbol sits against YESTERDAY's value
+    // area, and how many are pressed up against the POC - which is the one
+    // level all three setups are measured from.
+    const nva=cnt('above the VA'), nvb=cnt('below the VA'),
+          nvi=cnt('inside the VA');
+    if(nva||nvb||nvi){
+      if(nrdy) bits.push(nrdy+' at the POC');
+      if(nva) bits.push(nva+' above the VA');
+      if(nvb) bits.push(nvb+' below the VA');
+      if(nvi) bits.push(nvi+' inside the VA');
+    }
     // TREND LEVELS [ChartPrime]: the trend each symbol is latched into, and
     // how many sit within a whisker of the level that would flip them.
     const ntu=cnt('trend UP'), ntd=cnt('trend DOWN'), ntn=cnt('no trend yet');
