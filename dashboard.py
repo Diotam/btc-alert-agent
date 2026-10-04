@@ -452,7 +452,7 @@ def build_data():
     # confirming close is missing, so it is one bar from firing. It was not in
     # this table at all, fell through to 9, and sorted BELOW rows that were
     # still waiting for a cross. "no history" sorts last - it can never fire.
-    _ORDER = {"armed": -1,
+    _ORDER = {"armed": -1, "in a node": 3.5, "no node": 50,
               "ready": 0, "no-wick bar forming": 1, "flipped": 2,
               "waiting": 3.6, "no history": 99,
               "waiting for a cross": 2.5,
@@ -981,6 +981,16 @@ function render(d){
     const nrdy=stg('ready'), neu=cnt('EMA10 above 20'), ned=cnt('EMA10 below 20');
     if(neu||ned){ if(nrdy) bits.push(nrdy+' at level');
                   bits.push(neu+' EMA up'); bits.push(ned+' EMA down'); }
+    // VISIBLE RANGE HVN/LVN: where price sits relative to the nearest
+    // high-volume node in the rolling window.
+    const nin=cnt('in a node'), nbe=cnt('below the nearest node'),
+          nab2=cnt('above the nearest node'), nno=cnt('no node');
+    if(nin||nbe||nab2||nno){
+      if(nbe) bits.push(nbe+' below a node');
+      if(nab2) bits.push(nab2+' above a node');
+      if(nin) bits.push(nin+' in a node');
+      if(nno) bits.push(nno+' no node');
+    }
     // VOLUME PROFILE: where each symbol sits against YESTERDAY's value
     // area, and how many are pressed up against the POC - which is the one
     // level all three setups are measured from.
