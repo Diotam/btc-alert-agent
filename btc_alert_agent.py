@@ -150,7 +150,8 @@ ASSETS = [                         # used when DISCOVER_ALL = False, or when
                                    # BTC only again.                                  # 19 Sep: PONS removed - BTC only.
 
 # --- strategy dials -------------------------------------------------------
-TF = "15m"                         # 30 Sep: his volume-profile spec names
+TF = "30m"                         # 1 Oct: 15m -> 30m at his call.
+                                   # was 15m:                        # 30 Sep: his volume-profile spec names
                                    # 15m explicitly.
                                    # was 1h:                         # 24 Sep: 30m -> 1h.
                                    # was 30m:                        # 24 Sep: 15m -> 30m.
@@ -2408,6 +2409,12 @@ def fetch_hyperliquid(coin, interval, lookback):
 def setup_name(sym):
     """Engine and setup in one short phrase, for the terse alert."""
     p = str(IM_PATH.get(sym) or "")
+    if p.startswith("vr_"):
+        return "Visible Range \u00b7 " + {
+            "vr_revert": "HVN mean reversion",
+            "vr_lvnbreak": "LVN breakout"}.get(p, p[3:])
+    if p == "volumatic_vidya":
+        return "Volumatic VIDYA \u00b7 trend flip"
     if p.startswith("vp_"):
         return "Volume Profile \u00b7 " + {
             "vp_poc": "POC bounce",
@@ -2418,6 +2425,10 @@ def setup_name(sym):
 
 def engine_label():
     """What the alerts should call the running engine."""
+    if VR_MODE:
+        return f"Visible Range HVN/LVN {VR_WINDOW} bars"
+    if VV_MODE:
+        return f"Volumatic VIDYA [BigBeluga] {VV_LEN}/{VV_MOM}/{VV_BAND}"
     if VP_MODE:
         return ("Volume Profile: "
                 + "/".join(VP_SETUPS))
@@ -8590,15 +8601,21 @@ def tl_gate(ast, candles, i, sym=None):
 #   vp_breakout BREAKOUT. Price closes decisively beyond the VA, pulls back
 #               to the edge and holds, then breaks the pullback's swing.
 #               Stop beyond the pullback extreme.
-VP_MODE = True                     # 30 Sep: LIVE. Replaces TL_MODE.
+VP_MODE = False                    # 2 Oct: OFF - VV_MODE replaces it.
+                                   # was True:   # 30 Sep: LIVE. Replaces TL_MODE.
 VP_SETUPS = ("poc", "vareturn", "breakout")
 VP_BINS = 50                       # price bins across the session range
 VP_VA_PCT = 0.70                   # value area = this share of the volume
 VP_TOUCH_TOL_PCT = 0.10            # "at" a level means within this % of it
 VP_BREAKOUT_PCT = 0.30             # a "significant" break clears the VA edge
                                    # by this % of price
-VP_PULLBACK_BARS = 24              # the breakout's pullback and break must
-                                   # complete within this many bars (6h on 15m)
+VP_PULLBACK_BARS = 12              # 1 Oct: 24 -> 12 with the move to 30m.
+                                   # This is a WALL-CLOCK window, not a bar
+                                   # count: 24 bars was 6 hours on 15m and
+                                   # would have been 12 hours on 30m - a
+                                   # quarter of the whole 48-bar session,
+                                   # which is not a pullback, it is a trend.
+                                   # 12 bars keeps it at 6 hours.
 VP_STOP_PAD_PCT = 0.05             # stops sit this % beyond their level
 VP_RR = 2.0                        # his spec: 2R on all three setups
 VP_DAY_MS = 86_400_000
@@ -8902,13 +8919,589 @@ def _ENG_TAG():
     """Short tag for the entry log and the alert footer. It was the literal
     "IMPULSE" for every engine sharing that branch, so a volume-profile
     entry logged as IMPULSE-MACD and the alert footer read "data: IMPULSE"."""
-    return ("VOLUME-PROFILE" if VP_MODE else
+    return ("VISIBLE-RANGE" if VR_MODE else
+            "VOLUMATIC-VIDYA" if VV_MODE else
+            "VOLUME-PROFILE" if VP_MODE else
             "TREND-LEVELS" if TL_MODE else
             "REVERSAL" if REV_MODE else
             "SMMA" if SMMA_MODE else
             "LIQUIDITY-GRAB" if LG_MODE else
             "MACD-DIV" if MACD_MODE else
             "FVG" if FVG_MODE else "IMPULSE-MACD")
+
+
+
+# ====== VOLUMATIC VIDYA [BigBeluga] (his 2 Oct paste) ======================
+# Ported from the published Pine v6 source, line by line. What the script
+# actually produces as a TRADE signal is narrow: a trend latch flipped by
+# price crossing an ATR band around a VIDYA, and an arrow on each flip. The
+# pivot "liquidity" lines, the ◉ volume labels and the Buy/Sell/Delta box are
+# drawing only - they gate nothing and are not ported. Nothing is lost from
+# the signal by leaving them out.
+#
+#   momentum   = change(close)
+#   abs_cmo    = |100 * (sum(+mom, 20) - sum(-mom, 20)) / (sum(+mom, 20)
+#                                                          + sum(-mom, 20))|
+#   alpha      = 2 / (10 + 1)
+#   vidya      = a*src + (1-a)*vidya[1],  a = alpha * abs_cmo/100
+#   VIDYA      = SMA(vidya, 15)
+#   upper/lower= VIDYA +/- ATR(200) * 2
+#   trend UP   on crossover(close, upper);  DOWN on crossunder(close, lower)
+#
+# THREE Pine details that change the output and are easy to lose:
+#
+#  1. `var bool is_trend_up = false`. The latch starts DOWN, not neutral. So
+#     a fresh series reads "trend DOWN" until price first closes above the
+#     upper band - and the first flip UP prints an arrow while the first
+#     flip DOWN cannot. Same asymmetry as the Trend Levels `na` on 30 Sep.
+#  2. `var float vidya_value = 0.0`. The VIDYA is recursive FROM ZERO, and
+#     its smoothing factor is alpha*abs_cmo/100 - typically 0.02-0.09, not
+#     alpha. That is a 11-55 bar time constant, so the seed needs a few
+#     hundred bars to decay out. VV_MIN_BARS exists for this; with too few
+#     bars the band sits below price and every symbol reads "trend UP".
+#  3. `plotshape(trend_cross_up[1] ? ...)`. The arrow is drawn ONE BAR AFTER
+#     the flip. The flip itself is knowable at the close of the flip bar, so
+#     this engine fires THERE - one bar earlier than the marker's position on
+#     the chart. Entries will sit one candle left of the arrow you see.
+VV_MODE = False                    # 3 Oct: OFF - VR_MODE replaces it.
+                                   # was True:   # 2 Oct: LIVE. Replaces VP_MODE.
+VV_LEN = 10                        # 'VIDYA Length'
+VV_MOM = 20                        # 'VIDYA Momentum'
+VV_BAND = 2.0                      # 'Distance factor for upper/lower bands'
+VV_SMA = 15                        # the ta.sma(vidya_value, 15) at the end
+VV_ATR = 200                       # ta.atr(200)
+VV_STOP = "trendline"              # "trendline": the band that would flip the
+                                   # trend back - the indicator's own level,
+                                   # and ~4 ATR from entry because entry is at
+                                   # one band and the flip level is the other.
+                                   # "atr": VV_STOP_ATR x ATR from entry.
+VV_STOP_ATR = 1.5                  # only when VV_STOP = "atr"
+VV_STOP_PAD_PCT = 0.05             # the stop sits this % beyond its level
+VV_RR = 2.0                        # target multiple
+VV_MIN_BARS = 400                  # MEASURED, not guessed - and my first
+                                   # guess of 600 was wrong. The VIDYA seed
+                                   # decays much faster than note 2 implies,
+                                   # because the smoothing factor is
+                                   # alpha*abs_cmo/100 and abs_cmo runs far
+                                   # higher than the 30 I assumed: on a 2400
+                                   # bar walk, 260 bars of history already
+                                   # put the VIDYA within 0.0022% of its
+                                   # converged value and 300 within 0.0004%,
+                                   # and the latch agreed at every depth from
+                                   # 260 up. So the binding constraint is
+                                   # ATR(200), not the VIDYA: 200 bars to
+                                   # seed it plus 200 for that seed to decay.
+                                   # 600 was fetching double the candles for
+                                   # 110 symbols and buying nothing.
+VV_FRESH_ONLY = True               # only trade a flip that printed after this
+                                   # process started, never one from hours ago
+_VV_CACHE = {}                     # (sym, last bar t) -> series. The signal
+                                   # and the gate both want them.
+
+
+def _vv_rma(vals, n):
+    """Pine ta.rma: SMA(first n) at index n-1, then (prev*(n-1) + x)/n.
+    None before that. The agent's own atr() is a flat mean of TR, which is
+    ta.sma(tr, n) - a different curve, so this is not reusable."""
+    if n <= 0 or len(vals) < n:
+        return [None] * len(vals)
+    out = [None] * (n - 1)
+    s = sum(vals[:n]) / float(n)
+    out.append(s)
+    for v in vals[n:]:
+        s = (s * (n - 1) + v) / float(n)
+        out.append(s)
+    return out
+
+
+def _vv_atr(candles, n):
+    """ta.atr(n) = ta.rma(ta.tr(true), n)."""
+    tr = []
+    for k, c in enumerate(candles):
+        if k == 0:
+            tr.append(c["h"] - c["l"])
+            continue
+        pc = candles[k - 1]["c"]
+        tr.append(max(c["h"] - c["l"], abs(c["h"] - pc), abs(c["l"] - pc)))
+    return _vv_rma(tr, n)
+
+
+def vv_series(candles, sym=None):
+    """(vidya, atr, upper, lower, trend) as full-length lists.
+
+    trend is a bool per bar, latched, starting False exactly as the Pine
+    `var bool is_trend_up = false` does.
+    """
+    if not candles:
+        return None
+    key = (sym, candles[-1]["t"], len(candles))
+    hit = _VV_CACHE.get(key)
+    if hit is not None:
+        return hit
+    src = [c["c"] for c in candles]
+    n = len(src)
+    # --- abs_cmo over VV_MOM bars of signed momentum
+    mom = [0.0] + [src[k] - src[k - 1] for k in range(1, n)]
+    pos = [m if m >= 0 else 0.0 for m in mom]
+    neg = [0.0 if m >= 0 else -m for m in mom]
+    alpha = 2.0 / (max(1, VV_LEN) + 1.0)
+    raw = [0.0] * n
+    v = 0.0                             # var float vidya_value = 0.0
+    m_ = max(1, VV_MOM)
+    sp = sn = 0.0
+    for k in range(n):
+        sp += pos[k]
+        sn += neg[k]
+        if k >= m_:
+            sp -= pos[k - m_]
+            sn -= neg[k - m_]
+        tot = sp + sn
+        cmo = abs(100.0 * (sp - sn) / tot) if tot > 0 else 0.0
+        a = alpha * cmo / 100.0
+        v = a * src[k] + (1.0 - a) * v
+        raw[k] = v
+    # --- ta.sma(vidya_value, 15)
+    vid = [None] * n
+    run = 0.0
+    for k in range(n):
+        run += raw[k]
+        if k >= VV_SMA:
+            run -= raw[k - VV_SMA]
+        if k >= VV_SMA - 1:
+            vid[k] = run / float(VV_SMA)
+    at = _vv_atr(candles, max(1, VV_ATR))
+    up = [None] * n
+    lo = [None] * n
+    for k in range(n):
+        if vid[k] is None or at[k] is None:
+            continue
+        up[k] = vid[k] + at[k] * VV_BAND
+        lo[k] = vid[k] - at[k] * VV_BAND
+    # --- the latch. Sequential ifs, DOWN tested second, exactly as written.
+    tr = [False] * n
+    cur = False
+    for k in range(n):
+        if k >= 1 and None not in (up[k], up[k - 1], lo[k], lo[k - 1]):
+            if src[k - 1] <= up[k - 1] and src[k] > up[k]:
+                cur = True
+            if src[k - 1] >= lo[k - 1] and src[k] < lo[k]:
+                cur = False
+        tr[k] = cur
+    out = (vid, at, up, lo, tr)
+    if len(_VV_CACHE) > 400:
+        _VV_CACHE.clear()
+    _VV_CACHE[key] = out
+    return out
+
+
+def vv_signal(ast, candles, i):
+    """An ARROW - the bar the latch flips on. "LONG"/"SHORT" or None."""
+    if i < 2 or i >= len(candles):
+        return None
+    if len(candles) < VV_MIN_BARS:
+        if LOG_SKIPS:
+            log(f"{ast.get('sym')}: only {len(candles)} bars, VIDYA needs "
+                f"{VV_MIN_BARS} for its seed to decay - skipped")
+        return None
+    s = vv_series(candles[:i + 1], ast.get("sym"))
+    if not s:
+        return None
+    vid, at, up, lo, tr = s
+    if tr[i] == tr[i - 1]:
+        return None                     # no flip on this bar
+    if up[i] is None or lo[i] is None:
+        return None
+    # see note 1: the latch starts False, so the FIRST transition in a series
+    # is always False->True. Treating that as an arrow would open a long on
+    # every symbol the first time it is scanned deep enough.
+    if not any(tr[k] != tr[k - 1] for k in range(1, i)):
+        return None                     # the latch's own initial settle
+    side = "LONG" if tr[i] else "SHORT"
+    if VV_FRESH_ONLY and (candles[i]["t"] + MS[TF]) < AGENT_START_MS:
+        return None                     # a flip from before this process
+    entry = candles[i]["c"]
+    if VV_STOP == "atr" and at[i]:
+        risk = at[i] * VV_STOP_ATR
+        lvl = (entry - risk) if side == "LONG" else (entry + risk)
+        src_txt = f"{VV_STOP_ATR}x ATR({VV_ATR})"
+    else:
+        lvl = lo[i] if side == "LONG" else up[i]
+        src_txt = f"the {'lower' if side == 'LONG' else 'upper'} band"
+    pad = abs(lvl) * VV_STOP_PAD_PCT / 100.0
+    stop = lvl - pad if side == "LONG" else lvl + pad
+    if (stop >= entry) if side == "LONG" else (stop <= entry):
+        return None                     # level already through price
+    ast["vv"] = {"stop": stop, "upper": up[i], "lower": lo[i],
+                 "vidya": vid[i], "atr": at[i], "src": src_txt}
+    ast["im_path"] = "volumatic_vidya"
+    ast["im_why"] = (
+        f"Volumatic VIDYA flipped {'UP' if side == 'LONG' else 'DOWN'} - "
+        f"close {fmt_px(entry)} crossed "
+        f"{'above the upper band ' + fmt_px(up[i]) if side == 'LONG' else 'below the lower band ' + fmt_px(lo[i])}"
+        f" (VIDYA {fmt_px(vid[i])} +/- {VV_BAND}x ATR {fmt_px(at[i])})")
+    return side
+
+
+def vv_gate(ast, candles, i, sym=None):
+    """Watchlist: which way the latch sits, and how far price is from the
+    band that would flip it."""
+    if i < 2 or len(candles) < VV_MIN_BARS:
+        return {"sym": sym, "dir": None, "run": 0, "age": 0,
+                "stage": "no history", "trend": "warming up",
+                "detail": (f"░░░░░░░░░░░░  {len(candles)} bars, the VIDYA "
+                           f"needs {VV_MIN_BARS} before its levels mean "
+                           f"anything")}
+    s = vv_series(candles[:i + 1], sym)
+    if not s:
+        return None
+    vid, at, up, lo, tr = s
+    if up[i] is None or lo[i] is None:
+        return None
+    px = candles[i]["c"]
+    now = tr[i]
+    # an UP latch flips DOWN on a close under the lower band, and the reverse
+    flip_to = "SHORT" if now else "LONG"
+    lvl = lo[i] if now else up[i]
+    dist = abs(px - lvl) / px * 100.0
+    # how long it has been latched this way
+    age = 0
+    while i - age - 1 >= 0 and tr[i - age - 1] == now:
+        age += 1
+    lit = 3 if dist <= 0.25 else 2 if dist <= 1.0 else 1
+    bar = "".join(("█" if k < lit else "░") * 4 for k in range(3))
+    return {"sym": sym, "dir": flip_to, "run": lit, "age": age,
+            "stage": "ready" if dist <= 0.25 else "waiting",
+            "trend": ("trend UP" if now else "trend DOWN"),
+            "detail": (f"{bar}  trend {'UP' if now else 'DOWN'} for {age} "
+                       f"bar(s) · flips {flip_to} on a close "
+                       f"{'below' if now else 'above'} {fmt_px(lvl)} "
+                       f"({dist:.2f}% away)  ·  VIDYA {fmt_px(vid[i])}  ·  "
+                       f"band {fmt_px(lo[i])} - {fmt_px(up[i])}")}
+
+
+
+# ===== VISIBLE RANGE VOLUME PROFILE - HVN / LVN (his 3 Oct spec) ==========
+# "Visible range" is a CHART idea: whatever bars happen to be on screen.
+# There is no viewport here, so the honest translation is a ROLLING window of
+# the most recent VR_WINDOW bars, re-binned on every bar. That is the one
+# real difference from the 30 Sep volume-profile engine, and it matters: the
+# previous-session profile was FIXED for a whole day, while these nodes DRIFT
+# as the window slides. A level that was an HVN this morning can stop being
+# one by evening without price doing anything.
+#
+# Same volume caveat as before and it cannot be engineered away: Hyperliquid
+# gives ONE volume figure per candle, so each bar's volume is spread EVENLY
+# across the bins its high-low range covers.
+#
+#   HVN  a contiguous run of bins holding MORE than VR_HVN_MULT x the mean
+#        bin volume. The run's edges are the node's edges, which is what
+#        makes "slightly outside the node" a definable price.
+#   LVN  a contiguous run holding LESS than VR_LVN_MULT x the mean, with an
+#        HVN on BOTH sides. The both-sides test is not decoration: the top
+#        and bottom bins of any profile are always thin, so without it every
+#        new high would read as an LVN break.
+#
+# Two setups, each tagged with its own path in the ledger:
+#   vr_revert    MEAN REVERSION. Price approaches an established HVN from
+#                outside and reaches it. Stop slightly beyond the node's far
+#                edge, as his spec says, so a wick into the node does not
+#                close the trade.
+#   vr_lvnbreak  LVN BREAKOUT. A bar closes clean through a thin node with
+#                momentum. Stop at the node's other edge - back inside the
+#                thin zone means the break failed.
+VR_MODE = True                     # 3 Oct: LIVE. Replaces VV_MODE.
+VR_SETUPS = ("revert", "lvnbreak")
+VR_WINDOW = 240                    # bars in the "visible range". 240 on 30m
+                                   # is 5 days - roughly a screenful.
+VR_BINS = 60                       # price bins across the window's range
+VR_SMOOTH = 3                      # boxcar bins. Raw bin volume is spiky
+                                   # enough that single bins cross the
+                                   # thresholds on noise.
+VR_HVN_MULT = 1.6                  # a bin is "high volume" above this x mean
+VR_LVN_MULT = 0.55                 # ...and "low volume" below this x mean
+VR_TOUCH_TOL_PCT = 0.10            # "at" an edge means within this % of it
+VR_STOP_PAD_PCT = 0.10             # his "slightly outside the node"
+VR_MOM_BODY_ATR = 1.0              # "strong momentum", part 1: the breakout
+                                   # bar's BODY must be at least this x ATR
+VR_MOM_VOL_MULT = 1.5              # part 2: and its volume at least this x
+                                   # the window's average bar volume
+VR_ATR = 14                        # for the momentum test
+VR_LVN_MAX_PCT = 2.0               # an LVN wider than this % of price is NOT
+                                   # a thin pocket price rips through - it is
+                                   # a vacuum between two distant shelves,
+                                   # and the stop (the pocket's far edge)
+                                   # would be that whole width away. The
+                                   # first synthetic here produced a 9%-wide
+                                   # "LVN" and a 9% stop with it.
+VR_STOP_MIN_PCT = 0.35             # FLOOR on the structural stop. His stop
+                                   # is "slightly outside the node", and
+                                   # entry is AT that same edge, so risk came
+                                   # out at 0.25% of price - which made the
+                                   # 2R target 0.50% and MIN_TARGET_PCT
+                                   # (0.5%) refused every single mean
+                                   # reversion trade. 0.35% here puts the
+                                   # target at 0.70%, clear of the floor.
+                                   # Set it to 0 to take his placement
+                                   # literally and accept the refusals.
+VR_RR = 2.0                        # target multiple
+VR_MIN_BARS = 0                    # unused - vr_signal gates on
+                                   # VR_WINDOW directly
+_VR_CACHE = {}                     # (sym, last t, len) -> nodes
+
+
+def vr_profile(cands, bins=None):
+    """(vol, lo, width, mean) for a window, or None. Volume spread evenly
+    across the bins each bar's range touches."""
+    if not cands:
+        return None
+    n = max(8, bins or VR_BINS)
+    hi = max(x["h"] for x in cands)
+    lo = min(x["l"] for x in cands)
+    if hi <= lo:
+        return None
+    w = (hi - lo) / n
+    vol = [0.0] * n
+    for x in cands:
+        v = float(x.get("v") or 0.0)
+        if v <= 0:
+            continue
+        a = min(max(int((x["l"] - lo) / w), 0), n - 1)
+        b = min(max(int((x["h"] - lo) / w), 0), n - 1)
+        share = v / (b - a + 1)
+        for k in range(a, b + 1):
+            vol[k] += share
+    tot = sum(vol)
+    if tot <= 0:
+        return None
+    if VR_SMOOTH > 1:
+        s = []
+        h = VR_SMOOTH // 2
+        for k in range(n):
+            w0, w1 = max(0, k - h), min(n, k + h + 1)
+            s.append(sum(vol[w0:w1]) / float(w1 - w0))
+        vol = s
+    return vol, lo, w, tot / float(n)
+
+
+def _vr_runs(vol, thresh, above):
+    """Contiguous bin runs over (or under) a threshold, as (first, last)."""
+    out = []
+    start = None
+    for k, v in enumerate(vol):
+        on = (v > thresh) if above else (v < thresh)
+        if on and start is None:
+            start = k
+        elif not on and start is not None:
+            out.append((start, k - 1))
+            start = None
+    if start is not None:
+        out.append((start, len(vol) - 1))
+    return out
+
+
+def vr_nodes(candles, i, sym=None):
+    """({hvns, lvns, lo, hi, mean}) for the window ending at bar i, or None.
+
+    Each node carries price edges, so a stop can sit just outside one.
+    """
+    if i < VR_WINDOW - 1:
+        return None                     # the window is candles[i-W+1:i+1],
+                                        # so it is full from i = W-1, not W
+    key = (sym, candles[i]["t"], i)
+    hit = _VR_CACHE.get(key)
+    if hit is not None:
+        return hit
+    win = candles[i - VR_WINDOW + 1:i + 1]
+    pr = vr_profile(win)
+    if not pr:
+        return None
+    vol, lo, w, mean = pr
+    n = len(vol)
+
+    def px(a, b):
+        return lo + a * w, lo + (b + 1) * w
+
+    hvns = []
+    for a, b in _vr_runs(vol, mean * VR_HVN_MULT, True):
+        p0, p1 = px(a, b)
+        pk = max(range(a, b + 1), key=lambda k: vol[k])
+        hvns.append({"lo": p0, "hi": p1, "poc": lo + (pk + 0.5) * w,
+                     "bins": (a, b),
+                     "vol": sum(vol[a:b + 1]) / max(1e-12, sum(vol))})
+    lvns = []
+    for a, b in _vr_runs(vol, mean * VR_LVN_MULT, False):
+        # INTERIOR ONLY. The tails of any profile are thin, so an LVN at the
+        # top or bottom bin is not a thin pocket between two shelves of
+        # value - it is just the edge of the range, and "breaking" it is
+        # nothing more than a new high or low.
+        if not any(h["bins"][1] < a for h in hvns):
+            continue
+        if not any(h["bins"][0] > b for h in hvns):
+            continue
+        p0, p1 = px(a, b)
+        if VR_LVN_MAX_PCT and p1 > 0 and (p1 - p0) / p1 * 100.0 > VR_LVN_MAX_PCT:
+            continue                    # too wide to be a pocket
+        lvns.append({"lo": p0, "hi": p1, "bins": (a, b),
+                     "vol": sum(vol[a:b + 1]) / max(1e-12, sum(vol))})
+    out = {"hvns": hvns, "lvns": lvns, "lo": lo,
+           "hi": lo + n * w, "mean": mean, "width": w}
+    if len(_VR_CACHE) > 600:
+        _VR_CACHE.clear()
+    _VR_CACHE[key] = out
+    return out
+
+
+def _vr_revert(candles, i, nd, tol):
+    """MEAN REVERSION. The previous bar sat clear of an HVN; this bar reaches
+    it. Long when the approach is from below, short from above."""
+    c, p = candles[i], candles[i - 1]
+    for h in nd["hvns"]:
+        if p["c"] < h["lo"] and c["h"] >= h["lo"] * (1 - tol):
+            want_long, edge = True, h["lo"]
+        elif p["c"] > h["hi"] and c["l"] <= h["hi"] * (1 + tol):
+            want_long, edge = False, h["hi"]
+        else:
+            continue
+        pad = abs(edge) * VR_STOP_PAD_PCT / 100.0
+        stop = edge - pad if want_long else edge + pad
+        entry = c["c"]
+        if (stop >= entry) if want_long else (stop <= entry):
+            continue                    # the bar closed past its own stop
+        why = (f"approached the high-volume node "
+               f"{fmt_px(h['lo'])}-{fmt_px(h['hi'])} "
+               f"({h['vol'] * 100:.0f}% of range volume, POC "
+               f"{fmt_px(h['poc'])}) from "
+               f"{'below' if want_long else 'above'}; stop just outside it")
+        return ("LONG" if want_long else "SHORT"), stop, why, "revert"
+    return None
+
+
+def _vr_lvnbreak(candles, i, nd, tol, atr_v):
+    """LVN BREAKOUT. A close clean through a thin node, with momentum."""
+    c, p = candles[i], candles[i - 1]
+    body = abs(c["c"] - c["o"])
+    if atr_v and body < VR_MOM_BODY_ATR * atr_v:
+        return None                     # not a momentum bar
+    avg_v = nd.get("avg_bar_v") or 0.0
+    if avg_v and float(c.get("v") or 0.0) < VR_MOM_VOL_MULT * avg_v:
+        return None
+    for z in nd["lvns"]:
+        if p["c"] <= z["hi"] and c["c"] > z["hi"]:
+            want_long, far, near = True, z["hi"], z["lo"]
+        elif p["c"] >= z["lo"] and c["c"] < z["lo"]:
+            want_long, far, near = False, z["lo"], z["hi"]
+        else:
+            continue
+        pad = abs(near) * VR_STOP_PAD_PCT / 100.0
+        stop = near - pad if want_long else near + pad
+        entry = c["c"]
+        if (stop >= entry) if want_long else (stop <= entry):
+            continue
+        why = (f"closed {'above' if want_long else 'below'} the low-volume "
+               f"pocket {fmt_px(z['lo'])}-{fmt_px(z['hi'])} "
+               f"({z['vol'] * 100:.1f}% of range volume) with a "
+               f"{body / atr_v:.1f}x ATR body; stop back inside it")
+        return ("LONG" if want_long else "SHORT"), stop, why, "lvnbreak"
+    return None
+
+
+def vr_signal(ast, candles, i):
+    """"LONG"/"SHORT" or None. Leaves the stop in ast["vr"]["stop"]."""
+    if i < VR_WINDOW or i >= len(candles):
+        return None                     # W-1 for a full window, and one
+                                        # more for the previous bar
+    nd = vr_nodes(candles, i, ast.get("sym"))
+    if not nd or not nd["hvns"]:
+        return None
+    win = candles[i - VR_WINDOW + 1:i + 1]
+    nd["avg_bar_v"] = (sum(float(x.get("v") or 0.0) for x in win)
+                       / float(len(win)))
+    tol = VR_TOUCH_TOL_PCT / 100.0
+    atr_v = atr(candles, i, VR_ATR) or 0.0
+    order = (("revert", lambda: _vr_revert(candles, i, nd, tol)),
+             ("lvnbreak", lambda: _vr_lvnbreak(candles, i, nd, tol, atr_v)))
+    for name, fn in order:
+        if name not in VR_SETUPS:
+            continue
+        try:
+            r = fn()
+        except Exception as e:
+            log(f"{ast.get('sym')}: vr_{name} failed: "
+                f"{type(e).__name__}: {e}")
+            continue
+        if not r:
+            continue
+        side, stop, why, tag = r
+        entry = candles[i]["c"]
+        # THE FLOOR. Without it the node edge sits a rounding error from
+        # entry and the 2R target lands under MIN_TARGET_PCT, so fire_entry
+        # refuses the trade after the signal has already been logged.
+        if VR_STOP_MIN_PCT and entry:
+            floor = entry * VR_STOP_MIN_PCT / 100.0
+            if abs(entry - stop) < floor:
+                stop = (entry - floor) if side == "LONG" else (entry + floor)
+                why += (f"; stop widened to the {VR_STOP_MIN_PCT}% floor so "
+                        f"the 2R target clears {MIN_TARGET_PCT}%")
+        if (stop >= entry) if side == "LONG" else (stop <= entry):
+            continue
+        ast["vr"] = {"stop": stop, "setup": tag,
+                     "hvns": len(nd["hvns"]), "lvns": len(nd["lvns"])}
+        ast["im_path"] = f"vr_{tag}"
+        ast["im_why"] = why
+        return side
+    return None
+
+
+def vr_gate(ast, candles, i, sym=None):
+    """Watchlist: the nodes in view and where price sits among them."""
+    if i < VR_WINDOW - 1:
+        return {"sym": sym, "dir": None, "run": 0, "age": 0,
+                "stage": "no history", "trend": "warming up",
+                "detail": (f"░░░░░░░░░░░░  {i + 1} bars, the visible range "
+                           f"needs {VR_WINDOW}")}
+    nd = vr_nodes(candles, i, sym)
+    if not nd or not nd["hvns"]:
+        return {"sym": sym, "dir": None, "run": 0, "age": 0,
+                "stage": "waiting", "trend": "no node",
+                "detail": ("░░░░░░░░░░░░  no bin clears "
+                           f"{VR_HVN_MULT}x the mean - volume is flat across "
+                           "the range, so there is nothing to revert to")}
+    px = candles[i]["c"]
+    inside = next((h for h in nd["hvns"] if h["lo"] <= px <= h["hi"]), None)
+    near = min(nd["hvns"],
+               key=lambda h: min(abs(px - h["lo"]), abs(px - h["hi"])))
+    d = min(abs(px - near["lo"]), abs(px - near["hi"])) / px * 100.0
+    where = ("in a node" if inside
+             else "below the nearest node" if px < near["lo"]
+             else "above the nearest node")
+    side = (None if inside else "LONG" if px < near["lo"] else "SHORT")
+    lit = 3 if (not inside and d <= VR_TOUCH_TOL_PCT * 3) else 2 if inside else 1
+    bar = "".join(("█" if k < lit else "░") * 4 for k in range(3))
+    return {"sym": sym, "dir": side, "run": lit, "age": 0,
+            "stage": ("in a node" if inside
+                      else "ready" if d <= VR_TOUCH_TOL_PCT * 3
+                      else "waiting"),
+            "trend": where,
+            "detail": (f"{bar}  {len(nd['hvns'])} HVN / {len(nd['lvns'])} LVN "
+                       f"in {VR_WINDOW} bars  ·  nearest node "
+                       f"{fmt_px(near['lo'])}-{fmt_px(near['hi'])} "
+                       f"({d:.2f}% away)  ·  price {where}")}
+
+
+def scan_depth():
+    """How many bars the live engine needs per scan. This was the literal
+    300 for every engine, which cannot seed an ATR(200) with any room to
+    spare - 100 bars past the seed leaves 60% of the ATR as its own SMA(200)
+    seed. VV_MIN_BARS has the measurement."""
+    if VR_MODE:
+        # the rolling window, plus the ATR the momentum test needs, plus a
+        # margin so the first scan is not sitting on the boundary
+        return VR_WINDOW + VR_ATR + 40
+    if VV_MODE:
+        # VV_ATR * 2 = 200 to seed the ATR, 200 for that seed to decay.
+        # VV_ATR * 3 was the same unearned margin as the old VV_MIN_BARS.
+        return max(VV_MIN_BARS, VV_ATR * 2)
+    return 300
 
 
 def process_candle(asset, ast, candles, ha, i):
@@ -8988,10 +9581,12 @@ def process_candle(asset, ast, candles, ha, i):
     # top would refuse the very setups it exists to take.
     # ---------------- IMPULSE MACD ENGINE (LazyBear, his 20 Aug spec) ------
     if (IM_MODE or FVG_MODE or MACD_MODE or LG_MODE or SMMA_MODE or REV_MODE
-            or TL_MODE or VP_MODE):
+            or TL_MODE or VP_MODE or VV_MODE or VR_MODE):
         ast["sym"] = sym
         ast["_asset"] = asset
-        side = (vp_signal(ast, candles, i) if VP_MODE
+        side = (vr_signal(ast, candles, i) if VR_MODE
+                else vv_signal(ast, candles, i) if VV_MODE
+                else vp_signal(ast, candles, i) if VP_MODE
                 else tl_signal(ast, candles, i) if TL_MODE
                 else rev_signal(ast, candles, i) if REV_MODE
                 else smma_signal(ast, candles, i) if SMMA_MODE
@@ -9000,7 +9595,9 @@ def process_candle(asset, ast, candles, ha, i):
                 else fvg_signal(ast, candles, i) if FVG_MODE
                 else im_signal(ast, candles, i))
         try:
-            _g = (vp_gate(ast, candles, i, sym) if VP_MODE
+            _g = (vr_gate(ast, candles, i, sym) if VR_MODE
+                  else vv_gate(ast, candles, i, sym) if VV_MODE
+                  else vp_gate(ast, candles, i, sym) if VP_MODE
                   else tl_gate(ast, candles, i, sym) if TL_MODE
                   else rev_gate(ast, candles, i, sym) if REV_MODE
                   else smma_gate(ast, candles, i, sym) if SMMA_MODE
@@ -9015,7 +9612,7 @@ def process_candle(asset, ast, candles, ha, i):
                 # "flat 38 bars" for 36 HOURS on 22-23 Aug.
                 # SMMA reads through bar i, the other gates stop at i-1.
                 _g["t"] = candles[i if (SMMA_MODE or REV_MODE or TL_MODE
-                                        or VP_MODE)
+                                        or VP_MODE or VV_MODE or VR_MODE)
                                   else i - 1]["t"]
             ast["gate"] = _g
         except Exception as e:
@@ -9046,7 +9643,25 @@ def process_candle(asset, ast, candles, ha, i):
         rr = IM_P2_RR if path == "breakout" else IM_P1_RR
         stop = None
         stop_src = ""
-        if VP_MODE and ast.get("vp"):
+        if VR_MODE and ast.get("vr"):
+            stop = ast["vr"]["stop"]
+            risk_t = abs(entry - stop)
+            rr = VR_RR
+            stop_src = {"revert": "just outside the high-volume node",
+                        "lvnbreak": "the far side of the thin pocket"}.get(
+                            ast["vr"]["setup"], "structure")
+            if risk_t <= 0 or ((stop >= entry) if want_long
+                               else (stop <= entry)):
+                return False
+        elif VV_MODE and ast.get("vv"):
+            stop = ast["vv"]["stop"]
+            risk_t = abs(entry - stop)
+            rr = VV_RR
+            stop_src = ast["vv"]["src"]
+            if risk_t <= 0 or ((stop >= entry) if want_long
+                               else (stop <= entry)):
+                return False
+        elif VP_MODE and ast.get("vp"):
             # each setup placed its own stop: just beyond the POC, beyond
             # the failed excursion, or beyond the pullback extreme
             stop = ast["vp"]["stop"]
@@ -9935,7 +10550,7 @@ def check_asset(asset, state):
             return changed
 
     if not cs:
-        source, cs = fetch(asset, TF, 300)
+        source, cs = fetch(asset, TF, scan_depth())
     if not cs:
         RUN_STATUS.append(f"{sym} feed failed")
         state[sym] = ast
@@ -10127,7 +10742,9 @@ def check_once():
                               # dashboard stops carrying its own hardcoded
                               # copy. Its RREF was still 1.5 after SMMA_RR
                               # went to 2.0 and nothing said so.
-                              rr=(VP_RR if VP_MODE else
+                              rr=(VR_RR if VR_MODE else
+                                  VV_RR if VV_MODE else
+                                  VP_RR if VP_MODE else
                                   TL_RR if TL_MODE else
                                   REV_RR if REV_MODE else
                                   SMMA_RR if SMMA_MODE else
