@@ -983,13 +983,13 @@ function render(d){
                   bits.push(neu+' EMA up'); bits.push(ned+' EMA down'); }
     // VISIBLE RANGE HVN/LVN: where price sits relative to the nearest
     // high-volume node in the rolling window.
-    const nin=cnt('in a node'), nbe=cnt('below the nearest node'),
-          nab2=cnt('above the nearest node'), nno=cnt('no node');
-    if(nin||nbe||nab2||nno){
-      if(nbe) bits.push(nbe+' below a node');
-      if(nab2) bits.push(nab2+' above a node');
-      if(nin) bits.push(nin+' in a node');
-      if(nno) bits.push(nno+' no node');
+    const vrIn=cnt('in a node'), vrBelow=cnt('below the nearest node'),
+          vrAbove=cnt('above the nearest node'), vrNone=cnt('no node');
+    if(vrIn||vrBelow||vrAbove||vrNone){
+      if(vrBelow) bits.push(vrBelow+' below a node');
+      if(vrAbove) bits.push(vrAbove+' above a node');
+      if(vrIn) bits.push(vrIn+' in a node');
+      if(vrNone) bits.push(vrNone+' no node');
     }
     // VOLUME PROFILE: where each symbol sits against YESTERDAY's value
     // area, and how many are pressed up against the POC - which is the one
