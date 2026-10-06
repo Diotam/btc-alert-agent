@@ -453,6 +453,10 @@ def build_data():
     # this table at all, fell through to 9, and sorted BELOW rows that were
     # still waiting for a cross. "no history" sorts last - it can never fire.
     _ORDER = {"armed": -1, "in a node": 3.5, "no node": 50,
+              # VP edge: price already past the edge means the first-close
+              # trigger has been and gone, so those rows sort below the ones
+              # still approaching one
+              "beyond the edge": 20,
               "ready": 0, "no-wick bar forming": 1, "flipped": 2,
               "waiting": 3.6, "no history": 99,
               "waiting for a cross": 2.5,
