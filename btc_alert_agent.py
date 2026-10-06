@@ -150,7 +150,9 @@ ASSETS = [                         # used when DISCOVER_ALL = False, or when
                                    # BTC only again.                                  # 19 Sep: PONS removed - BTC only.
 
 # --- strategy dials -------------------------------------------------------
-TF = "30m"                         # 1 Oct: 15m -> 30m at his call.
+TF = "5m"                          # 6 Oct: 30m -> 5m for the value area
+                                   # edge setup.
+                                   # was 30m:                        # 1 Oct: 15m -> 30m at his call.
                                    # was 15m:                        # 30 Sep: his volume-profile spec names
                                    # 15m explicitly.
                                    # was 1h:                         # 24 Sep: 30m -> 1h.
@@ -8601,9 +8603,15 @@ def tl_gate(ast, candles, i, sym=None):
 #   vp_breakout BREAKOUT. Price closes decisively beyond the VA, pulls back
 #               to the edge and holds, then breaks the pullback's swing.
 #               Stop beyond the pullback extreme.
-VP_MODE = False                    # 2 Oct: OFF - VV_MODE replaces it.
+VP_MODE = True                     # 6 Oct: BACK ON for the value area
+                                   # edge setup on 5m.
+                                   # was False:                 # 2 Oct: OFF - VV_MODE replaces it.
                                    # was True:   # 30 Sep: LIVE. Replaces TL_MODE.
-VP_SETUPS = ("poc", "vareturn", "breakout")
+VP_SETUPS = ("edge",)              # 6 Oct: his ask is the value area
+                                   # EDGE on 5m and nothing else. The
+                                   # other three are built and tested -
+                                   # add them back to this tuple to run
+                                   # them alongside.
 VP_BINS = 50                       # price bins across the session range
 VP_VA_PCT = 0.70                   # value area = this share of the volume
 VP_TOUCH_TOL_PCT = 0.10            # "at" a level means within this % of it
@@ -8617,6 +8625,23 @@ VP_PULLBACK_BARS = 12              # 1 Oct: 24 -> 12 with the move to 30m.
                                    # which is not a pullback, it is a trend.
                                    # 12 bars keeps it at 6 hours.
 VP_STOP_PAD_PCT = 0.05             # stops sit this % beyond their level
+VP_EDGE_BUFFER_PCT = 0.05          # 6 Oct: the VALUE AREA EDGE setup. A close
+                                   # must clear the VAH (or VAL) by this % of
+                                   # price before it counts - a close sitting
+                                   # exactly on the level is not beyond it,
+                                   # and on 5m price straddles an edge for
+                                   # bars at a time.
+VP_EDGE_BOTH_SIDES = True          # True: long above the VAH AND short below
+                                   # the VAL. False: longs above the VAH only.
+VP_STOP_MIN_PCT = 0.30             # FLOOR on the structural stop, the same
+                                   # problem the HVN setup hit on 3 Oct: the
+                                   # stop sits just back inside the value
+                                   # area and entry is just outside it, so
+                                   # risk can come out near zero, the 2R
+                                   # target lands under MIN_TARGET_PCT and
+                                   # fire_entry throws the trade away AFTER
+                                   # the signal has been logged. At 0.30% the
+                                   # target is 0.60%, clear of the 0.5% floor.
 VP_RR = 2.0                        # his spec: 2R on all three setups
 VP_DAY_MS = 86_400_000
 VP_MIN_PREV_BARS = 20              # a usable previous session needs this many
@@ -8851,6 +8876,35 @@ def _vp_breakout(candles, i, prof, d0, prev_close, tol):
     return ("LONG" if want_long else "SHORT"), stop, why, "breakout"
 
 
+def _vp_edge(candles, i, prof, d0, prev_close, tol):
+    """VALUE AREA EDGE. The FIRST close of today's session to clear the
+    previous session's VAH (long) or VAL (short).
+
+    "First" is the whole rule. Without it every later bar that stayed beyond
+    the edge would fire again, and on 5m a single push above the VAH would
+    open a position on every bar until the agent ran out of symbols.
+    """
+    vah, val = prof["vah"], prof["val"]
+    buf = VP_EDGE_BUFFER_PCT / 100.0
+    c, p = candles[i], candles[i - 1]
+    if c["c"] > vah * (1 + buf) and p["c"] <= vah * (1 + buf):
+        want_long, edge, name = True, vah, "VAH"
+    elif (VP_EDGE_BOTH_SIDES and c["c"] < val * (1 - buf)
+            and p["c"] >= val * (1 - buf)):
+        want_long, edge, name = False, val, "VAL"
+    else:
+        return None
+    # the break failed the moment price is back inside the value area, so
+    # that is where the stop belongs - just the far side of the edge
+    pad = abs(edge) * VP_STOP_PAD_PCT / 100.0
+    stop = edge - pad if want_long else edge + pad
+    why = (f"first close of the session {'above' if want_long else 'below'} "
+           f"the previous day's {name} {fmt_px(edge)} "
+           f"(value area {fmt_px(val)}-{fmt_px(vah)}, POC "
+           f"{fmt_px(prof['poc'])})")
+    return ("LONG" if want_long else "SHORT"), stop, why, "edge"
+
+
 def vp_signal(ast, candles, i):
     """"LONG"/"SHORT" or None. Leaves the stop in ast["vp"]["stop"]."""
     if i < 2 or i >= len(candles):
@@ -8862,9 +8916,9 @@ def vp_signal(ast, candles, i):
     if candles[i]["t"] < d0:
         return None                     # only trade TODAY's session
     tol = VP_TOUCH_TOL_PCT / 100.0
-    order = {"poc": _vp_poc, "vareturn": _vp_vareturn,
+    order = {"edge": _vp_edge, "poc": _vp_poc, "vareturn": _vp_vareturn,
              "breakout": _vp_breakout}
-    for name in ("poc", "vareturn", "breakout"):
+    for name in ("edge", "poc", "vareturn", "breakout"):
         if name not in VP_SETUPS:
             continue
         try:
@@ -8876,6 +8930,12 @@ def vp_signal(ast, candles, i):
             continue
         side, stop, why, tag = r
         entry = candles[i]["c"]
+        if VP_STOP_MIN_PCT and entry:
+            floor = entry * VP_STOP_MIN_PCT / 100.0
+            if abs(entry - stop) < floor:
+                stop = (entry - floor) if side == "LONG" else (entry + floor)
+                why += (f"; stop widened to the {VP_STOP_MIN_PCT}% floor so "
+                        f"the {VP_RR}R target clears {MIN_TARGET_PCT}%")
         if (stop >= entry) if side == "LONG" else (stop <= entry):
             continue                    # stop on the wrong side - skip
         ast["vp"] = {"stop": stop, "setup": tag, "poc": prof["poc"],
@@ -9209,7 +9269,8 @@ def vv_gate(ast, candles, i, sym=None):
 #   vr_lvnbreak  LVN BREAKOUT. A bar closes clean through a thin node with
 #                momentum. Stop at the node's other edge - back inside the
 #                thin zone means the break failed.
-VR_MODE = True                     # 3 Oct: LIVE. Replaces VV_MODE.
+VR_MODE = False                    # 6 Oct: OFF - VP_MODE is back.
+                                   # was True:   # 3 Oct: LIVE. Replaces VV_MODE.
 VR_SETUPS = ("revert", "lvnbreak")
 VR_WINDOW = 240                    # bars in the "visible range". 240 on 30m
                                    # is 5 days - roughly a screenful.
@@ -9501,6 +9562,11 @@ def scan_depth():
         # VV_ATR * 2 = 200 to seed the ATR, 200 for that seed to decay.
         # VV_ATR * 3 was the same unearned margin as the old VV_MIN_BARS.
         return max(VV_MIN_BARS, VV_ATR * 2)
+    if VP_MODE:
+        # the PREVIOUS UTC day builds the profile and TODAY is traded, so
+        # two full sessions plus a margin. At the old flat 300 that was 25
+        # HOURS on 5m - the previous session and about a dozen bars of today.
+        return int(2 * VP_DAY_MS / MS[TF]) + 60
     return 300
 
 
