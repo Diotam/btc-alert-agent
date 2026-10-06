@@ -8949,19 +8949,63 @@ def vp_signal(ast, candles, i):
 
 
 def vp_gate(ast, candles, i, sym=None):
-    """Watchlist: yesterday's levels and where price sits against them."""
+    """Watchlist: yesterday's levels and where price sits against them.
+
+    THE DIRECTION DEPENDS ON THE SETUP, and this row used to assume the
+    mean-reversion ones: price above the value area was shown as a SHORT,
+    because a POC bounce fades an excursion. The EDGE setup is the exact
+    opposite - a close above the VAH is a LONG - so with VP_SETUPS =
+    ("edge",) the watchlist was naming the opposite side to the one the
+    engine would actually take, on every row. 6 Oct.
+    """
     lv = vp_levels(candles, i, sym or ast.get("sym"))
     if not lv:
         return None
     prof, d0, prev_close = lv
     px = candles[i]["c"]
     poc, vah, val = prof["poc"], prof["vah"], prof["val"]
+    where = ("above the VA" if px > vah else
+             "below the VA" if px < val else "inside the VA")
+    inside_prev = val <= prev_close <= vah
+
+    if "edge" in VP_SETUPS:
+        # the trigger is the FIRST close beyond an edge: above the VAH is a
+        # long, below the VAL a short. The row watches the nearer edge.
+        dup = (vah - px) / px * 100.0          # +ve: VAH is above price
+        ddn = (px - val) / px * 100.0          # +ve: VAL is below price
+        if px > vah:
+            side, lvl, name, dist = "LONG", vah, "VAH", (px - vah) / px * 100.0
+            stage, done = "beyond the edge", True
+        elif px < val:
+            side, lvl, name, dist = "SHORT", val, "VAL", (val - px) / px * 100.0
+            stage, done = "beyond the edge", True
+        elif dup <= ddn:
+            side, lvl, name, dist = "LONG", vah, "VAH", dup
+            stage, done = "waiting", False
+        else:
+            side, lvl, name, dist = "SHORT", val, "VAL", ddn
+            stage, done = "waiting", False
+        if not done and dist <= VP_EDGE_BUFFER_PCT * 4:
+            stage = "ready"
+        lit = 3 if stage == "ready" else 1 if done else 2
+        bar = "".join(("█" if k < lit else "░") * 4 for k in range(3))
+        return {"sym": sym, "dir": side, "run": lit, "age": 0,
+                "stage": stage, "trend": where,
+                "detail": (f"{bar}  {side} on a close "
+                           f"{'above' if side == 'LONG' else 'below'} the "
+                           f"{name} {fmt_px(lvl)} ({dist:.2f}% "
+                           f"{'past it already' if done else 'away'})  ·  "
+                           f"VA {fmt_px(val)} - {fmt_px(vah)}  ·  POC "
+                           f"{fmt_px(poc)}  ·  price {where}")}
+
+    # the mean-reversion setups: the POC is the level, and an excursion is
+    # faded back toward it
     if px > vah:
-        where, side = "above the VA", "SHORT"
+        side = "SHORT"
     elif px < val:
-        where, side = "below the VA", "LONG"
+        side = "LONG"
     else:
-        where, side = "inside the VA", ("SHORT" if px > poc else "LONG")
+        side = "SHORT" if px > poc else "LONG"
     dpoc = (px - poc) / px * 100.0
     near = abs(dpoc) <= VP_TOUCH_TOL_PCT * 3
     lit = 3 if near else 2 if where == "inside the VA" else 1
@@ -8972,7 +9016,7 @@ def vp_gate(ast, candles, i, sym=None):
             "detail": (f"{bar}  POC {fmt_px(poc)} ({dpoc:+.2f}% away)  ·  "
                        f"VA {fmt_px(val)} - {fmt_px(vah)}  ·  price "
                        f"{where}  ·  yesterday closed "
-                       f"{'inside' if (val <= prev_close <= vah) else 'outside'}")}
+                       f"{'inside' if inside_prev else 'outside'}")}
 
 
 def _ENG_TAG():
