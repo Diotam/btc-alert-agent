@@ -749,7 +749,12 @@ FVG_BTC_EMA = 50                   # bars for that EMA - 25 hours on 30m
 # both directions and was turned off when the five-trade pattern behind it
 # reversed. A bear regime blocking longs is a more defensible claim than a
 # 50-EMA cross blocking either side.
-BTC_DIR_GATE = True                # 1 Oct, at his call: EVERY trade follows
+BTC_DIR_GATE = False               # 6 Oct: OFF at his call. Both sides are
+                                   # live again whatever BTC is doing - the
+                                   # 14 closed trades to 20:40 were ALL
+                                   # shorts because BTC sat under its EMA
+                                   # and this blocked every long.
+                                   # was True:   # 1 Oct, at his call: EVERY trade follows
                                    # BITCOIN's direction - longs only while
                                    # BTC is above its EMA, shorts only while
                                    # it is below. One symmetric rule that
