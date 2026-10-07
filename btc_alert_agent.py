@@ -8607,8 +8607,8 @@ VP_MODE = True                     # 6 Oct: BACK ON for the value area
                                    # edge setup on 5m.
                                    # was False:                 # 2 Oct: OFF - VV_MODE replaces it.
                                    # was True:   # 30 Sep: LIVE. Replaces TL_MODE.
-VP_SETUPS = ("edge",)              # 6 Oct: his ask is the value area
-                                   # EDGE on 5m and nothing else. The
+VP_SETUPS = ("reentry",)           # 6 Oct: his ask is the value area
+                                   # RE-ENTRY on 5m and nothing else. The
                                    # other three are built and tested -
                                    # add them back to this tuple to run
                                    # them alongside.
@@ -8625,14 +8625,14 @@ VP_PULLBACK_BARS = 12              # 1 Oct: 24 -> 12 with the move to 30m.
                                    # which is not a pullback, it is a trend.
                                    # 12 bars keeps it at 6 hours.
 VP_STOP_PAD_PCT = 0.05             # stops sit this % beyond their level
-VP_EDGE_BUFFER_PCT = 0.05          # 6 Oct: the VALUE AREA EDGE setup. A close
-                                   # must clear the VAH (or VAL) by this % of
+VP_EDGE_BUFFER_PCT = 0.05          # a close must clear the edge by this % of
                                    # price before it counts - a close sitting
-                                   # exactly on the level is not beyond it,
+                                   # exactly on the level has not crossed it,
                                    # and on 5m price straddles an edge for
                                    # bars at a time.
-VP_EDGE_BOTH_SIDES = True          # True: long above the VAH AND short below
-                                   # the VAL. False: longs above the VAH only.
+VP_REENTRY_BOTH_SIDES = True       # True: long crossing UP through the VAL
+                                   # AND short crossing DOWN through the VAH.
+                                   # False: the long leg only.
 VP_STOP_MIN_PCT = 0.30             # FLOOR on the structural stop, the same
                                    # problem the HVN setup hit on 3 Oct: the
                                    # stop sits just back inside the value
@@ -8876,33 +8876,39 @@ def _vp_breakout(candles, i, prof, d0, prev_close, tol):
     return ("LONG" if want_long else "SHORT"), stop, why, "breakout"
 
 
-def _vp_edge(candles, i, prof, d0, prev_close, tol):
-    """VALUE AREA EDGE. The FIRST close of today's session to clear the
-    previous session's VAH (long) or VAL (short).
+def _vp_reentry(candles, i, prof, d0, prev_close, tol):
+    """VALUE AREA RE-ENTRY (his 6 Oct correction).
 
-    "First" is the whole rule. Without it every later bar that stayed beyond
-    the edge would fire again, and on 5m a single push above the VAH would
-    open a position on every bar until the agent ran out of symbols.
+        LONG   price crosses UP through the VAL   - back into value from below
+        SHORT  price crosses DOWN through the VAH - back into value from above
+
+    Note which edge each side uses: this is NOT a breakout. Price has to be
+    OUTSIDE the value area and close back INSIDE it, so the trade is taken
+    toward the other side of the area. A close above the VAH, which the
+    6 Oct morning version traded as a long, now does nothing at all.
+
+    Both legs are a CROSS: the previous close outside, this close inside.
+    Without that, a symbol sitting inside the area would re-fire on every
+    bar, and on 5m across 110 symbols that is a position per bar per symbol.
     """
     vah, val = prof["vah"], prof["val"]
     buf = VP_EDGE_BUFFER_PCT / 100.0
     c, p = candles[i], candles[i - 1]
-    if c["c"] > vah * (1 + buf) and p["c"] <= vah * (1 + buf):
-        want_long, edge, name = True, vah, "VAH"
-    elif (VP_EDGE_BOTH_SIDES and c["c"] < val * (1 - buf)
-            and p["c"] >= val * (1 - buf)):
-        want_long, edge, name = False, val, "VAL"
+    lo_trig, hi_trig = val * (1 + buf), vah * (1 - buf)
+    if c["c"] > lo_trig and p["c"] <= lo_trig:
+        want_long, edge, name = True, val, "VAL"
+    elif (VP_REENTRY_BOTH_SIDES and c["c"] < hi_trig and p["c"] >= hi_trig):
+        want_long, edge, name = False, vah, "VAH"
     else:
         return None
-    # the break failed the moment price is back inside the value area, so
-    # that is where the stop belongs - just the far side of the edge
+    # back OUT through the edge it just crossed means the re-entry failed
     pad = abs(edge) * VP_STOP_PAD_PCT / 100.0
     stop = edge - pad if want_long else edge + pad
-    why = (f"first close of the session {'above' if want_long else 'below'} "
-           f"the previous day's {name} {fmt_px(edge)} "
-           f"(value area {fmt_px(val)}-{fmt_px(vah)}, POC "
-           f"{fmt_px(prof['poc'])})")
-    return ("LONG" if want_long else "SHORT"), stop, why, "edge"
+    why = (f"crossed {'up through the' if want_long else 'down through the'} "
+           f"{name} {fmt_px(edge)} - back inside the value area "
+           f"{fmt_px(val)}-{fmt_px(vah)} from "
+           f"{'below' if want_long else 'above'} (POC {fmt_px(prof['poc'])})")
+    return ("LONG" if want_long else "SHORT"), stop, why, "reentry"
 
 
 def vp_signal(ast, candles, i):
@@ -8916,9 +8922,9 @@ def vp_signal(ast, candles, i):
     if candles[i]["t"] < d0:
         return None                     # only trade TODAY's session
     tol = VP_TOUCH_TOL_PCT / 100.0
-    order = {"edge": _vp_edge, "poc": _vp_poc, "vareturn": _vp_vareturn,
-             "breakout": _vp_breakout}
-    for name in ("edge", "poc", "vareturn", "breakout"):
+    order = {"reentry": _vp_reentry, "poc": _vp_poc,
+             "vareturn": _vp_vareturn, "breakout": _vp_breakout}
+    for name in ("reentry", "poc", "vareturn", "breakout"):
         if name not in VP_SETUPS:
             continue
         try:
@@ -8951,12 +8957,12 @@ def vp_signal(ast, candles, i):
 def vp_gate(ast, candles, i, sym=None):
     """Watchlist: yesterday's levels and where price sits against them.
 
-    THE DIRECTION DEPENDS ON THE SETUP, and this row used to assume the
-    mean-reversion ones: price above the value area was shown as a SHORT,
-    because a POC bounce fades an excursion. The EDGE setup is the exact
-    opposite - a close above the VAH is a LONG - so with VP_SETUPS =
-    ("edge",) the watchlist was naming the opposite side to the one the
-    engine would actually take, on every row. 6 Oct.
+    THE DIRECTION DEPENDS ON THE SETUP. This row used to assume the
+    mean-reversion ones and named the opposite side on every row once a
+    different setup went live - 6 Oct, twice in one day. The RE-ENTRY setup
+    needs price OUTSIDE the area, so a symbol sitting inside it cannot
+    trigger at all, and the row says so rather than counting down to an
+    edge that is not armed.
     """
     lv = vp_levels(candles, i, sym or ast.get("sym"))
     if not lv:
@@ -8968,33 +8974,38 @@ def vp_gate(ast, candles, i, sym=None):
              "below the VA" if px < val else "inside the VA")
     inside_prev = val <= prev_close <= vah
 
-    if "edge" in VP_SETUPS:
-        # the trigger is the FIRST close beyond an edge: above the VAH is a
-        # long, below the VAL a short. The row watches the nearer edge.
-        dup = (vah - px) / px * 100.0          # +ve: VAH is above price
-        ddn = (px - val) / px * 100.0          # +ve: VAL is below price
-        if px > vah:
-            side, lvl, name, dist = "LONG", vah, "VAH", (px - vah) / px * 100.0
-            stage, done = "beyond the edge", True
-        elif px < val:
-            side, lvl, name, dist = "SHORT", val, "VAL", (val - px) / px * 100.0
-            stage, done = "beyond the edge", True
-        elif dup <= ddn:
-            side, lvl, name, dist = "LONG", vah, "VAH", dup
-            stage, done = "waiting", False
+    if "reentry" in VP_SETUPS:
+        # the trigger is a CROSS back INTO the value area: up through the VAL
+        # is a long, down through the VAH a short. Price must be outside.
+        if px < val:
+            side, lvl, name = "LONG", val, "VAL"
+            dist = (val - px) / px * 100.0
+            stage = "ready" if dist <= VP_EDGE_BUFFER_PCT * 8 else "waiting"
+            note = f"{dist:.2f}% below it"
+        elif px > vah:
+            side, lvl, name = "SHORT", vah, "VAH"
+            dist = (px - vah) / px * 100.0
+            stage = "ready" if dist <= VP_EDGE_BUFFER_PCT * 8 else "waiting"
+            note = f"{dist:.2f}% above it"
         else:
-            side, lvl, name, dist = "SHORT", val, "VAL", ddn
-            stage, done = "waiting", False
-        if not done and dist <= VP_EDGE_BUFFER_PCT * 4:
-            stage = "ready"
-        lit = 3 if stage == "ready" else 1 if done else 2
+            # INSIDE the area nothing is armed: a re-entry needs price to be
+            # outside first. Counting down to an edge here would imply a
+            # trigger that cannot happen.
+            lit = 1
+            bar = "".join(("█" if k < lit else "░") * 4 for k in range(3))
+            return {"sym": sym, "dir": None, "run": lit, "age": 0,
+                    "stage": "inside - not armed", "trend": where,
+                    "detail": (f"{bar}  price is INSIDE the value area "
+                               f"{fmt_px(val)} - {fmt_px(vah)}, so no "
+                               f"re-entry is possible - it has to leave "
+                               f"first  ·  POC {fmt_px(poc)}")}
+        lit = 3 if stage == "ready" else 2
         bar = "".join(("█" if k < lit else "░") * 4 for k in range(3))
         return {"sym": sym, "dir": side, "run": lit, "age": 0,
                 "stage": stage, "trend": where,
-                "detail": (f"{bar}  {side} on a close "
-                           f"{'above' if side == 'LONG' else 'below'} the "
-                           f"{name} {fmt_px(lvl)} ({dist:.2f}% "
-                           f"{'past it already' if done else 'away'})  ·  "
+                "detail": (f"{bar}  {side} when it closes back "
+                           f"{'up through' if side == 'LONG' else 'down through'}"
+                           f" the {name} {fmt_px(lvl)} ({note})  ·  "
                            f"VA {fmt_px(val)} - {fmt_px(vah)}  ·  POC "
                            f"{fmt_px(poc)}  ·  price {where}")}
 
