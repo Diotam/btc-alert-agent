@@ -666,7 +666,11 @@ const TVLAYOUT=__TV_LAYOUT__;
 // 1.5, and the 1.5 survived the move to 2.0 on 18 Sep. Now it follows the
 // agent's own SMMA_RR through _meta.rr, so changing the multiple in the
 // agent needs no dashboard edit at all.
-let RREF=2;
+// 6 Oct: 2 -> 3 with VP_RR. This is ONLY the value used for the first
+// paint, before _meta arrives a moment later and overwrites it; it is
+// not a second source of truth. Worth keeping current anyway so the
+// cards do not flash the wrong ratio on load.
+let RREF=3;
 const TVBASE='https://www.tradingview.com/chart/'+(TVLAYOUT?TVLAYOUT+'/':'')+'?symbol=';
 // inline onclick handlers run in GLOBAL scope, so these must live at the top
 // level - defined inside a render function they are invisible to the cards.
@@ -798,8 +802,9 @@ function render(d){
     const ts=(d.trades||[]).filter(t=>t.r!=null&&t.risk);
     if(!ts.length){ box.className='ob'; box.innerHTML='<div class=ob-none>no open trades</div>'; return; }
     // A PARKED target means there is nothing to be a fraction of, so the
-    // bar scales |R| against a 3R reference - the same measure the card
-    // uses. Without this LIT sat at 0% while its card read 0.05R in profit.
+    // bar scales |R| against RREF - the agent's configured multiple, the
+    // same measure the card uses. Without this LIT sat at 0% while its card
+    // read 0.05R in profit.
     const prog=t=>{
       const parked=t.tp!=null&&t.entry&&(t.tp/t.entry>2||t.tp/t.entry<0.5);
       if(parked) return Math.min(100,Math.abs(t.r||0)/RREF*100);
@@ -867,7 +872,9 @@ function render(d){
    // reached the RREF branch below. Matches the agent's own test at L2133.
    const NOTGT=t.tp!=null&&t.entry&&(t.tp/t.entry>2||t.tp/t.entry<0.5);
    const RRT=(t.tp!=null&&t.risk&&!NOTGT)?Math.abs((t.tp-t.entry)/t.risk)
-     :((t.tp!=null&&t.entry!==t.stop)?Math.abs((t.tp-t.entry)/(t.entry-t.stop)):2);
+     :((t.tp!=null&&t.entry!==t.stop)?Math.abs((t.tp-t.entry)/(t.entry-t.stop))
+       :RREF);   // was a literal 2 - the one place the chain did not follow
+                 // the agent's configured multiple
    // freeze the card once TP or stop has traded - the agent confirms the
    // close on its next scan (<=5 min) and the card moves to Closed trades
    // latch the freeze per trade: once TP or the stop trades, this card stops
@@ -923,7 +930,7 @@ function render(d){
    // Both are now measured FROM ENTRY toward whichever side price is on.
    // NO TARGET under the flip engine, so "% of the way to TP" is
    // meaningless. The bar instead shows how far the move has run in R
-   // against a 3R reference - a full bar means a 3R move, not an exit.
+   // against RREF - a full bar means an RREF-sized move, not an exit.
    const rp=showR==null?0
      :NOTGT?Math.max(0,Math.min(100,Math.abs(showR)/RREF*100))
      :showR>=0?Math.max(0,Math.min(100,showR/RRT*100))
