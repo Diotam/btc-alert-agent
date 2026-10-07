@@ -8642,7 +8642,14 @@ VP_STOP_MIN_PCT = 0.30             # FLOOR on the structural stop, the same
                                    # fire_entry throws the trade away AFTER
                                    # the signal has been logged. At 0.30% the
                                    # target is 0.60%, clear of the 0.5% floor.
-VP_RR = 2.0                        # his spec: 2R on all three setups
+VP_RR = 3.0                        # 6 Oct: 2.0 -> 3.0 at his call.
+                                   # Breakeven win rate goes from 33.3%
+                                   # to 25.0% - fewer winners needed,
+                                   # but the target now sits three
+                                   # stop-widths away, which on a
+                                   # re-entry means price must cross
+                                   # most of the value area to reach it.
+                                   # was 2.0:                      # his spec: 2R on all three setups
 VP_DAY_MS = 86_400_000
 VP_MIN_PREV_BARS = 20              # a usable previous session needs this many
 ALERT_TERSE = True                 # 30 Sep, at his call: the entry alert
