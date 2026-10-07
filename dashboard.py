@@ -456,7 +456,7 @@ def build_data():
               # VP edge: price already past the edge means the first-close
               # trigger has been and gone, so those rows sort below the ones
               # still approaching one
-              "beyond the edge": 20,
+              "beyond the edge": 20, "inside - not armed": 30,
               "ready": 0, "no-wick bar forming": 1, "flipped": 2,
               "waiting": 3.6, "no history": 99,
               "waiting for a cross": 2.5,
