@@ -150,7 +150,9 @@ ASSETS = [                         # used when DISCOVER_ALL = False, or when
                                    # BTC only again.                                  # 19 Sep: PONS removed - BTC only.
 
 # --- strategy dials -------------------------------------------------------
-TF = "5m"                          # 6 Oct: 30m -> 5m for the value area
+TF = "1h"                          # 10 Oct: 5m -> 1h with the move back
+                                   # to the FVG engine.
+                                   # was 5m:                         # 6 Oct: 30m -> 5m for the value area
                                    # edge setup.
                                    # was 30m:                        # 1 Oct: 15m -> 30m at his call.
                                    # was 15m:                        # 30 Sep: his volume-profile spec names
@@ -676,7 +678,8 @@ MACD_SWING_BARS = 20               # stop at this swing high/low
 #   6. BREAK OF STRUCTURE - the leg that created the gap must have broken
 #      the prior swing high (bullish) or swing low (bearish). A gap with no
 #      BOS behind it is not traded.
-FVG_MODE = False                    # 1 Sep: LIVE. This is the engine now.
+FVG_MODE = True                    # 10 Oct: BACK ON at his call, on 1h.
+                                   # was False:                 # 1 Sep: LIVE. This is the engine now.
                                    # IM_MODE is off - the impulse breakout
                                    # and both of its pathways are retired.
 FVG_LOOKBACK = 100                 # 7 Sep: 200 -> 100. Bars scanned for
@@ -8608,7 +8611,8 @@ def tl_gate(ast, candles, i, sym=None):
 #   vp_breakout BREAKOUT. Price closes decisively beyond the VA, pulls back
 #               to the edge and holds, then breaks the pullback's swing.
 #               Stop beyond the pullback extreme.
-VP_MODE = True                     # 6 Oct: BACK ON for the value area
+VP_MODE = False                    # 10 Oct: OFF - FVG_MODE replaces it.
+                                   # was True:   # 6 Oct: BACK ON for the value area
                                    # edge setup on 5m.
                                    # was False:                 # 2 Oct: OFF - VV_MODE replaces it.
                                    # was True:   # 30 Sep: LIVE. Replaces TL_MODE.
