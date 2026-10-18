@@ -678,7 +678,10 @@ MACD_SWING_BARS = 20               # stop at this swing high/low
 #   6. BREAK OF STRUCTURE - the leg that created the gap must have broken
 #      the prior swing high (bullish) or swing low (bearish). A gap with no
 #      BOS behind it is not traded.
-FVG_MODE = True                    # 10 Oct: BACK ON at his call, on 1h.
+FVG_MODE = False                   # 14 Oct: OFF - MTF_MODE replaces it,
+                                   # and uses the same gap detection as
+                                   # one of its three 1H setups.
+                                   # was True:    # 10 Oct: BACK ON at his call, on 1h.
                                    # was False:                 # 1 Sep: LIVE. This is the engine now.
                                    # IM_MODE is off - the impulse breakout
                                    # and both of its pathways are retired.
@@ -2419,6 +2422,10 @@ def fetch_hyperliquid(coin, interval, lookback):
 def setup_name(sym):
     """Engine and setup in one short phrase, for the terse alert."""
     p = str(IM_PATH.get(sym) or "")
+    if p.startswith("mtf_"):
+        return "Top-down \u00b7 " + {
+            "mtf_ob": "1H order block", "mtf_fvg": "1H fair value gap",
+            "mtf_liq": "1H liquidity sweep"}.get(p, p[4:])
     if p.startswith("vr_"):
         return "Visible Range \u00b7 " + {
             "vr_revert": "HVN mean reversion",
@@ -2435,6 +2442,8 @@ def setup_name(sym):
 
 def engine_label():
     """What the alerts should call the running engine."""
+    if MTF_MODE:
+        return f"Top-down 4H/{TF}/{MTF_LTF}"
     if VR_MODE:
         return f"Visible Range HVN/LVN {VR_WINDOW} bars"
     if VV_MODE:
@@ -9050,7 +9059,8 @@ def _ENG_TAG():
     """Short tag for the entry log and the alert footer. It was the literal
     "IMPULSE" for every engine sharing that branch, so a volume-profile
     entry logged as IMPULSE-MACD and the alert footer read "data: IMPULSE"."""
-    return ("VISIBLE-RANGE" if VR_MODE else
+    return ("TOP-DOWN-MTF" if MTF_MODE else
+            "VISIBLE-RANGE" if VR_MODE else
             "VOLUMATIC-VIDYA" if VV_MODE else
             "VOLUME-PROFILE" if VP_MODE else
             "TREND-LEVELS" if TL_MODE else
@@ -9340,9 +9350,16 @@ def vv_gate(ast, candles, i, sym=None):
 #   vr_lvnbreak  LVN BREAKOUT. A bar closes clean through a thin node with
 #                momentum. Stop at the node's other edge - back inside the
 #                thin zone means the break failed.
-VR_MODE = False                    # 6 Oct: OFF - VP_MODE is back.
+VR_MODE = True                     # 16 Oct: LIVE - high-volume nodes at
+                                   # support and resistance.
+                                   # was False:                 # 6 Oct: OFF - VP_MODE is back.
                                    # was True:   # 3 Oct: LIVE. Replaces VV_MODE.
-VR_SETUPS = ("revert", "lvnbreak")
+VR_SETUPS = ("revert",)            # 16 Oct: the NODE BOUNCE only. The
+                                   # LVN breakout is the opposite idea -
+                                   # trading through a thin pocket, not
+                                   # off a level - and he asked for
+                                   # support and resistance. Add
+                                   # "lvnbreak" back to run both.
 VR_WINDOW = 240                    # bars in the "visible range". 240 on 30m
                                    # is 5 days - roughly a screenful.
 VR_BINS = 60                       # price bins across the window's range
@@ -9352,6 +9369,24 @@ VR_SMOOTH = 3                      # boxcar bins. Raw bin volume is spiky
 VR_HVN_MULT = 1.6                  # a bin is "high volume" above this x mean
 VR_LVN_MULT = 0.55                 # ...and "low volume" below this x mean
 VR_TOUCH_TOL_PCT = 0.10            # "at" an edge means within this % of it
+VR_SR_CONFLUENCE = True            # 16 Oct: an HVN only counts when it
+                                   # also sits at a SWING LEVEL - a prior
+                                   # high or low the market has already
+                                   # turned at. A high-volume node in the
+                                   # middle of a range is just where price
+                                   # spent time; a node ON a level price has
+                                   # reversed from before is the support or
+                                   # resistance he asked for. False trades
+                                   # every node, which is the 3 Oct engine.
+VR_SR_SWING = 5                    # bars either side for a swing to count
+VR_SR_TOL_PCT = 0.50               # the node must come within this % of one.
+                                   # Measured from the NEAREST EDGE of the
+                                   # node, not its middle - the 14 Oct
+                                   # midpoint version refused a wide zone
+                                   # whose edge sat exactly on a level.
+VR_SR_MIN_TOUCHES = 2              # how many separate swings must sit at the
+                                   # level. One turn is an accident; two or
+                                   # more is a level the market respects.
 VR_STOP_PAD_PCT = 0.10             # his "slightly outside the node"
 VR_MOM_BODY_ATR = 1.0              # "strong momentum", part 1: the breakout
                                    # bar's BODY must be at least this x ATR
@@ -9483,10 +9518,55 @@ def vr_nodes(candles, i, sym=None):
     return out
 
 
+def vr_sr_levels(candles, i):
+    """Swing levels on the base timeframe, each with how many separate
+    swings formed there. Returns [(price, touches)] newest first.
+
+    Uses the same fractal pivot test and the same run-collapsing as the
+    4H structure read - a plateau of equal highs is ONE level, not several.
+    """
+    lo_k = max(0, i - VR_WINDOW)
+    seg = candles[lo_k:i + 1]
+    hi, lo = mtf_pivots(seg, VR_SR_SWING)
+    pts = [p for _, p in hi] + [p for _, p in lo]
+    if not pts:
+        return []
+    out = []
+    for p in sorted(pts):
+        if out and abs(p - out[-1][0]) / p * 100.0 <= VR_SR_TOL_PCT:
+            # same level touched again - keep the mean, count the touch
+            n = out[-1][1] + 1
+            out[-1] = ((out[-1][0] * out[-1][1] + p) / n, n)
+        else:
+            out.append((p, 1))
+    return out
+
+
+def _vr_at_level(z, levels):
+    """(ok, level, touches) - does this node sit on a respected swing level?
+
+    Distance is measured from the nearest POINT of the node: a level inside
+    it is zero away.
+    """
+    if not VR_SR_CONFLUENCE:
+        return True, None, 0
+    best = None
+    for p, n in levels:
+        if n < VR_SR_MIN_TOUCHES:
+            continue
+        d = 0.0 if z["lo"] <= p <= z["hi"] else min(abs(z["lo"] - p),
+                                                    abs(z["hi"] - p))
+        pct = d / p * 100.0
+        if pct <= VR_SR_TOL_PCT and (best is None or pct < best[0]):
+            best = (pct, p, n)
+    return (True, best[1], best[2]) if best else (False, None, 0)
+
+
 def _vr_revert(candles, i, nd, tol):
     """MEAN REVERSION. The previous bar sat clear of an HVN; this bar reaches
     it. Long when the approach is from below, short from above."""
     c, p = candles[i], candles[i - 1]
+    levels = vr_sr_levels(candles, i) if VR_SR_CONFLUENCE else []
     for h in nd["hvns"]:
         if p["c"] < h["lo"] and c["h"] >= h["lo"] * (1 - tol):
             want_long, edge = True, h["lo"]
@@ -9494,6 +9574,9 @@ def _vr_revert(candles, i, nd, tol):
             want_long, edge = False, h["hi"]
         else:
             continue
+        at, lvl, touches = _vr_at_level(h, levels)
+        if not at:
+            continue                    # volume, but not a level
         pad = abs(edge) * VR_STOP_PAD_PCT / 100.0
         stop = edge - pad if want_long else edge + pad
         entry = c["c"]
@@ -9503,7 +9586,10 @@ def _vr_revert(candles, i, nd, tol):
                f"{fmt_px(h['lo'])}-{fmt_px(h['hi'])} "
                f"({h['vol'] * 100:.0f}% of range volume, POC "
                f"{fmt_px(h['poc'])}) from "
-               f"{'below' if want_long else 'above'}; stop just outside it")
+               f"{'below' if want_long else 'above'}"
+               + (f", sitting on the {fmt_px(lvl)} level the market has "
+                  f"turned at {touches}x" if lvl else "")
+               + "; stop just outside it")
         return ("LONG" if want_long else "SHORT"), stop, why, "revert"
     return None
 
@@ -9598,9 +9684,23 @@ def vr_gate(ast, candles, i, sym=None):
                 "detail": ("░░░░░░░░░░░░  no bin clears "
                            f"{VR_HVN_MULT}x the mean - volume is flat across "
                            "the range, so there is nothing to revert to")}
+    # ONLY the nodes the engine would actually trade. Showing every node
+    # while the engine refuses most of them is the watchlist disagreeing
+    # with the engine, which has happened twice already on this project.
+    hvns = nd["hvns"]
+    if VR_SR_CONFLUENCE:
+        lv = vr_sr_levels(candles, i)
+        hvns = [h for h in hvns if _vr_at_level(h, lv)[0]]
+        if not hvns:
+            return {"sym": sym, "dir": None, "run": 0, "age": 0,
+                    "stage": "no node at a level", "trend": "no node",
+                    "detail": (f"░░░░░░░░░░░░  {len(nd['hvns'])} high-volume "
+                               f"node(s) in view, none on a swing level the "
+                               f"market has turned at "
+                               f"{VR_SR_MIN_TOUCHES}x+")}
     px = candles[i]["c"]
-    inside = next((h for h in nd["hvns"] if h["lo"] <= px <= h["hi"]), None)
-    near = min(nd["hvns"],
+    inside = next((h for h in hvns if h["lo"] <= px <= h["hi"]), None)
+    near = min(hvns,
                key=lambda h: min(abs(px - h["lo"]), abs(px - h["hi"])))
     d = min(abs(px - near["lo"]), abs(px - near["hi"])) / px * 100.0
     where = ("in a node" if inside
@@ -9614,10 +9714,392 @@ def vr_gate(ast, candles, i, sym=None):
                       else "ready" if d <= VR_TOUCH_TOL_PCT * 3
                       else "waiting"),
             "trend": where,
-            "detail": (f"{bar}  {len(nd['hvns'])} HVN / {len(nd['lvns'])} LVN "
+            "detail": (f"{bar}  {len(hvns)} tradeable HVN "
+                       f"(of {len(nd['hvns'])}) / {len(nd['lvns'])} LVN "
                        f"in {VR_WINDOW} bars  ·  nearest node "
                        f"{fmt_px(near['lo'])}-{fmt_px(near['hi'])} "
                        f"({d:.2f}% away)  ·  price {where}")}
+
+
+
+# ========= TOP-DOWN MULTI-TIMEFRAME (his 14 Oct chart) ====================
+#   4H   DIRECTION from swing structure, plus the key levels / supply and
+#        demand those swings mark out.
+#   1H   the SETUP: an order block, a fair value gap, or a liquidity sweep -
+#        any one of them, in the 4H direction.
+#   15m  CONFIRMATION: an engulfing candle, a break of structure, or a close
+#        back out of the zone. Any one fires the entry.
+#
+# WHERE THE DATA COMES FROM. The base timeframe is 1H and is fetched as
+# usual. 4H is RESAMPLED from it - whole groups of four, so the forming 4H
+# bar is excluded and the structure never reads a partial candle. Only the
+# 15m series costs a second request, cached for one 15m bar per symbol. That
+# is two fetches per symbol per scan rather than three.
+#
+# The 4H bias is a VETO, not a signal: a setup against it is refused, and a
+# bias of 0 (no clear structure) refuses both sides rather than permitting
+# both. That is deliberate - the whole point of the top-down read is that an
+# unclear higher timeframe is a reason not to trade.
+MTF_MODE = False                   # 16 Oct: OFF - back to the volume
+                                   # nodes, now with a level filter.
+                                   # was True:    # 14 Oct: LIVE. Replaces FVG_MODE.
+MTF_HTF_MULT = 4                   # 1H x 4 = 4H, by resampling
+MTF_LTF = "15m"                    # the confirmation timeframe
+MTF_LTF_BARS = 40                  # 15m bars fetched for confirmation
+MTF_SWING = 3                      # pivot bars either side, on 4H
+MTF_STRUCT_N = 3                   # swings compared to call the structure
+MTF_ZONES = ("ob", "fvg", "liq")   # which 1H setups count
+MTF_OB_LOOKBACK = 60               # 1H bars scanned for order blocks
+MTF_OB_DISP_ATR = 1.0              # the leg out of an OB must be at least
+                                   # this many ATR to count as displacement
+MTF_OB_MAX_AGE = 60                # an OB older than this is stale
+MTF_ZONE_TOL_PCT = 0.10            # "at" a zone means within this % of it
+MTF_CONFIRM = ("engulf", "bos", "reclaim")   # any one is enough
+MTF_LEVEL_TOL_PCT = 1.0            # a setup must sit within this % of a 4H
+                                   # key level, or it is mid-range noise
+MTF_STOP_PAD_PCT = 0.05            # stops sit this % beyond the zone
+MTF_RR = 2.0                       # target multiple
+MTF_ATR = 14
+_MTF_LTF = {}                      # sym -> (fetched_at, candles)
+_MTF_USED = {}                     # sym -> [(lo, hi)] zones already traded
+
+
+def _mtf_dedupe(pts, n, want_high):
+    """Collapse a RUN of pivots into the single most extreme one.
+
+    The window test is >= / <=, so a plateau - two or more bars sharing the
+    same extreme, which is routine on low-decimal symbols and on the xyz
+    synthetics - registers EVERY bar in it as a pivot. The duplicate then
+    sits next to its twin in the structure test, "higher than the previous
+    high" is false against an equal value, and a textbook uptrend reads as
+    no structure at all. Caught on a synthetic zigzag where all six pivots
+    were three real turns counted twice.
+    """
+    out = []
+    for k, p in pts:
+        if out and k - out[-1][0] <= n:
+            if (p > out[-1][1]) if want_high else (p < out[-1][1]):
+                out[-1] = (k, p)        # keep the more extreme of the run
+            continue
+        out.append((k, p))
+    return out
+
+
+def mtf_pivots(candles, n=None):
+    """([(i, price)] highs, [(i, price)] lows) - fractal pivots needing n
+    bars either side, with runs collapsed. The right-hand bars must exist,
+    so the most recent pivot is always at least n bars back."""
+    n = n or MTF_SWING
+    hi, lo = [], []
+    for k in range(n, len(candles) - n):
+        w = candles[k - n:k + n + 1]
+        if candles[k]["h"] >= max(x["h"] for x in w):
+            hi.append((k, candles[k]["h"]))
+        if candles[k]["l"] <= min(x["l"] for x in w):
+            lo.append((k, candles[k]["l"]))
+    return _mtf_dedupe(hi, n, True), _mtf_dedupe(lo, n, False)
+
+
+def mtf_bias(h4):
+    """(+1 up, -1 down, 0 unclear, highs, lows) from 4H swing structure.
+
+    Higher highs AND higher lows is up; lower highs AND lower lows is down.
+    Anything else - including the very common "higher highs but also lower
+    lows" expansion - is 0, and 0 refuses both directions.
+    """
+    hi, lo = mtf_pivots(h4)
+    H = [p for _, p in hi[-MTF_STRUCT_N:]]
+    L = [p for _, p in lo[-MTF_STRUCT_N:]]
+    if len(H) < 2 or len(L) < 2:
+        return 0, hi, lo
+    up_h = all(H[k] > H[k - 1] for k in range(1, len(H)))
+    up_l = all(L[k] > L[k - 1] for k in range(1, len(L)))
+    dn_h = all(H[k] < H[k - 1] for k in range(1, len(H)))
+    dn_l = all(L[k] < L[k - 1] for k in range(1, len(L)))
+    if up_h and up_l:
+        return 1, hi, lo
+    if dn_h and dn_l:
+        return -1, hi, lo
+    return 0, hi, lo
+
+
+def mtf_levels(h4):
+    """4H key levels - the swing highs and lows themselves. These are the
+    supply and demand edges the chart means; a setup has to be near one."""
+    hi, lo = mtf_pivots(h4)
+    return ([p for _, p in hi[-6:]], [p for _, p in lo[-6:]])
+
+
+def mtf_order_blocks(candles, i, want_long):
+    """Order blocks on the base timeframe, newest first.
+
+    A bullish OB is the last DOWN candle before an up leg that displaces -
+    moves at least MTF_OB_DISP_ATR of ATR - and takes out that candle's
+    high. The zone is that candle's body-to-low range. Bearish mirrors it.
+    An OB price has already traded back through is spent and is skipped.
+    """
+    out = []
+    a = atr(candles, i, MTF_ATR) or 0.0
+    if a <= 0:
+        return out
+    lo_k = max(1, i - MTF_OB_LOOKBACK)
+    for k in range(i - 2, lo_k - 1, -1):
+        c = candles[k]
+        if want_long:
+            if c["c"] >= c["o"]:
+                continue                 # not a down candle
+        else:
+            if c["c"] <= c["o"]:
+                continue
+        # the displacement leg: the next few bars must travel far enough and
+        # clear the candle's own extreme
+        leg = candles[k + 1:min(len(candles), k + 4)]
+        if not leg:
+            continue
+        if want_long:
+            run = max(x["h"] for x in leg) - c["l"]
+            if run < MTF_OB_DISP_ATR * a or max(x["h"] for x in leg) <= c["h"]:
+                continue
+            z = {"lo": c["l"], "hi": max(c["o"], c["c"])}
+        else:
+            run = c["h"] - min(x["l"] for x in leg)
+            if run < MTF_OB_DISP_ATR * a or min(x["l"] for x in leg) >= c["l"]:
+                continue
+            z = {"lo": min(c["o"], c["c"]), "hi": c["h"]}
+        if z["hi"] <= z["lo"]:
+            continue
+        # SPENT. Price trading back through the far side consumed it; only
+        # the bars AFTER the displacement count, or the OB candle's own
+        # neighbours would always invalidate it.
+        after = candles[k + 4:i + 1]
+        if after:
+            if want_long and min(x["l"] for x in after) < z["lo"]:
+                continue
+            if not want_long and max(x["h"] for x in after) > z["hi"]:
+                continue
+        z.update(kind="ob", age=i - k, idx=k)
+        out.append(z)
+        if len(out) >= 4:
+            break
+    return out
+
+
+def mtf_candidate_zones(ast, candles, i, want_long):
+    """Every 1H zone that could host an entry, in the given direction."""
+    zones = []
+    if "ob" in MTF_ZONES:
+        for z in mtf_order_blocks(candles, i, want_long):
+            if z["age"] <= MTF_OB_MAX_AGE:
+                zones.append(z)
+    if "fvg" in MTF_ZONES:
+        try:
+            bull, bear = live_fvgs(candles[:i + 1])
+            for g in (bull if want_long else bear):
+                zones.append({"lo": g["bot"], "hi": g["top"], "kind": "fvg",
+                              "age": i - g.get("i", i), "idx": g.get("i", i)})
+        except Exception as e:
+            log(f"{ast.get('sym')}: mtf fvg scan failed: {type(e).__name__}")
+    if "liq" in MTF_ZONES:
+        try:
+            hi, lo = lg_pivots(candles, i - LG_PIVOT)
+            # a sweep of the opposite side's liquidity: for a LONG, a pivot
+            # low that price has wicked through and closed back above
+            src = lo if want_long else hi
+            for (k, px) in reversed(src[-6:]):
+                if i - k > LG_MAX_AGE:
+                    break
+                seg = candles[k + 1:i + 1]
+                if not seg:
+                    continue
+                if want_long:
+                    swept = min(x["l"] for x in seg) < px
+                    back = candles[i]["c"] > px
+                    z = {"lo": min(x["l"] for x in seg), "hi": px}
+                else:
+                    swept = max(x["h"] for x in seg) > px
+                    back = candles[i]["c"] < px
+                    z = {"lo": px, "hi": max(x["h"] for x in seg)}
+                if swept and back and z["hi"] > z["lo"]:
+                    z.update(kind="liq", age=i - k, idx=k)
+                    zones.append(z)
+                    break
+        except Exception as e:
+            log(f"{ast.get('sym')}: mtf liq scan failed: {type(e).__name__}")
+    return zones
+
+
+def _mtf_near_level(z, highs, lows):
+    """Is the zone within MTF_LEVEL_TOL_PCT of a 4H swing level?
+
+    Measured from the nearest POINT OF THE ZONE, not its midpoint: a level
+    inside the zone is distance 0, otherwise it is the gap to the closer
+    edge. The midpoint version rejected a zone whose lower edge sat exactly
+    on a 4H swing high, because the zone was wide enough that its centre
+    was 1.23% away - the setup was at the level and the filter said it was
+    not.
+    """
+    if not MTF_LEVEL_TOL_PCT:
+        return True, None
+    best = None
+    for p in list(highs) + list(lows):
+        if not p:
+            continue
+        d = 0.0 if z["lo"] <= p <= z["hi"] else min(abs(z["lo"] - p),
+                                                    abs(z["hi"] - p))
+        pct = d / p * 100.0
+        if pct <= MTF_LEVEL_TOL_PCT and (best is None or pct < best[0]):
+            best = (pct, p)
+    return (True, best[1]) if best else (False, None)
+
+
+def mtf_ltf(asset):
+    """The confirmation series, cached one LTF bar per symbol."""
+    sym = asset["symbol"]
+    now = time.time()
+    hit = _MTF_LTF.get(sym)
+    if hit and (now - hit[0]) * 1000 < MS[MTF_LTF]:
+        return hit[1]
+    cs = None
+    try:
+        _, cs = fetch(asset, MTF_LTF, MTF_LTF_BARS * 3)
+    except Exception as e:
+        log(f"{sym}: {MTF_LTF} fetch failed: {type(e).__name__}: {e}")
+    _MTF_LTF[sym] = (now, cs)
+    return cs
+
+
+def mtf_confirm(ltf, z, want_long):
+    """(trigger name, None) if the 15m series confirms, else (None, reason).
+
+    Any ONE of the three is enough, which is what he asked for.
+    """
+    if not ltf or len(ltf) < 6:
+        return None, "no 15m data"
+    j = len(ltf) - 2                     # the last CLOSED 15m bar
+    c, p = ltf[j], ltf[j - 1]
+    tol = MTF_ZONE_TOL_PCT / 100.0
+    # price has to have actually been at the zone recently
+    seg = ltf[max(0, j - MTF_LTF_BARS):j + 1]
+    reached = (min(x["l"] for x in seg) <= z["hi"] * (1 + tol) if want_long
+               else max(x["h"] for x in seg) >= z["lo"] * (1 - tol))
+    if not reached:
+        return None, "15m never reached the zone"
+    if "engulf" in MTF_CONFIRM:
+        o0, c0, o1, c1 = p["o"], p["c"], c["o"], c["c"]
+        if want_long and c1 > o1 and c0 < o0 and c1 >= o0 and o1 <= c0:
+            return "engulfing", None
+        if not want_long and c1 < o1 and c0 > o0 and c1 <= o0 and o1 >= c0:
+            return "engulfing", None
+    if "bos" in MTF_CONFIRM:
+        w = ltf[max(0, j - 12):j]
+        if w:
+            lvl = max(x["h"] for x in w) if want_long else min(x["l"] for x in w)
+            if (c["c"] > lvl) if want_long else (c["c"] < lvl):
+                return "break of structure", None
+    if "reclaim" in MTF_CONFIRM:
+        if want_long and c["l"] <= z["hi"] and c["c"] > z["hi"]:
+            return "closed back above the zone", None
+        if not want_long and c["h"] >= z["lo"] and c["c"] < z["lo"]:
+            return "closed back below the zone", None
+    return None, "no 15m trigger yet"
+
+
+def mtf_signal(ast, candles, i):
+    """"LONG"/"SHORT" or None. 4H bias -> 1H zone -> 15m trigger."""
+    need = (MTF_SWING * 2 + MTF_STRUCT_N + 2) * MTF_HTF_MULT + 10
+    if i < need or i >= len(candles):
+        return None
+    h4 = resample(candles[:i + 1], MTF_HTF_MULT)
+    bias, _hi, _lo = mtf_bias(h4)
+    ast["mtf_bias"] = bias
+    if bias == 0:
+        return None                      # unclear 4H refuses BOTH sides
+    want_long = bias > 0
+    if not ALLOW_SHORTS and not want_long:
+        return None
+    highs, lows = mtf_levels(h4)
+    sym = ast.get("sym", "?")
+    used = _MTF_USED.get(sym, [])
+    zones = mtf_candidate_zones(ast, candles, i, want_long)
+    if not zones:
+        return None
+    asset = ast.get("_asset")
+    ltf = mtf_ltf(asset) if asset else None
+    for z in zones:
+        if any(abs(z["lo"] - a) <= abs(a) * 1e-6
+               and abs(z["hi"] - b) <= abs(b) * 1e-6 for (a, b) in used):
+            continue                     # already traded this zone
+        near, lvl = _mtf_near_level(z, highs, lows)
+        if not near:
+            continue
+        trig, _why = mtf_confirm(ltf, z, want_long)
+        if not trig:
+            continue
+        entry = candles[i]["c"]
+        edge = z["lo"] if want_long else z["hi"]
+        pad = abs(edge) * MTF_STOP_PAD_PCT / 100.0
+        stop = edge - pad if want_long else edge + pad
+        if (stop >= entry) if want_long else (stop <= entry):
+            continue
+        _MTF_USED.setdefault(sym, []).append((z["lo"], z["hi"]))
+        ast["mtf"] = {"stop": stop, "kind": z["kind"], "zone": (z["lo"], z["hi"]),
+                      "bias": bias, "trigger": trig, "level": lvl,
+                      "age": z.get("age")}
+        ast["im_path"] = f"mtf_{z['kind']}"
+        zname = {"ob": "order block", "fvg": "fair value gap",
+                 "liq": "liquidity sweep"}.get(z["kind"], z["kind"])
+        ast["im_why"] = (
+            f"4H structure {'UP' if want_long else 'DOWN'} "
+            f"({'higher highs and higher lows' if want_long else 'lower highs and lower lows'}); "
+            f"1H {zname} {fmt_px(z['lo'])}-{fmt_px(z['hi'])}"
+            f"{' at the ' + fmt_px(lvl) + ' 4H level' if lvl else ''}; "
+            f"15m {trig}")
+        return "LONG" if want_long else "SHORT"
+    return None
+
+
+def mtf_gate(ast, candles, i, sym=None):
+    """Watchlist: the 4H read, and what the 1H is offering under it."""
+    need = (MTF_SWING * 2 + MTF_STRUCT_N + 2) * MTF_HTF_MULT + 10
+    if i < need:
+        return {"sym": sym, "dir": None, "run": 0, "age": 0,
+                "stage": "no history", "trend": "warming up",
+                "detail": (f"░░░░░░░░░░░░  {i + 1} bars, the 4H structure "
+                           f"needs {need}")}
+    h4 = resample(candles[:i + 1], MTF_HTF_MULT)
+    bias, _h, _l = mtf_bias(h4)
+    if bias == 0:
+        bar = "".join("░" * 4 for _ in range(3))
+        return {"sym": sym, "dir": None, "run": 0, "age": 0,
+                "stage": "4H unclear", "trend": "no 4H structure",
+                "detail": (f"{bar}  the 4H is not making higher highs AND "
+                           f"higher lows, nor lower highs AND lower lows - "
+                           f"both directions refused")}
+    want_long = bias > 0
+    highs, lows = mtf_levels(h4)
+    zones = [z for z in mtf_candidate_zones(ast, candles, i, want_long)
+             if _mtf_near_level(z, highs, lows)[0]]
+    px = candles[i]["c"]
+    side = "LONG" if want_long else "SHORT"
+    if not zones:
+        bar = "".join(("█" if k < 1 else "░") * 4 for k in range(3))
+        return {"sym": sym, "dir": side, "run": 1, "age": 0,
+                "stage": "waiting", "trend": f"4H {'UP' if want_long else 'DOWN'}",
+                "detail": (f"{bar}  4H {'UP' if want_long else 'DOWN'} · no 1H "
+                           f"order block, gap or sweep at a key level yet")}
+    z = min(zones, key=lambda q: abs(px - (q["lo"] + q["hi"]) / 2))
+    d = abs(px - (z["lo"] + z["hi"]) / 2) / px * 100.0
+    lit = 3 if d <= MTF_ZONE_TOL_PCT * 3 else 2
+    bar = "".join(("█" if k < lit else "░") * 4 for k in range(3))
+    nm = {"ob": "order block", "fvg": "fair value gap",
+          "liq": "liquidity sweep"}.get(z["kind"], z["kind"])
+    return {"sym": sym, "dir": side, "run": lit, "age": z.get("age", 0),
+            "stage": "ready" if lit == 3 else "waiting",
+            "trend": f"4H {'UP' if want_long else 'DOWN'}",
+            "detail": (f"{bar}  4H {'UP' if want_long else 'DOWN'} · 1H {nm} "
+                       f"{fmt_px(z['lo'])}-{fmt_px(z['hi'])} "
+                       f"({d:.2f}% away, {z.get('age', 0)} bars old) · "
+                       f"waiting on the 15m trigger · {len(zones)} zone(s)")}
 
 
 def scan_depth():
@@ -9625,6 +10107,12 @@ def scan_depth():
     300 for every engine, which cannot seed an ATR(200) with any room to
     spare - 100 bars past the seed leaves 60% of the ATR as its own SMA(200)
     seed. VV_MIN_BARS has the measurement."""
+    if MTF_MODE:
+        # the 4H structure is RESAMPLED from this series, so the base needs
+        # enough bars for MTF_SWING pivots on 4H plus the FVG and order
+        # block lookbacks underneath
+        return max(FVG_LOOKBACK, MTF_OB_LOOKBACK) + \
+            (MTF_SWING * 2 + MTF_STRUCT_N + 4) * MTF_HTF_MULT * 6 + 60
     if VR_MODE:
         # the rolling window, plus the ATR the momentum test needs, plus a
         # margin so the first scan is not sitting on the boundary
@@ -9718,10 +10206,11 @@ def process_candle(asset, ast, candles, ha, i):
     # top would refuse the very setups it exists to take.
     # ---------------- IMPULSE MACD ENGINE (LazyBear, his 20 Aug spec) ------
     if (IM_MODE or FVG_MODE or MACD_MODE or LG_MODE or SMMA_MODE or REV_MODE
-            or TL_MODE or VP_MODE or VV_MODE or VR_MODE):
+            or TL_MODE or VP_MODE or VV_MODE or VR_MODE or MTF_MODE):
         ast["sym"] = sym
         ast["_asset"] = asset
-        side = (vr_signal(ast, candles, i) if VR_MODE
+        side = (mtf_signal(ast, candles, i) if MTF_MODE
+                else vr_signal(ast, candles, i) if VR_MODE
                 else vv_signal(ast, candles, i) if VV_MODE
                 else vp_signal(ast, candles, i) if VP_MODE
                 else tl_signal(ast, candles, i) if TL_MODE
@@ -9732,7 +10221,8 @@ def process_candle(asset, ast, candles, ha, i):
                 else fvg_signal(ast, candles, i) if FVG_MODE
                 else im_signal(ast, candles, i))
         try:
-            _g = (vr_gate(ast, candles, i, sym) if VR_MODE
+            _g = (mtf_gate(ast, candles, i, sym) if MTF_MODE
+                  else vr_gate(ast, candles, i, sym) if VR_MODE
                   else vv_gate(ast, candles, i, sym) if VV_MODE
                   else vp_gate(ast, candles, i, sym) if VP_MODE
                   else tl_gate(ast, candles, i, sym) if TL_MODE
@@ -9749,7 +10239,8 @@ def process_candle(asset, ast, candles, ha, i):
                 # "flat 38 bars" for 36 HOURS on 22-23 Aug.
                 # SMMA reads through bar i, the other gates stop at i-1.
                 _g["t"] = candles[i if (SMMA_MODE or REV_MODE or TL_MODE
-                                        or VP_MODE or VV_MODE or VR_MODE)
+                                        or VP_MODE or VV_MODE or VR_MODE
+                                        or MTF_MODE)
                                   else i - 1]["t"]
             ast["gate"] = _g
         except Exception as e:
@@ -9780,7 +10271,18 @@ def process_candle(asset, ast, candles, ha, i):
         rr = IM_P2_RR if path == "breakout" else IM_P1_RR
         stop = None
         stop_src = ""
-        if VR_MODE and ast.get("vr"):
+        if MTF_MODE and ast.get("mtf"):
+            stop = ast["mtf"]["stop"]
+            risk_t = abs(entry - stop)
+            rr = MTF_RR
+            stop_src = {"ob": "the far side of the order block",
+                        "fvg": "the far side of the gap",
+                        "liq": "beyond the sweep"}.get(
+                            ast["mtf"]["kind"], "the far side of the zone")
+            if risk_t <= 0 or ((stop >= entry) if want_long
+                               else (stop <= entry)):
+                return False
+        elif VR_MODE and ast.get("vr"):
             stop = ast["vr"]["stop"]
             risk_t = abs(entry - stop)
             rr = VR_RR
@@ -10879,7 +11381,8 @@ def check_once():
                               # dashboard stops carrying its own hardcoded
                               # copy. Its RREF was still 1.5 after SMMA_RR
                               # went to 2.0 and nothing said so.
-                              rr=(VR_RR if VR_MODE else
+                              rr=(MTF_RR if MTF_MODE else
+                                  VR_RR if VR_MODE else
                                   VV_RR if VV_MODE else
                                   VP_RR if VP_MODE else
                                   TL_RR if TL_MODE else
