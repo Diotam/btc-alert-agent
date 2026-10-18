@@ -457,6 +457,7 @@ def build_data():
               # trigger has been and gone, so those rows sort below the ones
               # still approaching one
               "beyond the edge": 20, "inside - not armed": 30,
+              "4H unclear": 40, "no node at a level": 45,
               "ready": 0, "no-wick bar forming": 1, "flipped": 2,
               "waiting": 3.6, "no history": 99,
               "waiting for a cross": 2.5,
@@ -992,6 +993,15 @@ function render(d){
     const nrdy=stg('ready'), neu=cnt('EMA10 above 20'), ned=cnt('EMA10 below 20');
     if(neu||ned){ if(nrdy) bits.push(nrdy+' at level');
                   bits.push(neu+' EMA up'); bits.push(ned+' EMA down'); }
+    // TOP-DOWN 4H/1H/15m: the 4H read each symbol is under, and how many
+    // have no usable 4H structure at all (which refuses both directions).
+    const mUp=cnt('4H UP'), mDn=cnt('4H DOWN'), mNo=cnt('no 4H structure');
+    if(mUp||mDn||mNo){
+      if(mUp) bits.push(mUp+' 4H up');
+      if(mDn) bits.push(mDn+' 4H down');
+      if(nrdy) bits.push(nrdy+' at a zone');
+      if(mNo) bits.push(mNo+' no 4H structure');
+    }
     // VISIBLE RANGE HVN/LVN: where price sits relative to the nearest
     // high-volume node in the rolling window.
     const vrIn=cnt('in a node'), vrBelow=cnt('below the nearest node'),
@@ -1001,6 +1011,8 @@ function render(d){
       if(vrAbove) bits.push(vrAbove+' above a node');
       if(vrIn) bits.push(vrIn+' in a node');
       if(vrNone) bits.push(vrNone+' no node');
+      const vrNL=stg('no node at a level');
+      if(vrNL) bits.push(vrNL+' node, no level');
     }
     // VOLUME PROFILE: where each symbol sits against YESTERDAY's value
     // area, and how many are pressed up against the POC - which is the one
